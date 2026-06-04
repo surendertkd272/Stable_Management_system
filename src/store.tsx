@@ -1,7 +1,7 @@
 // In-memory app store for the prototype (no backend).
 // Seeds from mock data, then lets the UI add horses / diary notes and
 // acknowledge alerts so buttons produce real, visible changes.
-import { createContext, useCallback, useContext, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
 import {
   horses as seedHorses,
   alerts as seedAlerts,
@@ -15,7 +15,28 @@ const DEFAULT_PHOTO =
   "https://images.unsplash.com/photo-1598974357801-cbca100e65d3?auto=format&fit=crop&w=600&q=70";
 
 let seq = 0;
-const nextId = (p: string) => `${p}-${++seq}`;
+const nextId = (p: string) => `${p}-${Date.now()}-${++seq}`;
+
+// Bump when the seed data shape changes, to discard stale persisted state.
+const STORE_VERSION = "v1";
+const key = (name: string) => `bsv-${name}-${STORE_VERSION}`;
+
+function load<T>(name: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key(name));
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persist<T>(name: string, value: T) {
+  try {
+    localStorage.setItem(key(name), JSON.stringify(value));
+  } catch {
+    /* storage full or unavailable — stay in-memory */
+  }
+}
 
 type NewHorse = Pick<Horse, "name" | "breed" | "age" | "sex" | "stall" | "owner">;
 type NewDiary = Pick<DiaryEntry, "horse" | "category" | "note" | "icon">;
@@ -27,14 +48,19 @@ interface StableCtx {
   addHorse: (h: NewHorse) => void;
   addDiary: (d: NewDiary) => void;
   acknowledge: (id: string) => void;
+  reset: () => void;
 }
 
 const Ctx = createContext<StableCtx | null>(null);
 
 export function StableProvider({ children }: { children: ReactNode }) {
-  const [horses, setHorses] = useState<Horse[]>(seedHorses);
-  const [alerts, setAlerts] = useState<Alert[]>(seedAlerts);
-  const [diary, setDiary] = useState<DiaryEntry[]>(seedDiary);
+  const [horses, setHorses] = useState<Horse[]>(() => load("horses", seedHorses));
+  const [alerts, setAlerts] = useState<Alert[]>(() => load("alerts", seedAlerts));
+  const [diary, setDiary] = useState<DiaryEntry[]>(() => load("diary", seedDiary));
+
+  useEffect(() => persist("horses", horses), [horses]);
+  useEffect(() => persist("alerts", alerts), [alerts]);
+  useEffect(() => persist("diary", diary), [diary]);
 
   const addHorse = useCallback((h: NewHorse) => {
     setHorses((list) => [
@@ -62,8 +88,14 @@ export function StableProvider({ children }: { children: ReactNode }) {
     setAlerts((list) => list.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
   }, []);
 
+  const reset = useCallback(() => {
+    setHorses(seedHorses);
+    setAlerts(seedAlerts);
+    setDiary(seedDiary);
+  }, []);
+
   return (
-    <Ctx.Provider value={{ horses, alerts, diary, addHorse, addDiary, acknowledge }}>
+    <Ctx.Provider value={{ horses, alerts, diary, addHorse, addDiary, acknowledge, reset }}>
       {children}
     </Ctx.Provider>
   );

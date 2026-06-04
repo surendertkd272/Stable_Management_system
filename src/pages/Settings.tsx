@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Sun, Moon, Globe } from "lucide-react";
+import { Sun, Moon, Globe, RotateCcw } from "lucide-react";
 import { useTheme } from "../theme";
+import { useStable, useToast } from "../store";
 
 function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
@@ -12,6 +13,8 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
 
 export default function SettingsPage() {
   const { theme, set } = useTheme();
+  const { reset } = useStable();
+  const notify = useToast();
   const [toggles, setToggles] = useState({
     whatsapp: true,
     digest: true,
@@ -120,6 +123,21 @@ export default function SettingsPage() {
             <span>Cameras record people too — consent logged for all staff.</span>
           </div>
           <span className="pill ok">On file</span>
+        </div>
+        <div className="setting-row">
+          <div className="info">
+            <b>Reset demo data</b>
+            <span>Restore the original sample horses, alerts and diary — clears anything you've added.</span>
+          </div>
+          <button
+            className="btn-ghost"
+            onClick={() => {
+              reset();
+              notify("Demo data reset");
+            }}
+          >
+            <RotateCcw size={15} /> Reset
+          </button>
         </div>
       </div>
     </div>
