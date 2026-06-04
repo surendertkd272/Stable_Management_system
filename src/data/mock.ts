@@ -315,16 +315,33 @@ export const series = {
   alerts: [3, 1, 2, 4, 1, 2, 5],
 };
 
-// yard stall layout for the map card (% positions)
-export const stallLayout = [
-  { id: "A-04", name: "Zarina", status: "urgent", x: 6, y: 8 },
-  { id: "A-07", name: "Noor", status: "watch", x: 36, y: 8 },
-  { id: "B-01", name: "Shaan", status: "watch", x: 66, y: 8 },
-  { id: "B-05", name: "Meher", status: "calm", x: 6, y: 40 },
-  { id: "C-02", name: "Raja", status: "calm", x: 36, y: 40 },
-  { id: "C-06", name: "Sultan", status: "calm", x: 66, y: 40 },
-  { id: "A-09", name: "Laila", status: "urgent", x: 6, y: 72 },
-] as const;
+// Lay horses out on the yard map in an adaptive grid (% positions),
+// so newly added horses are placed automatically.
+export interface YardSlot {
+  id: string;
+  name: string;
+  stall: string;
+  status: Status;
+  x: number;
+  y: number;
+}
+
+export function yardSlots(
+  list: { id: string; name: string; stall: string; status: Status }[]
+): YardSlot[] {
+  const cols = 3;
+  const xs = [6, 36, 66];
+  const rows = Math.max(1, Math.ceil(list.length / cols));
+  const yStep = rows > 1 ? Math.min(32, 78 / (rows - 1)) : 0;
+  return list.map((h, i) => ({
+    id: h.id,
+    name: h.name,
+    stall: h.stall,
+    status: h.status,
+    x: xs[i % cols],
+    y: rows > 1 ? Math.round(6 + Math.floor(i / cols) * yStep) : 40,
+  }));
+}
 
 // featured highlight clip shown on the dashboard
 export const highlight = {

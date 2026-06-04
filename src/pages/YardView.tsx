@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { stallLayout, Status } from "../data/mock";
+import { yardSlots, Status } from "../data/mock";
 import { useStable } from "../store";
 import { statusColor, StatusPill } from "../components/ui";
 
@@ -63,18 +63,15 @@ export default function YardView() {
           </div>
         </div>
         <div className="yardmap" style={{ minHeight: 320 }}>
-          {stallLayout.map((s) => (
+          {yardSlots(horses).map((s) => (
             <div
               key={s.id}
               className="stall"
               style={{ left: `${s.x}%`, top: `${s.y}%`, cursor: "pointer" }}
-              onClick={() => {
-                const h = horses.find((x) => x.stall === s.id);
-                if (h) nav(`/horses/${h.id}`);
-              }}
+              onClick={() => nav(`/horses/${s.id}`)}
             >
-              <span className="ind" style={{ background: statusColor(s.status as Status) }} />
-              {s.id} · {s.name}
+              <span className="ind" style={{ background: statusColor(s.status) }} />
+              {s.stall} · {s.name}
             </div>
           ))}
         </div>

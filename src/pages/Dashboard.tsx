@@ -11,7 +11,7 @@ import {
   Clock,
 } from "lucide-react";
 import { StatCard, RadialGauge, Sparkline, statusColor, Modal } from "../components/ui";
-import { series, stallLayout, breedingMares, highlight } from "../data/mock";
+import { series, yardSlots, breedingMares, highlight } from "../data/mock";
 import { useStable } from "../store";
 
 export default function Dashboard() {
@@ -150,21 +150,22 @@ export default function Dashboard() {
           </button>
         </div>
         <div className="yardmap">
-          {stallLayout.map((s) => (
+          {yardSlots(horses).map((s) => (
             <div
               key={s.id}
               className="stall"
-              style={{ left: `${s.x}%`, top: `${s.y}%` }}
+              style={{ left: `${s.x}%`, top: `${s.y}%`, cursor: "pointer" }}
               title={s.name}
+              onClick={() => nav(`/horses/${s.id}`)}
             >
-              <span className="ind" style={{ background: statusColor(s.status as any) }} />
+              <span className="ind" style={{ background: statusColor(s.status) }} />
               {s.name}
             </div>
           ))}
-          <div className="stall" style={{ left: "40%", top: "78%", border: "none", background: "transparent", boxShadow: "none", color: "var(--text-secondary)" }}>
-            Barn A · B · C — {stallLayout.length} boxes monitored
-          </div>
         </div>
+        <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+          Barn A · B · C — {horses.length} boxes monitored
+        </p>
         <div className="flex gap-sm" style={{ marginTop: 14, flexWrap: "wrap" }}>
           <span className="pill ok">{count("calm")} calm</span>
           <span className="pill warn">{count("watch")} watch</span>
