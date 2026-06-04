@@ -6,9 +6,11 @@ import {
   horses as seedHorses,
   alerts as seedAlerts,
   diary as seedDiary,
+  healthTasks as seedHealth,
   Horse,
   Alert,
   DiaryEntry,
+  HealthTask,
 } from "./data/mock";
 
 const DEFAULT_PHOTO =
@@ -40,13 +42,17 @@ function persist<T>(name: string, value: T) {
 
 type NewHorse = Pick<Horse, "name" | "breed" | "age" | "sex" | "stall" | "owner">;
 type NewDiary = Pick<DiaryEntry, "horse" | "category" | "note" | "icon">;
+type NewHealth = Pick<HealthTask, "horse" | "type" | "due" | "notes" | "icon">;
 
 interface StableCtx {
   horses: Horse[];
   alerts: Alert[];
   diary: DiaryEntry[];
+  health: HealthTask[];
   addHorse: (h: NewHorse) => void;
   addDiary: (d: NewDiary) => void;
+  addHealth: (t: NewHealth) => void;
+  toggleHealth: (id: string) => void;
   acknowledge: (id: string) => void;
   reset: () => void;
 }
@@ -57,10 +63,12 @@ export function StableProvider({ children }: { children: ReactNode }) {
   const [horses, setHorses] = useState<Horse[]>(() => load("horses", seedHorses));
   const [alerts, setAlerts] = useState<Alert[]>(() => load("alerts", seedAlerts));
   const [diary, setDiary] = useState<DiaryEntry[]>(() => load("diary", seedDiary));
+  const [health, setHealth] = useState<HealthTask[]>(() => load("health", seedHealth));
 
   useEffect(() => persist("horses", horses), [horses]);
   useEffect(() => persist("alerts", alerts), [alerts]);
   useEffect(() => persist("diary", diary), [diary]);
+  useEffect(() => persist("health", health), [health]);
 
   const addHorse = useCallback((h: NewHorse) => {
     setHorses((list) => [
@@ -84,6 +92,14 @@ export function StableProvider({ children }: { children: ReactNode }) {
     setDiary((list) => [{ ...d, id: nextId("diary"), date: "Just now" }, ...list]);
   }, []);
 
+  const addHealth = useCallback((t: NewHealth) => {
+    setHealth((list) => [...list, { ...t, id: nextId("health"), done: false }]);
+  }, []);
+
+  const toggleHealth = useCallback((id: string) => {
+    setHealth((list) => list.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  }, []);
+
   const acknowledge = useCallback((id: string) => {
     setAlerts((list) => list.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
   }, []);
@@ -92,10 +108,13 @@ export function StableProvider({ children }: { children: ReactNode }) {
     setHorses(seedHorses);
     setAlerts(seedAlerts);
     setDiary(seedDiary);
+    setHealth(seedHealth);
   }, []);
 
   return (
-    <Ctx.Provider value={{ horses, alerts, diary, addHorse, addDiary, acknowledge, reset }}>
+    <Ctx.Provider
+      value={{ horses, alerts, diary, health, addHorse, addDiary, addHealth, toggleHealth, acknowledge, reset }}
+    >
       {children}
     </Ctx.Provider>
   );

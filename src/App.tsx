@@ -8,6 +8,7 @@ import YardView from "./pages/YardView";
 import Breeding from "./pages/Breeding";
 import Reports from "./pages/Reports";
 import CareDiary from "./pages/CareDiary";
+import Health from "./pages/Health";
 import SettingsPage from "./pages/Settings";
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/breeding" element={<Breeding />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/diary" element={<CareDiary />} />
+        <Route path="/health" element={<Health />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>

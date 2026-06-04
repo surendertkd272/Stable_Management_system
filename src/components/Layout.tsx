@@ -16,20 +16,38 @@ import {
   Plus,
   Menu,
   X,
+  CalendarClock,
+  LucideIcon,
 } from "lucide-react";
 import { useTheme } from "../theme";
 import { useStable, useToast } from "../store";
 import { breedingMares, Horse } from "../data/mock";
 import { Modal } from "./ui";
 
-const NAV = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/horses", label: "Horses", icon: Heart },
-  { to: "/alerts", label: "Alerts", icon: Bell },
-  { to: "/yard", label: "Yard View", icon: Map },
-  { to: "/breeding", label: "Breeding", icon: Sparkles },
-  { to: "/reports", label: "Reports", icon: FileText },
-  { to: "/diary", label: "Care Diary", icon: NotebookPen },
+type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean };
+
+const SECTIONS: { title: string; items: NavItem[] }[] = [
+  {
+    title: "Monitoring",
+    items: [
+      { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+      { to: "/horses", label: "Horses", icon: Heart },
+      { to: "/alerts", label: "Alerts", icon: Bell },
+      { to: "/yard", label: "Yard View", icon: Map },
+      { to: "/breeding", label: "Breeding", icon: Sparkles },
+    ],
+  },
+  {
+    title: "Records",
+    items: [
+      { to: "/reports", label: "Reports", icon: FileText },
+      { to: "/diary", label: "Care Diary", icon: NotebookPen },
+    ],
+  },
+  {
+    title: "Operations",
+    items: [{ to: "/health", label: "Health Scheduling", icon: CalendarClock }],
+  },
 ];
 
 function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -37,7 +55,7 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { alerts } = useStable();
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
 
-  const item = (n: (typeof NAV)[number]) => (
+  const item = (n: NavItem) => (
     <NavLink key={n.to} to={n.to} end={n.end} className="nav-item" onClick={onClose}>
       <n.icon size={19} />
       {n.label}
@@ -58,10 +76,12 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
       </div>
 
       <nav className="nav">
-        <div className="nav-section">Monitoring</div>
-        {NAV.slice(0, 5).map(item)}
-        <div className="nav-section">Records</div>
-        {NAV.slice(5).map(item)}
+        {SECTIONS.map((sec) => (
+          <div key={sec.title}>
+            <div className="nav-section">{sec.title}</div>
+            {sec.items.map(item)}
+          </div>
+        ))}
         <NavLink to="/settings" className="nav-item" onClick={onClose}>
           <Settings size={19} />
           Settings
@@ -94,7 +114,7 @@ const EMPTY = { name: "", breed: "", age: "", sex: "Mare" as Horse["sex"], stall
 function TopBar() {
   const { pathname } = useLocation();
   const nav = useNavigate();
-  const { horses, alerts, addHorse } = useStable();
+  const { horses, alerts, health, addHorse } = useStable();
   const notify = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -104,6 +124,8 @@ function TopBar() {
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
   const needAttention = horses.filter((h) => h.status === "urgent").length;
   const inLabour = breedingMares.filter((m) => m.status === "labour").length;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const overdueHealth = health.filter((t) => !t.done && t.due < todayIso).length;
 
   const titles: Record<string, { h1: string; p: string }> = {
     "/": {
@@ -116,6 +138,10 @@ function TopBar() {
     "/breeding": { h1: "Breeding", p: `${breedingMares.length} mares in foal · ${inLabour} in active labour` },
     "/reports": { h1: "Reports", p: "Vet-ready 7 & 30-day summaries" },
     "/diary": { h1: "Care Diary", p: "Every record makes the AI smarter" },
+    "/health": {
+      h1: "Health Scheduling",
+      p: `${overdueHealth} overdue · vaccinations, deworming, farrier & vet visits`,
+    },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
   };
 

@@ -306,6 +306,31 @@ export const diary: DiaryEntry[] = [
   },
 ];
 
+// ---- health scheduling (vaccinations, deworming, farrier, vet, dental) ----
+export interface HealthTask {
+  id: string;
+  horse: string;
+  type: string;
+  due: string; // ISO yyyy-mm-dd
+  notes: string;
+  done: boolean;
+  icon: "vaccine" | "deworm" | "farrier" | "vet" | "dental";
+}
+
+const DAY_MS = 86400000;
+// Seed dates are relative to first load so "overdue / due soon" looks live.
+const isoIn = (days: number) => new Date(Date.now() + days * DAY_MS).toISOString().slice(0, 10);
+
+export const healthTasks: HealthTask[] = [
+  { id: "h1", horse: "Zarina", type: "Vaccination", due: isoIn(-12), notes: "Annual tetanus + EHV booster overdue", done: false, icon: "vaccine" },
+  { id: "h2", horse: "Shaan", type: "Farrier", due: isoIn(-2), notes: "Full set — check near-fore", done: false, icon: "farrier" },
+  { id: "h3", horse: "Noor", type: "Vet check", due: isoIn(1), notes: "Pre-foaling check", done: false, icon: "vet" },
+  { id: "h4", horse: "Raja", type: "Deworming", due: isoIn(4), notes: "Rotational wormer", done: false, icon: "deworm" },
+  { id: "h5", horse: "Meher", type: "Dental", due: isoIn(9), notes: "Routine rasp / float", done: false, icon: "dental" },
+  { id: "h6", horse: "Sultan", type: "Vaccination", due: isoIn(21), notes: "Influenza booster", done: false, icon: "vaccine" },
+  { id: "h7", horse: "Raja", type: "Farrier", due: isoIn(-20), notes: "Trim — completed on schedule", done: true, icon: "farrier" },
+];
+
 // stat-card sparkline series
 export const series = {
   monitored: [5, 6, 6, 6, 7, 7, 7],
