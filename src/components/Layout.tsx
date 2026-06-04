@@ -18,11 +18,17 @@ import {
   X,
 } from "lucide-react";
 import { useTheme } from "../theme";
+import { horses, alerts, breedingMares } from "../data/mock";
+
+const openAlerts = alerts.filter((a) => !a.acknowledged).length;
+const needAttention = horses.filter((h) => h.status === "urgent").length;
+const inFoal = breedingMares.length;
+const inLabour = breedingMares.filter((m) => m.status === "labour").length;
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/horses", label: "Horses", icon: Heart },
-  { to: "/alerts", label: "Alerts", icon: Bell, count: 2 },
+  { to: "/alerts", label: "Alerts", icon: Bell, count: openAlerts },
   { to: "/yard", label: "Yard View", icon: Map },
   { to: "/breeding", label: "Breeding", icon: Sparkles },
   { to: "/reports", label: "Reports", icon: FileText },
@@ -30,11 +36,14 @@ const NAV = [
 ];
 
 const TITLES: Record<string, { h1: string; p: string }> = {
-  "/": { h1: "Welcome back, Surender", p: "1 horse needs attention today · all cameras online" },
-  "/horses": { h1: "Horses", p: "6 horses monitored across 3 barns" },
-  "/alerts": { h1: "Alerts", p: "2 unacknowledged · escalation active" },
+  "/": {
+    h1: "Welcome back, Surender",
+    p: `${needAttention} ${needAttention === 1 ? "horse needs" : "horses need"} attention today · all cameras online`,
+  },
+  "/horses": { h1: "Horses", p: `${horses.length} horses monitored across 3 barns` },
+  "/alerts": { h1: "Alerts", p: `${openAlerts} unacknowledged · escalation active` },
   "/yard": { h1: "Yard View", p: "Ranked by who needs attention first" },
-  "/breeding": { h1: "Breeding", p: "3 mares in foal · 1 in active labour" },
+  "/breeding": { h1: "Breeding", p: `${inFoal} mares in foal · ${inLabour} in active labour` },
   "/reports": { h1: "Reports", p: "Vet-ready 7 & 30-day summaries" },
   "/diary": { h1: "Care Diary", p: "Every record makes the AI smarter" },
   "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },

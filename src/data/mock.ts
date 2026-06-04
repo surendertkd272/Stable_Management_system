@@ -84,7 +84,7 @@ export const horses: Horse[] = [
     sex: "Gelding",
     stall: "C-02",
     owner: "Equestrian Club",
-    photo: img("photo-1511994298241-608e28f14fde"),
+    photo: img("photo-1557374800-8ba4ccd60e9d"),
     status: "calm",
     statusNote: "Within baseline across all signals",
     rest: "7h 48m",
@@ -101,7 +101,7 @@ export const horses: Horse[] = [
     sex: "Mare",
     stall: "B-05",
     owner: "Bharat Sports Venture",
-    photo: img("photo-1546877625-cb8c71916608"),
+    photo: img("photo-1593179449458-e0d43d512551"),
     status: "calm",
     statusNote: "Resting normally",
     rest: "8h 12m",
@@ -118,13 +118,30 @@ export const horses: Horse[] = [
     sex: "Stallion",
     stall: "C-06",
     owner: "Bharat Sports Venture",
-    photo: img("photo-1599639668273-01876749e1f2"),
+    photo: img("photo-1606107869722-d5cbadabe2f0"),
     status: "calm",
     statusNote: "Within baseline",
     rest: "7h 20m",
     water: 7,
     outside: "4h 30m",
     stress: "Low",
+    baselineProgress: 100,
+  },
+  {
+    id: "laila",
+    name: "Laila",
+    breed: "Marwari",
+    age: "8 yr",
+    sex: "Mare",
+    stall: "A-09",
+    owner: "Bharat Sports Venture",
+    photo: img("photo-1601726429844-acd8b1385972"),
+    status: "urgent",
+    statusNote: "Active labour since 02:05 — birth alarm on",
+    rest: "2h 30m",
+    water: 4,
+    outside: "0h 30m",
+    stress: "High",
     baselineProgress: 100,
   },
 ];
@@ -185,6 +202,15 @@ export const alerts: Alert[] = [
     time: "Yesterday · 09:00",
     detail: "Calibration 74% complete — alerts will sharpen over the next few days.",
     acknowledged: true,
+  },
+  {
+    id: "a6",
+    horse: "Laila",
+    type: "Foaling labour detected",
+    severity: "alert",
+    time: "02:05 · just now",
+    detail: "Labour behaviour detected — birth alarm active. Post-foaling milestones now being watched.",
+    acknowledged: false,
   },
 ];
 
@@ -282,7 +308,7 @@ export const diary: DiaryEntry[] = [
 
 // stat-card sparkline series
 export const series = {
-  monitored: [4, 5, 5, 6, 6, 6, 6],
+  monitored: [5, 6, 6, 6, 7, 7, 7],
   rest: [6.2, 6.8, 7.1, 6.5, 7.4, 7.0, 6.9],
   water: [6, 7, 5, 8, 7, 9, 7],
   outside: [3.1, 2.8, 3.4, 4.0, 3.6, 4.1, 3.9],
@@ -291,10 +317,19 @@ export const series = {
 
 // yard stall layout for the map card (% positions)
 export const stallLayout = [
-  { id: "A-04", name: "Zarina", status: "urgent", x: 6, y: 12 },
-  { id: "A-07", name: "Noor", status: "watch", x: 34, y: 12 },
-  { id: "B-01", name: "Shaan", status: "watch", x: 62, y: 12 },
-  { id: "B-05", name: "Meher", status: "calm", x: 6, y: 52 },
-  { id: "C-02", name: "Raja", status: "calm", x: 34, y: 52 },
-  { id: "C-06", name: "Sultan", status: "calm", x: 62, y: 52 },
+  { id: "A-04", name: "Zarina", status: "urgent", x: 6, y: 8 },
+  { id: "A-07", name: "Noor", status: "watch", x: 36, y: 8 },
+  { id: "B-01", name: "Shaan", status: "watch", x: 66, y: 8 },
+  { id: "B-05", name: "Meher", status: "calm", x: 6, y: 40 },
+  { id: "C-02", name: "Raja", status: "calm", x: 36, y: 40 },
+  { id: "C-06", name: "Sultan", status: "calm", x: 66, y: 40 },
+  { id: "A-09", name: "Laila", status: "urgent", x: 6, y: 72 },
 ] as const;
+
+// featured highlight clip shown on the dashboard
+export const highlight = {
+  horse: "Raja",
+  title: "Raja in the paddock",
+  caption: "A clip of Raja having a roll and a shake in turnout — saved yesterday at 17:22.",
+  time: "Yesterday · 17:22",
+};

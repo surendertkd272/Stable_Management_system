@@ -8,6 +8,7 @@ const ICON: Record<string, React.ReactNode> = {
   "Low water intake": <Droplet size={19} />,
   "Highlight captured": <Activity size={19} />,
   "Baseline learning": <Activity size={19} />,
+  "Foaling labour detected": <Sparkles size={19} />,
 };
 
 export default function Alerts() {

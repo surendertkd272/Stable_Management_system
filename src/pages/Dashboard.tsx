@@ -10,12 +10,13 @@ import {
   Clock,
 } from "lucide-react";
 import { StatCard, RadialGauge, Sparkline, statusColor } from "../components/ui";
-import { horses, series, stallLayout, breedingMares } from "../data/mock";
+import { horses, series, stallLayout, breedingMares, highlight } from "../data/mock";
 
 export default function Dashboard() {
   const nav = useNavigate();
   const focus = horses[0]; // Zarina — needs attention
   const labourMare = breedingMares.find((m) => m.status === "labour");
+  const count = (s: string) => horses.filter((h) => h.status === s).length;
 
   return (
     <div className="dash-grid">
@@ -23,7 +24,7 @@ export default function Dashboard() {
       <StatCard
         icon={<Activity size={20} />}
         label="Horses monitored"
-        value="6"
+        value={String(horses.length)}
         delta={0}
         spark={series.monitored}
         sparkType="bar"
@@ -124,8 +125,8 @@ export default function Dashboard() {
           <span className="pill" style={{ background: "rgba(255,255,255,0.22)", color: "#fff" }}>
             Highlights
           </span>
-          <h3 style={{ marginTop: 12 }}>Raja's turnout moment</h3>
-          <p>A shareable glimpse of the secret stable life — saved yesterday at 17:22.</p>
+          <h3 style={{ marginTop: 12 }}>{highlight.title}</h3>
+          <p>{highlight.caption}</p>
         </div>
         <button className="play">
           <Play size={20} fill="currentColor" />
@@ -155,14 +156,14 @@ export default function Dashboard() {
               {s.name}
             </div>
           ))}
-          <div className="stall" style={{ left: "6%", top: "82%", border: "none", background: "transparent", boxShadow: "none", color: "var(--text-secondary)" }}>
-            Barn A · B · C — 6 boxes monitored
+          <div className="stall" style={{ left: "40%", top: "78%", border: "none", background: "transparent", boxShadow: "none", color: "var(--text-secondary)" }}>
+            Barn A · B · C — {stallLayout.length} boxes monitored
           </div>
         </div>
         <div className="flex gap-sm" style={{ marginTop: 14, flexWrap: "wrap" }}>
-          <span className="pill ok">3 calm</span>
-          <span className="pill warn">2 watch</span>
-          <span className="pill alert">1 urgent</span>
+          <span className="pill ok">{count("calm")} calm</span>
+          <span className="pill warn">{count("watch")} watch</span>
+          <span className="pill alert">{count("urgent")} urgent</span>
         </div>
       </div>
 
