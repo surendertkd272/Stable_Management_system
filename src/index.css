@@ -1,25 +1,25 @@
 /* ============================================================
    BSV EquiCare — design tokens & base styles
-   Palette: BSV-branded (navy + orange), per design spec §2.
+   Palette: violet accent on soft lavender (Dropify-style).
    Theme is a token swap: [data-theme="dark"] overrides values.
    ============================================================ */
 
 :root {
   /* light theme (default) */
-  --bg-app: #f2f4f8;
+  --bg-app: #e9e7f4;
   --surface: #ffffff;
-  --surface-muted: #f4f6fa;
-  --surface-inset: #eef1f6;
+  --surface-muted: #f5f4fb;
+  --surface-inset: #edeaf7;
 
-  --accent: #f2a23c; /* BSV orange */
-  --accent-strong: #e08a1e;
-  --accent-soft: #fbd9a6;
-  --accent-grad: linear-gradient(135deg, #f7b85c, #e08a1e);
+  --accent: #7c6df5; /* violet */
+  --accent-strong: #6a5ae0;
+  --accent-soft: #e5e1fb;
+  --accent-grad: linear-gradient(135deg, #8b7cf6, #6a5ae0);
 
-  --ink: #15263b; /* BSV navy */
-  --ink-soft: #2c3e57;
-  --text-secondary: #64748b;
-  --text-faint: #94a3b8;
+  --ink: #1c1b29; /* near-black */
+  --ink-soft: #383749;
+  --text-secondary: #6b6980;
+  --text-faint: #9c9ab0;
 
   --positive: #16a34a;
   --positive-soft: #dcfce7;
@@ -28,8 +28,8 @@
   --warn: #f59e0b;
   --warn-soft: #fef3c7;
 
-  --border: #e6eaf0;
-  --chip-ink: #15263b;
+  --border: #e8e5f2;
+  --chip-ink: #1a1a24;
   --chip-glyph: #ffffff;
 
   /* shape & spacing — spec §4 */
@@ -38,8 +38,8 @@
   --radius-pill: 999px;
   --gap: 24px;
   --pad-card: 22px;
-  --shadow-soft: 0 4px 24px rgba(20, 38, 59, 0.06);
-  --shadow-hover: 0 10px 32px rgba(20, 38, 59, 0.12);
+  --shadow-soft: 0 4px 24px rgba(60, 50, 110, 0.07);
+  --shadow-hover: 0 10px 32px rgba(60, 50, 110, 0.14);
 
   --rail-w: 244px;
 
@@ -48,20 +48,20 @@
 }
 
 [data-theme="dark"] {
-  --bg-app: #0f1c2e;
-  --surface: #15263b;
-  --surface-muted: #1c2e44;
-  --surface-inset: #213552;
+  --bg-app: #15131f;
+  --surface: #1e1b2b;
+  --surface-muted: #262236;
+  --surface-inset: #2e2940;
 
-  --accent: #f2a23c;
-  --accent-strong: #f7b85c;
-  --accent-soft: #5a4525;
-  --accent-grad: linear-gradient(135deg, #f2a23c, #b9701a);
+  --accent: #8b7cf6;
+  --accent-strong: #a395f8;
+  --accent-soft: #322c4d;
+  --accent-grad: linear-gradient(135deg, #8b7cf6, #6a5ae0);
 
-  --ink: #eef3fa;
-  --ink-soft: #cdd8e8;
-  --text-secondary: #94a3b8;
-  --text-faint: #6b7c93;
+  --ink: #f0eef8;
+  --ink-soft: #cfcce0;
+  --text-secondary: #9c98b4;
+  --text-faint: #6f6b86;
 
   --positive: #34d399;
   --positive-soft: #14342a;
@@ -70,9 +70,9 @@
   --warn: #fbbf24;
   --warn-soft: #3a2e12;
 
-  --border: #25395420;
-  --chip-ink: #f2a23c;
-  --chip-glyph: #15263b;
+  --border: #34304820;
+  --chip-ink: #8b7cf6;
+  --chip-glyph: #15131f;
 
   --shadow-soft: 0 4px 24px rgba(0, 0, 0, 0.28);
   --shadow-hover: 0 10px 32px rgba(0, 0, 0, 0.4);
@@ -214,10 +214,7 @@ button {
 .nav-item.active {
   background: var(--accent);
   color: #fff;
-  box-shadow: 0 6px 16px rgba(242, 162, 60, 0.32);
-}
-[data-theme="dark"] .nav-item.active {
-  color: #1a1305;
+  box-shadow: 0 6px 16px rgba(124, 109, 245, 0.34);
 }
 .nav-item .count {
   margin-left: auto;
@@ -358,7 +355,7 @@ button {
   font-size: 14px;
   padding: 11px 18px;
   border-radius: var(--radius-pill);
-  box-shadow: 0 6px 16px rgba(242, 162, 60, 0.3);
+  box-shadow: 0 6px 16px rgba(124, 109, 245, 0.32);
   transition: background 0.15s, transform 0.1s;
 }
 .btn-primary:hover {
@@ -366,9 +363,6 @@ button {
 }
 .btn-primary:active {
   transform: translateY(1px);
-}
-[data-theme="dark"] .btn-primary {
-  color: #1a1305;
 }
 
 /* ---------- generic card ---------- */
@@ -792,9 +786,6 @@ button {
   background: var(--accent);
   color: #fff;
   border-color: transparent;
-}
-[data-theme="dark"] .btn-ghost.accent {
-  color: #1a1305;
 }
 
 /* segmented tabs */
