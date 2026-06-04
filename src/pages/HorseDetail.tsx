@@ -1,12 +1,37 @@
+import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play } from "lucide-react";
-import { horses, alerts, diary, series } from "../data/mock";
-import { StatusPill, RadialGauge, Sparkline, Delta } from "../components/ui";
+import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus } from "lucide-react";
+import { series, DiaryEntry } from "../data/mock";
+import { useStable, useToast } from "../store";
+import { StatusPill, RadialGauge, Sparkline, Delta, Modal } from "../components/ui";
+
+const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
+  { icon: "feed", label: "Feed change" },
+  { icon: "vet", label: "Vet visit" },
+  { icon: "farrier", label: "Farrier" },
+  { icon: "travel", label: "Travel" },
+  { icon: "deworm", label: "Deworming" },
+];
 
 export default function HorseDetail() {
   const { id } = useParams();
   const nav = useNavigate();
+  const { horses, alerts, diary, addDiary } = useStable();
+  const notify = useToast();
+  const [cam, setCam] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [icon, setIcon] = useState<DiaryEntry["icon"]>("vet");
+  const [clock, setClock] = useState("");
   const horse = horses.find((h) => h.id === id);
+
+  useEffect(() => {
+    if (!cam) return;
+    const tick = () => setClock(new Date().toLocaleTimeString());
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [cam]);
 
   if (!horse) {
     return (
@@ -21,6 +46,15 @@ export default function HorseDetail() {
 
   const horseAlerts = alerts.filter((a) => a.horse === horse.name);
   const horseDiary = diary.filter((d) => d.horse === horse.name);
+
+  const saveNote = () => {
+    if (!note.trim()) return;
+    const category = CATEGORY.find((c) => c.icon === icon)?.label ?? "Note";
+    addDiary({ horse: horse.name, category, note: note.trim(), icon });
+    notify(`Diary note added for ${horse.name}`);
+    setNote("");
+    setNoteOpen(false);
+  };
   const stressVal = horse.stress === "High" ? 82 : horse.stress === "Medium" ? 52 : 22;
   const stressColor =
     horse.stress === "High" ? "var(--alert)" : horse.stress === "Medium" ? "var(--warn)" : "var(--positive)";
@@ -69,11 +103,15 @@ export default function HorseDetail() {
               <span style={{ fontSize: 13, fontWeight: 600 }}>{horse.statusNote}</span>
             </div>
             <div className="flex gap-sm" style={{ marginTop: 16, flexWrap: "wrap" }}>
-              <button className="btn-primary">
+              <button className="btn-primary" onClick={() => setCam(true)}>
                 <Play size={16} /> Live camera
               </button>
-              <button className="btn-ghost">Generate vet report</button>
-              <button className="btn-ghost">Add diary note</button>
+              <button className="btn-ghost" onClick={() => nav(`/reports?horse=${horse.id}`)}>
+                Generate vet report
+              </button>
+              <button className="btn-ghost" onClick={() => setNoteOpen(true)}>
+                Add diary note
+              </button>
             </div>
           </div>
         </div>
@@ -184,6 +222,50 @@ export default function HorseDetail() {
           No care records yet for {horse.name}.
         </p>
       )}
+
+      <Modal open={cam} onClose={() => setCam(false)} title={`Live camera · ${horse.name}`} wide>
+        <div className="cam" style={{ backgroundImage: `url(${horse.photo})` }}>
+          <span className="live">
+            <i /> LIVE
+          </span>
+          <span className="ts">{clock}</span>
+        </div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 12 }}>
+          Night-vision feed · Stall {horse.stall}. Behaviour is analysed every 5 minutes against {horse.name}'s learned
+          baseline.
+        </p>
+      </Modal>
+
+      <Modal
+        open={noteOpen}
+        onClose={() => setNoteOpen(false)}
+        title={`Add diary note · ${horse.name}`}
+        footer={
+          <>
+            <button className="btn-ghost" onClick={() => setNoteOpen(false)}>
+              Cancel
+            </button>
+            <button className="btn-primary" onClick={saveNote}>
+              <Plus size={16} /> Add note
+            </button>
+          </>
+        }
+      >
+        <div className="field">
+          <label>Category</label>
+          <select value={icon} onChange={(e) => setIcon(e.target.value as DiaryEntry["icon"])}>
+            {CATEGORY.map((c) => (
+              <option key={c.icon} value={c.icon}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Note</label>
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="What happened?" />
+        </div>
+      </Modal>
     </>
   );
 }

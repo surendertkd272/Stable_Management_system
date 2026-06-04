@@ -1,11 +1,13 @@
 import { useNavigate } from "react-router-dom";
-import { horses, stallLayout, Status } from "../data/mock";
+import { stallLayout, Status } from "../data/mock";
+import { useStable } from "../store";
 import { statusColor, StatusPill } from "../components/ui";
 
 const RANK: Record<Status, number> = { urgent: 0, watch: 1, calm: 2 };
 
 export default function YardView() {
   const nav = useNavigate();
+  const { horses } = useStable();
   const ranked = [...horses].sort((a, b) => RANK[a.status] - RANK[b.status]);
 
   return (

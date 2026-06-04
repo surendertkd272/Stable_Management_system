@@ -1,6 +1,39 @@
 import { ReactNode } from "react";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { TrendingUp, TrendingDown, X } from "lucide-react";
 import type { Status } from "../data/mock";
+
+/* ---------- modal ---------- */
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  wide,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  wide?: boolean;
+}) {
+  if (!open) return null;
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className={`modal ${wide ? "wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{title}</h3>
+          <button className="icon-btn" onClick={onClose} title="Close" style={{ width: 36, height: 36 }}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+        {footer && <div className="modal-foot">{footer}</div>}
+      </div>
+    </div>
+  );
+}
 
 /* ---------- Sparkline (hand-rolled SVG, no chart dep) ---------- */
 export function Sparkline({

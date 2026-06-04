@@ -1,12 +1,72 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { FileText, Download, Share2, Moon, Droplet, Activity, Sun } from "lucide-react";
-import { horses, series } from "../data/mock";
+import { series } from "../data/mock";
+import { useStable, useToast } from "../store";
 import { Sparkline } from "../components/ui";
 
 export default function Reports() {
+  const { horses } = useStable();
+  const notify = useToast();
+  const [params] = useSearchParams();
   const [range, setRange] = useState<"7" | "30">("7");
-  const [horseId, setHorseId] = useState(horses[0].id);
-  const horse = horses.find((h) => h.id === horseId)!;
+  const [horseId, setHorseId] = useState(params.get("horse") ?? horses[0].id);
+  const horse = horses.find((h) => h.id === horseId) ?? horses[0];
+
+  const summaryText = () =>
+    [
+      `${horse.name} — ${range}-day vet-ready report`,
+      `${horse.breed} · ${horse.sex} · Stall ${horse.stall} · Owner: ${horse.owner}`,
+      ``,
+      `Avg rest / night:        ${horse.rest}`,
+      `Avg water visits / day:  ${horse.water}`,
+      `Avg time outside box:    ${horse.outside}`,
+      `Stress episodes (${range}d):   ${horse.status === "urgent" ? 5 : 1}`,
+      ``,
+      horse.status === "urgent"
+        ? "An elevated cluster of restlessness and lying-up cycling was recorded overnight and flagged as a possible early colic pattern — clinical assessment recommended."
+        : "All behavioural signals stayed within this horse's learned baseline, with no incident-level deviations.",
+      ``,
+      "This summary reflects camera-observed behaviour only and is intended to support, not replace, veterinary judgement.",
+    ].join("\n");
+
+  const exportPdf = () => {
+    const w = window.open("", "_blank", "width=760,height=920");
+    if (!w) {
+      notify("Allow pop-ups to export the report");
+      return;
+    }
+    w.document.write(
+      `<html><head><title>${horse.name} – EquiCare report</title>` +
+        `<style>body{font-family:system-ui,-apple-system,sans-serif;padding:48px;color:#1c1b29;line-height:1.7}` +
+        `h1{font-size:22px;margin:0 0 4px}small{color:#6b6980}pre{white-space:pre-wrap;font-family:inherit;font-size:14px;margin-top:24px}</style>` +
+        `</head><body><h1>BSV EquiCare</h1><small>${range}-day behavioural report</small>` +
+        `<pre>${summaryText()}</pre>` +
+        `<script>window.onload=function(){window.print()}<\/script></body></html>`
+    );
+    w.document.close();
+    notify("Opening print dialog…");
+  };
+
+  const shareToVet = async () => {
+    const text = summaryText();
+    const navAny = navigator as Navigator & { share?: (d: { title: string; text: string }) => Promise<void> };
+    if (navAny.share) {
+      try {
+        await navAny.share({ title: `${horse.name} — EquiCare report`, text });
+        notify("Report shared");
+      } catch {
+        /* user cancelled the share sheet */
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(text);
+        notify("Report summary copied to clipboard");
+      } catch {
+        notify("Could not copy summary");
+      }
+    }
+  };
 
   return (
     <>
@@ -48,10 +108,10 @@ export default function Reports() {
             </div>
           </div>
           <div className="flex gap-sm">
-            <button className="btn-ghost">
+            <button className="btn-ghost" onClick={shareToVet}>
               <Share2 size={15} /> Share to vet
             </button>
-            <button className="btn-primary">
+            <button className="btn-primary" onClick={exportPdf}>
               <Download size={16} /> Export PDF
             </button>
           </div>

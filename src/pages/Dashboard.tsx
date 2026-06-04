@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Activity,
@@ -9,14 +10,18 @@ import {
   AlertTriangle,
   Clock,
 } from "lucide-react";
-import { StatCard, RadialGauge, Sparkline, statusColor } from "../components/ui";
-import { horses, series, stallLayout, breedingMares, highlight } from "../data/mock";
+import { StatCard, RadialGauge, Sparkline, statusColor, Modal } from "../components/ui";
+import { series, stallLayout, breedingMares, highlight } from "../data/mock";
+import { useStable } from "../store";
 
 export default function Dashboard() {
   const nav = useNavigate();
+  const { horses } = useStable();
   const focus = horses[0]; // Zarina — needs attention
   const labourMare = breedingMares.find((m) => m.status === "labour");
   const count = (s: string) => horses.filter((h) => h.status === s).length;
+  const [clip, setClip] = useState(false);
+  const star = horses.find((h) => h.name === highlight.horse) ?? horses[0];
 
   return (
     <div className="dash-grid">
@@ -128,12 +133,12 @@ export default function Dashboard() {
           <h3 style={{ marginTop: 12 }}>{highlight.title}</h3>
           <p>{highlight.caption}</p>
         </div>
-        <button className="play">
+        <button className="play" onClick={() => setClip(true)} title="Play highlight">
           <Play size={20} fill="currentColor" />
         </button>
-        <div className="thumb">
+        <button className="thumb" onClick={() => setClip(true)} title="Play highlight">
           <Play size={34} color="#fff" fill="#fff" />
-        </div>
+        </button>
       </div>
 
       {/* yard map / triage preview (tall, full height right) */}
@@ -213,6 +218,18 @@ export default function Dashboard() {
           <Sparkline data={series.alerts} type="bar" color="var(--alert)" />
         </div>
       </div>
+
+      <Modal open={clip} onClose={() => setClip(false)} title={highlight.title} wide>
+        <div className="cam" style={{ backgroundImage: `url(${star.photo})` }}>
+          <span className="live" style={{ background: "rgba(0,0,0,0.55)" }}>
+            HIGHLIGHT
+          </span>
+          <span className="ts">{highlight.time}</span>
+        </div>
+        <p className="muted" style={{ fontSize: 13, marginTop: 12 }}>
+          {highlight.caption}
+        </p>
+      </Modal>
     </div>
   );
 }

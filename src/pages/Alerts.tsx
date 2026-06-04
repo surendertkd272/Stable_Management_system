@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AlertTriangle, Droplet, Sparkles, Activity, Check, Bell } from "lucide-react";
-import { alerts as seed, Alert } from "../data/mock";
+import { useStable } from "../store";
 
 const ICON: Record<string, React.ReactNode> = {
   "Early colic pattern": <AlertTriangle size={19} />,
@@ -12,11 +12,8 @@ const ICON: Record<string, React.ReactNode> = {
 };
 
 export default function Alerts() {
-  const [list, setList] = useState<Alert[]>(seed);
+  const { alerts: list, acknowledge: ack } = useStable();
   const [tab, setTab] = useState<"open" | "all">("open");
-
-  const ack = (id: string) =>
-    setList((l) => l.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
 
   const shown = tab === "open" ? list.filter((a) => !a.acknowledged) : list;
   const open = list.filter((a) => !a.acknowledged).length;

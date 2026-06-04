@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Moon, Droplet, Sun as SunIcon } from "lucide-react";
-import { horses, Status } from "../data/mock";
+import { Status } from "../data/mock";
+import { useStable } from "../store";
 import { StatusPill } from "../components/ui";
 
 const FILTERS: { key: Status | "all"; label: string }[] = [
@@ -13,6 +14,7 @@ const FILTERS: { key: Status | "all"; label: string }[] = [
 
 export default function Horses() {
   const nav = useNavigate();
+  const { horses } = useStable();
   const [filter, setFilter] = useState<Status | "all">("all");
   const list = horses.filter((h) => filter === "all" || h.status === filter);
 
