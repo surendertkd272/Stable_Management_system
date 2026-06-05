@@ -19,6 +19,7 @@ import {
   CalendarClock,
   Wheat,
   Receipt,
+  UserCircle,
   LucideIcon,
 } from "lucide-react";
 import { useTheme } from "../theme";
@@ -55,7 +56,10 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
   },
   {
     title: "Business",
-    items: [{ to: "/billing", label: "Billing", icon: Receipt }],
+    items: [
+      { to: "/billing", label: "Billing", icon: Receipt },
+      { to: "/portal", label: "Owner Portal", icon: UserCircle },
+    ],
   },
 ];
 
@@ -154,6 +158,7 @@ function TopBar() {
     },
     "/feed": { h1: "Feed & Nutrition", p: "Daily rations & supplements per horse" },
     "/billing": { h1: "Billing", p: `${unpaidInvoices} unpaid · invoices, GST & UPI payments` },
+    "/portal": { h1: "Owner Portal", p: "Scoped read-only view of each owner's horses" },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
   };
 

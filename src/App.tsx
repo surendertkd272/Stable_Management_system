@@ -11,6 +11,7 @@ import CareDiary from "./pages/CareDiary";
 import Health from "./pages/Health";
 import Feed from "./pages/Feed";
 import Billing from "./pages/Billing";
+import Portal from "./pages/Portal";
 import SettingsPage from "./pages/Settings";
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/health" element={<Health />} />
         <Route path="/feed" element={<Feed />} />
         <Route path="/billing" element={<Billing />} />
+        <Route path="/portal" element={<Portal />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>
