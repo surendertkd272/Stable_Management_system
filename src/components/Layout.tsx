@@ -17,6 +17,7 @@ import {
   Menu,
   X,
   CalendarClock,
+  Wheat,
   LucideIcon,
 } from "lucide-react";
 import { useTheme } from "../theme";
@@ -46,7 +47,10 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
   },
   {
     title: "Operations",
-    items: [{ to: "/health", label: "Health Scheduling", icon: CalendarClock }],
+    items: [
+      { to: "/health", label: "Health Scheduling", icon: CalendarClock },
+      { to: "/feed", label: "Feed & Nutrition", icon: Wheat },
+    ],
   },
 ];
 
@@ -142,6 +146,7 @@ function TopBar() {
       h1: "Health Scheduling",
       p: `${overdueHealth} overdue · vaccinations, deworming, farrier & vet visits`,
     },
+    "/feed": { h1: "Feed & Nutrition", p: "Daily rations & supplements per horse" },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
   };
 

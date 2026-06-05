@@ -331,6 +331,34 @@ export const healthTasks: HealthTask[] = [
   { id: "h7", horse: "Raja", type: "Farrier", due: isoIn(-20), notes: "Trim — completed on schedule", done: true, icon: "farrier" },
 ];
 
+// ---- feed & nutrition (per-horse daily ration) ----
+export interface FeedItem {
+  id: string;
+  horse: string;
+  feed: string;
+  amount: string;
+  slot: "Morning" | "Midday" | "Evening" | "Free-choice";
+  kind: "forage" | "concentrate" | "supplement";
+}
+
+export const feedItems: FeedItem[] = [
+  { id: "f1", horse: "Zarina", feed: "Oaten hay", amount: "3 kg", slot: "Morning", kind: "forage" },
+  { id: "f2", horse: "Zarina", feed: "Performance mix", amount: "1.5 kg", slot: "Morning", kind: "concentrate" },
+  { id: "f3", horse: "Zarina", feed: "Electrolytes", amount: "30 g", slot: "Morning", kind: "supplement" },
+  { id: "f4", horse: "Zarina", feed: "Lucerne", amount: "2 kg", slot: "Midday", kind: "forage" },
+  { id: "f5", horse: "Zarina", feed: "Performance mix", amount: "1.5 kg", slot: "Evening", kind: "concentrate" },
+  { id: "f6", horse: "Zarina", feed: "Joint supplement", amount: "25 g", slot: "Evening", kind: "supplement" },
+  { id: "f7", horse: "Zarina", feed: "Meadow hay", amount: "ad lib", slot: "Free-choice", kind: "forage" },
+  { id: "f8", horse: "Shaan", feed: "Oaten hay", amount: "3 kg", slot: "Morning", kind: "forage" },
+  { id: "f9", horse: "Shaan", feed: "Cool mix", amount: "1 kg", slot: "Morning", kind: "concentrate" },
+  { id: "f10", horse: "Shaan", feed: "Cool mix", amount: "1 kg", slot: "Evening", kind: "concentrate" },
+  { id: "f11", horse: "Shaan", feed: "Biotin", amount: "20 g", slot: "Evening", kind: "supplement" },
+  { id: "f12", horse: "Noor", feed: "Lucerne", amount: "3 kg", slot: "Morning", kind: "forage" },
+  { id: "f13", horse: "Noor", feed: "Broodmare mix", amount: "2 kg", slot: "Morning", kind: "concentrate" },
+  { id: "f14", horse: "Noor", feed: "Calcium supplement", amount: "40 g", slot: "Morning", kind: "supplement" },
+  { id: "f15", horse: "Noor", feed: "Broodmare mix", amount: "2 kg", slot: "Evening", kind: "concentrate" },
+];
+
 // stat-card sparkline series
 export const series = {
   monitored: [5, 6, 6, 6, 7, 7, 7],

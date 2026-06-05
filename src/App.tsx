@@ -9,6 +9,7 @@ import Breeding from "./pages/Breeding";
 import Reports from "./pages/Reports";
 import CareDiary from "./pages/CareDiary";
 import Health from "./pages/Health";
+import Feed from "./pages/Feed";
 import SettingsPage from "./pages/Settings";
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/diary" element={<CareDiary />} />
         <Route path="/health" element={<Health />} />
+        <Route path="/feed" element={<Feed />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>
