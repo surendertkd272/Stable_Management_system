@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Moon, Droplet, Sun as SunIcon } from "lucide-react";
 import { Status } from "../data/mock";
 import { useStable } from "../store";
-import { StatusPill } from "../components/ui";
+import { StatusPill, riskScore, riskBand } from "../components/ui";
 
 const FILTERS: { key: Status | "all"; label: string }[] = [
   { key: "all", label: "All" },
@@ -68,6 +68,17 @@ export default function Horses() {
                 <span>
                   <SunIcon size={11} style={{ verticalAlign: "-1px" }} /> outside
                 </span>
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <div className="flex between" style={{ fontSize: 11, marginBottom: 4 }}>
+                <span className="muted">Predictive risk</span>
+                <span style={{ color: riskBand(riskScore(h)).color, fontWeight: 700 }}>
+                  {riskScore(h)} · {riskBand(riskScore(h)).label}
+                </span>
+              </div>
+              <div className="progress" style={{ height: 6 }}>
+                <i style={{ width: `${riskScore(h)}%`, background: riskBand(riskScore(h)).color }} />
               </div>
             </div>
           </div>

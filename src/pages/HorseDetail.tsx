@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus } from "lucide-react";
 import { series, DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { StatusPill, RadialGauge, Sparkline, Delta, Modal } from "../components/ui";
+import { StatusPill, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand } from "../components/ui";
 
 const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
   { icon: "feed", label: "Feed change" },
@@ -46,6 +46,8 @@ export default function HorseDetail() {
 
   const horseAlerts = alerts.filter((a) => a.horse === horse.name);
   const horseDiary = diary.filter((d) => d.horse === horse.name);
+  const risk = riskScore(horse);
+  const band = riskBand(risk);
 
   const saveNote = () => {
     if (!note.trim()) return;
@@ -138,6 +140,40 @@ export default function HorseDetail() {
           type="bar"
           color={stressColor}
         />
+      </div>
+
+      {/* predictive risk */}
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div className="card-head">
+          <h3>Predictive risk score</h3>
+          <span className={`pill ${band.cls}`}>{band.label} risk</span>
+        </div>
+        <div className="flex gap-md center wrap">
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 44, fontWeight: 700, color: band.color, lineHeight: 1 }}>
+            {risk}
+            <small style={{ fontSize: 18, color: "var(--text-secondary)" }}>/100</small>
+          </div>
+          <div className="grow" style={{ minWidth: 220 }}>
+            <div className="progress" style={{ height: 10 }}>
+              <i style={{ width: `${risk}%`, background: band.color }} />
+            </div>
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
+              Model estimate from behaviour baseline, stress trend and recent incidents — context, not diagnosis.
+            </p>
+          </div>
+          <div className="flex gap-sm wrap" style={{ maxWidth: 280 }}>
+            {horse.status === "urgent" && <span className="pill alert">Active incident</span>}
+            {horse.stress !== "Low" && <span className="pill warn">{horse.stress} stress</span>}
+            {horseAlerts.slice(0, 2).map((a) => (
+              <span className="pill muted" key={a.id}>
+                {a.type}
+              </span>
+            ))}
+            {risk < 40 && horse.status !== "urgent" && horse.stress === "Low" && (
+              <span className="pill ok">Within baseline</span>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="grid cols-3">

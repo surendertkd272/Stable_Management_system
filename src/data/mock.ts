@@ -212,6 +212,33 @@ export const alerts: Alert[] = [
     detail: "Labour behaviour detected — birth alarm active. Post-foaling milestones now being watched.",
     acknowledged: false,
   },
+  {
+    id: "a7",
+    horse: "Shaan",
+    type: "Respiratory pattern",
+    severity: "warn",
+    time: "Yesterday · 22:40",
+    detail: "Audio analysis picked up intermittent coughing overnight — possible respiratory irritation.",
+    acknowledged: true,
+  },
+  {
+    id: "a8",
+    horse: "Raja",
+    type: "Stable vice",
+    severity: "ok",
+    time: "2 days ago · 15:10",
+    detail: "Crib-biting episodes detected on the stall door — enrichment / routine review suggested.",
+    acknowledged: true,
+  },
+  {
+    id: "a9",
+    horse: "Meher",
+    type: "Low lying-down time",
+    severity: "warn",
+    time: "Yesterday · 06:00",
+    detail: "Chronically low lying-down time over 5 days — possible sleep deprivation; check bedding and comfort.",
+    acknowledged: true,
+  },
 ];
 
 export interface Mare {

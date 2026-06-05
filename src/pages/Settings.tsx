@@ -23,6 +23,10 @@ export default function SettingsPage() {
     casting: true,
     birth: true,
     water: true,
+    respiratory: true,
+    vice: true,
+    sleep: true,
+    gait: false,
     highlights: false,
   });
   const [sensitivity, setSensitivity] = useState(60);
@@ -85,6 +89,10 @@ export default function SettingsPage() {
         <Row label="Casting detection" desc="Stuck against wall / unable to rise." on={toggles.casting} flip={() => flip("casting")} />
         <Row label="Birth alarm" desc="Foaling behaviour detected." on={toggles.birth} flip={() => flip("birth")} />
         <Row label="Low water intake" desc="Water-area visits below baseline." on={toggles.water} flip={() => flip("water")} />
+        <Row label="Respiratory (audio)" desc="Coughing & abnormal breathing from audio analysis." on={toggles.respiratory} flip={() => flip("respiratory")} />
+        <Row label="Stable vices" desc="Weaving, box-walking, crib-biting, wind-sucking." on={toggles.vice} flip={() => flip("vice")} />
+        <Row label="Sleep deprivation" desc="Chronically low lying-down / REM time." on={toggles.sleep} flip={() => flip("sleep")} />
+        <Row label="Gait & lameness" desc="Movement asymmetry screening (beta)." on={toggles.gait} flip={() => flip("gait")} />
         <Row label="Highlights" desc="Save shareable stable-life moments." on={toggles.highlights} flip={() => flip("highlights")} />
       </div>
 

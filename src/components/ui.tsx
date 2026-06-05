@@ -164,6 +164,20 @@ export function StatusPill({ status }: { status: Status }) {
 export const statusColor = (s: Status) =>
   s === "urgent" ? "var(--alert)" : s === "watch" ? "var(--warn)" : "var(--positive)";
 
+/* ---------- predictive risk (heuristic model placeholder) ---------- */
+export function riskScore(h: { status: Status; stress: string; name: string }): number {
+  const base = h.status === "urgent" ? 55 : h.status === "watch" ? 30 : 8;
+  const stress = h.stress === "High" ? 30 : h.stress === "Medium" ? 15 : 4;
+  const jitter = h.name.charCodeAt(0) % 7; // stable per-horse variation
+  return Math.min(99, base + stress + jitter);
+}
+
+export function riskBand(r: number): { label: string; cls: string; color: string } {
+  if (r >= 70) return { label: "High", cls: "alert", color: "var(--alert)" };
+  if (r >= 40) return { label: "Medium", cls: "warn", color: "var(--warn)" };
+  return { label: "Low", cls: "ok", color: "var(--positive)" };
+}
+
 /* ---------- delta ---------- */
 export function Delta({ value }: { value: number }) {
   const up = value >= 0;

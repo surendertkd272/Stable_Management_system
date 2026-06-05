@@ -10,7 +10,7 @@ import {
   AlertTriangle,
   Clock,
 } from "lucide-react";
-import { StatCard, RadialGauge, Sparkline, statusColor, Modal } from "../components/ui";
+import { StatCard, RadialGauge, Sparkline, statusColor, Modal, riskScore, riskBand } from "../components/ui";
 import { series, yardSlots, breedingMares, highlight } from "../data/mock";
 import { useStable } from "../store";
 
@@ -22,6 +22,7 @@ export default function Dashboard() {
   const count = (s: string) => horses.filter((h) => h.status === s).length;
   const [clip, setClip] = useState(false);
   const star = horses.find((h) => h.name === highlight.horse) ?? horses[0];
+  const topRisk = [...horses].sort((a, b) => riskScore(b) - riskScore(a)).slice(0, 3);
 
   return (
     <div className="dash-grid">
@@ -218,6 +219,36 @@ export default function Dashboard() {
           <span className="muted" style={{ fontSize: 12.5 }}>14 resolved · 4 open</span>
           <Sparkline data={series.alerts} type="bar" color="var(--alert)" />
         </div>
+      </div>
+
+      {/* predictive risk radar */}
+      <div className="card span-1">
+        <div className="card-head">
+          <h3>Risk radar</h3>
+          <button className="sub" style={{ color: "var(--accent)", fontWeight: 600 }} onClick={() => nav("/horses")}>
+            All
+          </button>
+        </div>
+        {topRisk.map((h) => {
+          const r = riskScore(h);
+          const b = riskBand(r);
+          return (
+            <div key={h.id} onClick={() => nav(`/horses/${h.id}`)} style={{ cursor: "pointer", marginBottom: 12 }}>
+              <div className="flex between center" style={{ marginBottom: 4 }}>
+                <b style={{ fontSize: 13.5, color: "var(--ink)" }}>{h.name}</b>
+                <span style={{ color: b.color, fontWeight: 700, fontSize: 12.5 }}>
+                  {r} · {b.label}
+                </span>
+              </div>
+              <div className="progress" style={{ height: 7 }}>
+                <i style={{ width: `${r}%`, background: b.color }} />
+              </div>
+            </div>
+          );
+        })}
+        <p className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+          Model estimate — context, not diagnosis.
+        </p>
       </div>
 
       <Modal open={clip} onClose={() => setClip(false)} title={highlight.title} wide>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Droplet, Sparkles, Activity, Check, Bell } from "lucide-react";
+import { AlertTriangle, Droplet, Sparkles, Activity, Check, Bell, Wind, Repeat, Moon } from "lucide-react";
 import { useStable } from "../store";
 
 const ICON: Record<string, React.ReactNode> = {
@@ -9,6 +9,9 @@ const ICON: Record<string, React.ReactNode> = {
   "Highlight captured": <Activity size={19} />,
   "Baseline learning": <Activity size={19} />,
   "Foaling labour detected": <Sparkles size={19} />,
+  "Respiratory pattern": <Wind size={19} />,
+  "Stable vice": <Repeat size={19} />,
+  "Low lying-down time": <Moon size={19} />,
 };
 
 export default function Alerts() {
