@@ -9,12 +9,16 @@ import {
   healthTasks as seedHealth,
   feedItems as seedFeed,
   invoices as seedInvoices,
+  coverings as seedCoverings,
+  stallions as seedStallions,
   Horse,
   Alert,
   DiaryEntry,
   HealthTask,
   FeedItem,
   Invoice,
+  Covering,
+  Stallion,
 } from "./data/mock";
 
 const DEFAULT_PHOTO =
@@ -49,6 +53,8 @@ type NewDiary = Pick<DiaryEntry, "horse" | "category" | "note" | "icon">;
 type NewHealth = Pick<HealthTask, "horse" | "type" | "due" | "notes" | "icon">;
 type NewFeed = Pick<FeedItem, "horse" | "feed" | "amount" | "slot" | "kind">;
 type NewInvoice = Pick<Invoice, "owner" | "horse" | "desc" | "amount" | "gst" | "dueDate">;
+type NewCovering = Pick<Covering, "mare" | "stallion" | "method" | "date" | "result" | "note">;
+type NewStallion = Pick<Stallion, "name" | "breed" | "nextCollection" | "bse" | "straws" | "note">;
 
 interface StableCtx {
   horses: Horse[];
@@ -57,6 +63,8 @@ interface StableCtx {
   health: HealthTask[];
   feed: FeedItem[];
   invoices: Invoice[];
+  coverings: Covering[];
+  stallions: Stallion[];
   addHorse: (h: NewHorse) => void;
   addDiary: (d: NewDiary) => void;
   addHealth: (t: NewHealth) => void;
@@ -65,6 +73,9 @@ interface StableCtx {
   removeFeed: (id: string) => void;
   addInvoice: (inv: NewInvoice) => void;
   markPaid: (id: string, method: Invoice["method"]) => void;
+  addCovering: (c: NewCovering) => void;
+  addStallion: (s: NewStallion) => void;
+  adjustStraws: (id: string, delta: number) => void;
   acknowledge: (id: string) => void;
   reset: () => void;
 }
@@ -78,6 +89,8 @@ export function StableProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<HealthTask[]>(() => load("health", seedHealth));
   const [feed, setFeed] = useState<FeedItem[]>(() => load("feed", seedFeed));
   const [invoices, setInvoices] = useState<Invoice[]>(() => load("invoices", seedInvoices));
+  const [coverings, setCoverings] = useState<Covering[]>(() => load("coverings", seedCoverings));
+  const [stallions, setStallions] = useState<Stallion[]>(() => load("stallions", seedStallions));
 
   useEffect(() => persist("horses", horses), [horses]);
   useEffect(() => persist("alerts", alerts), [alerts]);
@@ -85,6 +98,8 @@ export function StableProvider({ children }: { children: ReactNode }) {
   useEffect(() => persist("health", health), [health]);
   useEffect(() => persist("feed", feed), [feed]);
   useEffect(() => persist("invoices", invoices), [invoices]);
+  useEffect(() => persist("coverings", coverings), [coverings]);
+  useEffect(() => persist("stallions", stallions), [stallions]);
 
   const addHorse = useCallback((h: NewHorse) => {
     setHorses((list) => [
@@ -141,6 +156,20 @@ export function StableProvider({ children }: { children: ReactNode }) {
     setInvoices((list) => list.map((inv) => (inv.id === id ? { ...inv, paid: true, method } : inv)));
   }, []);
 
+  const addCovering = useCallback((c: NewCovering) => {
+    setCoverings((list) => [{ ...c, id: nextId("cov") }, ...list]);
+  }, []);
+
+  const addStallion = useCallback((s: NewStallion) => {
+    setStallions((list) => [...list, { ...s, id: nextId("st") }]);
+  }, []);
+
+  const adjustStraws = useCallback((id: string, delta: number) => {
+    setStallions((list) =>
+      list.map((s) => (s.id === id ? { ...s, straws: Math.max(0, s.straws + delta) } : s))
+    );
+  }, []);
+
   const acknowledge = useCallback((id: string) => {
     setAlerts((list) => list.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
   }, []);
@@ -152,6 +181,8 @@ export function StableProvider({ children }: { children: ReactNode }) {
     setHealth(seedHealth);
     setFeed(seedFeed);
     setInvoices(seedInvoices);
+    setCoverings(seedCoverings);
+    setStallions(seedStallions);
   }, []);
 
   return (
@@ -163,6 +194,8 @@ export function StableProvider({ children }: { children: ReactNode }) {
         health,
         feed,
         invoices,
+        coverings,
+        stallions,
         addHorse,
         addDiary,
         addHealth,
@@ -171,6 +204,9 @@ export function StableProvider({ children }: { children: ReactNode }) {
         removeFeed,
         addInvoice,
         markPaid,
+        addCovering,
+        addStallion,
+        adjustStraws,
         acknowledge,
         reset,
       }}

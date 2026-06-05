@@ -382,6 +382,39 @@ export const invoices: Invoice[] = [
   { id: "i5", number: "INV-1005", owner: "Bharat Sports Venture", horse: "—", desc: "Stud fee — Sultan × Laila", amount: 60000, gst: 18, issued: isoIn(-50), dueDate: isoIn(-20), paid: true, method: "Bank" },
 ];
 
+// ---- breeding admin: covering log + stallion management ----
+export interface Covering {
+  id: string;
+  mare: string;
+  stallion: string;
+  method: "Natural" | "AI";
+  date: string; // ISO
+  result: "In foal" | "Covered" | "Open" | "Not pregnant";
+  note: string;
+}
+
+export const coverings: Covering[] = [
+  { id: "c1", mare: "Noor", stallion: "Sultan", method: "AI", date: isoIn(-334), result: "In foal", note: "30-day scan confirmed · due in ~6 days" },
+  { id: "c2", mare: "Zarina", stallion: "Shaan", method: "Natural", date: isoIn(-281), result: "In foal", note: "Heartbeat scan confirmed at day 30" },
+  { id: "c3", mare: "Laila", stallion: "Sultan", method: "Natural", date: isoIn(-340), result: "In foal", note: "Foaling in progress — birth alarm active" },
+  { id: "c4", mare: "Meher", stallion: "—", method: "AI", date: isoIn(2), result: "Open", note: "Behaviour consistent with estrus (AI-flagged) — covering window opening" },
+];
+
+export interface Stallion {
+  id: string;
+  name: string;
+  breed: string;
+  nextCollection: string; // ISO
+  bse: string; // breeding soundness exam
+  straws: number; // frozen AI straw inventory
+  note: string;
+}
+
+export const stallions: Stallion[] = [
+  { id: "st1", name: "Sultan", breed: "Arabian", nextCollection: isoIn(3), bse: "Passed", straws: 12, note: "Fertility good · strong libido" },
+  { id: "st2", name: "Shaan", breed: "Thoroughbred", nextCollection: isoIn(10), bse: "Passed", straws: 5, note: "Natural cover preferred" },
+];
+
 // stat-card sparkline series
 export const series = {
   monitored: [5, 6, 6, 6, 7, 7, 7],
