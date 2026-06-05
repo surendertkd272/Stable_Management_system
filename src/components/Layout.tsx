@@ -18,6 +18,7 @@ import {
   X,
   CalendarClock,
   Wheat,
+  Receipt,
   LucideIcon,
 } from "lucide-react";
 import { useTheme } from "../theme";
@@ -51,6 +52,10 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/health", label: "Health Scheduling", icon: CalendarClock },
       { to: "/feed", label: "Feed & Nutrition", icon: Wheat },
     ],
+  },
+  {
+    title: "Business",
+    items: [{ to: "/billing", label: "Billing", icon: Receipt }],
   },
 ];
 
@@ -118,7 +123,7 @@ const EMPTY = { name: "", breed: "", age: "", sex: "Mare" as Horse["sex"], stall
 function TopBar() {
   const { pathname } = useLocation();
   const nav = useNavigate();
-  const { horses, alerts, health, addHorse } = useStable();
+  const { horses, alerts, health, invoices, addHorse } = useStable();
   const notify = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -130,6 +135,7 @@ function TopBar() {
   const inLabour = breedingMares.filter((m) => m.status === "labour").length;
   const todayIso = new Date().toISOString().slice(0, 10);
   const overdueHealth = health.filter((t) => !t.done && t.due < todayIso).length;
+  const unpaidInvoices = invoices.filter((i) => !i.paid).length;
 
   const titles: Record<string, { h1: string; p: string }> = {
     "/": {
@@ -147,6 +153,7 @@ function TopBar() {
       p: `${overdueHealth} overdue · vaccinations, deworming, farrier & vet visits`,
     },
     "/feed": { h1: "Feed & Nutrition", p: "Daily rations & supplements per horse" },
+    "/billing": { h1: "Billing", p: `${unpaidInvoices} unpaid · invoices, GST & UPI payments` },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
   };
 

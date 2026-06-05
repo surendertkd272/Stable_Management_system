@@ -8,11 +8,13 @@ import {
   diary as seedDiary,
   healthTasks as seedHealth,
   feedItems as seedFeed,
+  invoices as seedInvoices,
   Horse,
   Alert,
   DiaryEntry,
   HealthTask,
   FeedItem,
+  Invoice,
 } from "./data/mock";
 
 const DEFAULT_PHOTO =
@@ -46,6 +48,7 @@ type NewHorse = Pick<Horse, "name" | "breed" | "age" | "sex" | "stall" | "owner"
 type NewDiary = Pick<DiaryEntry, "horse" | "category" | "note" | "icon">;
 type NewHealth = Pick<HealthTask, "horse" | "type" | "due" | "notes" | "icon">;
 type NewFeed = Pick<FeedItem, "horse" | "feed" | "amount" | "slot" | "kind">;
+type NewInvoice = Pick<Invoice, "owner" | "horse" | "desc" | "amount" | "gst" | "dueDate">;
 
 interface StableCtx {
   horses: Horse[];
@@ -53,12 +56,15 @@ interface StableCtx {
   diary: DiaryEntry[];
   health: HealthTask[];
   feed: FeedItem[];
+  invoices: Invoice[];
   addHorse: (h: NewHorse) => void;
   addDiary: (d: NewDiary) => void;
   addHealth: (t: NewHealth) => void;
   toggleHealth: (id: string) => void;
   addFeed: (f: NewFeed) => void;
   removeFeed: (id: string) => void;
+  addInvoice: (inv: NewInvoice) => void;
+  markPaid: (id: string, method: Invoice["method"]) => void;
   acknowledge: (id: string) => void;
   reset: () => void;
 }
@@ -71,12 +77,14 @@ export function StableProvider({ children }: { children: ReactNode }) {
   const [diary, setDiary] = useState<DiaryEntry[]>(() => load("diary", seedDiary));
   const [health, setHealth] = useState<HealthTask[]>(() => load("health", seedHealth));
   const [feed, setFeed] = useState<FeedItem[]>(() => load("feed", seedFeed));
+  const [invoices, setInvoices] = useState<Invoice[]>(() => load("invoices", seedInvoices));
 
   useEffect(() => persist("horses", horses), [horses]);
   useEffect(() => persist("alerts", alerts), [alerts]);
   useEffect(() => persist("diary", diary), [diary]);
   useEffect(() => persist("health", health), [health]);
   useEffect(() => persist("feed", feed), [feed]);
+  useEffect(() => persist("invoices", invoices), [invoices]);
 
   const addHorse = useCallback((h: NewHorse) => {
     setHorses((list) => [
@@ -116,6 +124,23 @@ export function StableProvider({ children }: { children: ReactNode }) {
     setFeed((list) => list.filter((f) => f.id !== id));
   }, []);
 
+  const addInvoice = useCallback((inv: NewInvoice) => {
+    setInvoices((list) => [
+      {
+        ...inv,
+        id: nextId("inv"),
+        number: `INV-${1001 + list.length}`,
+        issued: new Date().toISOString().slice(0, 10),
+        paid: false,
+      },
+      ...list,
+    ]);
+  }, []);
+
+  const markPaid = useCallback((id: string, method: Invoice["method"]) => {
+    setInvoices((list) => list.map((inv) => (inv.id === id ? { ...inv, paid: true, method } : inv)));
+  }, []);
+
   const acknowledge = useCallback((id: string) => {
     setAlerts((list) => list.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
   }, []);
@@ -126,6 +151,7 @@ export function StableProvider({ children }: { children: ReactNode }) {
     setDiary(seedDiary);
     setHealth(seedHealth);
     setFeed(seedFeed);
+    setInvoices(seedInvoices);
   }, []);
 
   return (
@@ -136,12 +162,15 @@ export function StableProvider({ children }: { children: ReactNode }) {
         diary,
         health,
         feed,
+        invoices,
         addHorse,
         addDiary,
         addHealth,
         toggleHealth,
         addFeed,
         removeFeed,
+        addInvoice,
+        markPaid,
         acknowledge,
         reset,
       }}

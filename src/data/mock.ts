@@ -359,6 +359,29 @@ export const feedItems: FeedItem[] = [
   { id: "f15", horse: "Noor", feed: "Broodmare mix", amount: "2 kg", slot: "Evening", kind: "concentrate" },
 ];
 
+// ---- billing (invoices with GST + UPI) ----
+export interface Invoice {
+  id: string;
+  number: string;
+  owner: string;
+  horse: string;
+  desc: string;
+  amount: number; // subtotal, ex-GST (₹)
+  gst: number; // percent
+  issued: string; // ISO yyyy-mm-dd
+  dueDate: string; // ISO yyyy-mm-dd
+  paid: boolean;
+  method?: "UPI" | "Bank" | "Cash";
+}
+
+export const invoices: Invoice[] = [
+  { id: "i1", number: "INV-1001", owner: "Bharat Sports Venture", horse: "Zarina", desc: "Monthly livery & training", amount: 45000, gst: 18, issued: isoIn(-10), dueDate: isoIn(5), paid: false },
+  { id: "i2", number: "INV-1002", owner: "R. Singh", horse: "Noor", desc: "Livery + pre-foaling care", amount: 38000, gst: 18, issued: isoIn(-25), dueDate: isoIn(-10), paid: true, method: "UPI" },
+  { id: "i3", number: "INV-1003", owner: "Equestrian Club", horse: "Raja", desc: "Monthly livery", amount: 22000, gst: 18, issued: isoIn(-40), dueDate: isoIn(-10), paid: false },
+  { id: "i4", number: "INV-1004", owner: "Bharat Sports Venture", horse: "Shaan", desc: "Farrier + vet recharge", amount: 8500, gst: 18, issued: isoIn(-3), dueDate: isoIn(12), paid: false },
+  { id: "i5", number: "INV-1005", owner: "Bharat Sports Venture", horse: "—", desc: "Stud fee — Sultan × Laila", amount: 60000, gst: 18, issued: isoIn(-50), dueDate: isoIn(-20), paid: true, method: "Bank" },
+];
+
 // stat-card sparkline series
 export const series = {
   monitored: [5, 6, 6, 6, 7, 7, 7],
