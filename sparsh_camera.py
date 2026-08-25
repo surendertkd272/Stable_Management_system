@@ -3,6 +3,8 @@ sparsh_camera — reusable edge driver for the Sparsh/Samriddhi thermal camera
 (VD641NT), for the BSV EquiCare stable-monitoring system.
 
 100% ARM64-native path — HTTP (ISAPI) + Modbus/TCP + RTSP. No vendor x86 SDK.
+Protocol details (endpoints, register map, meta-frame layout, known limits):
+SDK/PROTOCOL_REFERENCE.md
 
 Layers
 ------

@@ -102,6 +102,14 @@ Unset ⇒ open. On a rejected flush the edge agent **keeps readings queued** (ve
 - **No visible↔thermal mapping** exposed — detect on the thermal/fusion stream, not by mapping from visible.
 - **ROI moves are config writes** (a few Hz, not 25 Hz) — fine for a resting horse.
 
+## Camera protocol
+
+The camera is driven entirely over documented network protocols — ISAPI (HTTP/JSON),
+Modbus/TCP and RTSP — with no vendor SDK in the path. Endpoints, the Modbus register
+map, the `stream/meta` frame layout and the known limitations are captured in
+[SDK/PROTOCOL_REFERENCE.md](SDK/PROTOCOL_REFERENCE.md) so the driver does not depend
+on a vendor PDF sitting in someone's inbox.
+
 ## Monitoring-gap safety net
 
 A 24/7 monitor that goes blind must **say so** — stale data must never render as "calm".
