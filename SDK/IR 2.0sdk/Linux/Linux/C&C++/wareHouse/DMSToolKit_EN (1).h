@@ -1,0 +1,901 @@
+﻿#ifndef DMTOOLKIT_H_
+#define DMTOOLKIT_H_
+
+#include "map"
+#include "list"
+#include "math.h"
+#include "vector"
+#include "errno.h"
+#include "fcntl.h"
+#include "algorithm"
+
+#include "time.h"
+#include "stdio.h"
+#include "stdint.h"
+#include "signal.h"
+#include "pthread.h"
+#include "semaphore.h"
+
+#include "string.h"
+#include <sstream>
+#include <iostream>
+using namespace std;
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇//
+//◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇//
+//◇◇◇◇◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◆◆◆◇◇◇◇◇//
+//◇◇◇◇◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◇◇◇◇◇◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◆◆◆◇◇◇◇◇◇//
+//◇◇◇◇◆◆◇◇◇◇◇◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◇◇◇◇◇◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◆◆◆◇◇◇◇◇◇◇//
+//◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◇◇◇◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◆◆◆◇◇◇◇◇◇◇◇//
+//◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◆◆◇◇◇◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◇◇◇◇◇◇◇◇◇//
+//◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◆◆◆◇◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◇◇◇◇◇◇◇◇◇//
+//◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◆◆◇◆◆◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◇◇◇◇◇◇◇◇//
+//◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◆◆◆◆◆◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◇◆◆◆◇◇◇◇◇◇◇//
+//◇◇◇◇◆◆◇◇◇◇◇◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◆◆◆◆◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◇◇◇◇◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◇◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◆◆◆◇◇◇◇◇◇//
+//◇◇◇◇◆◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◆◆◆◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◆◆◆◆◇◇◇◇◇//
+//◇◇◇◇◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◆◆◆◇◇◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◆◆◆◆◆◆◆◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◆◆◇◇◇◇◆◆◆◇◇◇◇◇//
+//◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇//
+//◇2026◇0320◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇BY◇SHENHUA◇//
+//◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇◇VER◇1◇0◇0◇3◇//
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//---------------------------------------------------------------------------------------------------------------Cooled Modules
+//MCT Cooled Focal Plane Array Detector (Analog Video + Non-radiometric)
+#define _MODULE_DLDB150C	0xA0000000		//DLD-B150C (640*512), PAL (720*576), Motorized Continuous Zoom (30~150mm)
+#define _MODULE_DLDM330C	0xB0000000		//DLD-M330C-640 (640*512), PAL (720*576), Motorized Continuous Zoom (15~330mm)
+#define _MODULE_DLDM360	0xC0000000		//DLD-M360 (320*256), PAL (720*576), Dual Field of View (90/360mm)
+#define _MODULE_DLDM420C	0xD0000000		//DLD-M420C-640 (640*512), PAL (720*576)/SDI, Motorized Continuous Zoom (21~420mm)
+#define _MODULE_DLDM600	0xE0000000		//DLD-M600 (320×256)/DLD-M600-640 (640*512), PAL (720*576), Triple Field of View (50/250/600mm)
+#define _MODULE_DLDM750C	0xF0000000		//DLD-M750C-640 (640*512), PAL (720*576), Motorized Continuous Zoom (34~750mm)
+
+//--------------------------------------------------------------------------------------------------------------Uncooled Modules
+//D8X3 Modules, Athermal focus-free lenses (9mm, 13mm, 18mm, 25mm, 37mm, 50mm) / Motorized focus lenses (75mm, 100mm, 150mm, 25-100mm, 30-150mm)
+#define _MODULE_D8X3		0x10000000		//D883(384*288)/D843(640*512)
+#define _MODULE_D8X3N		0x10000001		//N: Network
+#define _MODULE_D8X3NT		0x10000003		//N: Network, T: Temperature measurement
+
+//D883(384*288), PAL(720*576)
+#define _MODULE_D883		(_MODULE_D8X3	| 0x01000000)	//Inherits protocols & configuration from D8X3 & DM6X
+#define _MODULE_D883N		(_MODULE_D8X3N	| 0x01000000)	//Inherits protocols & configuration from D8X3 & DM6X
+#define _MODULE_D883NT		(_MODULE_D8X3NT | 0x01000000)	//Inherits protocols & configuration from D8X3 & DM6X
+
+//D843(640*512), PAL(720*576)
+#define _MODULE_D843		(_MODULE_D8X3	| 0x02000000)	//Inherits protocols & configuration from D8X3 & DM6X
+#define _MODULE_D843N		(_MODULE_D8X3N	| 0x02000000)	//Inherits protocols & configuration from D8X3 & DM6X
+#define _MODULE_D843NT		(_MODULE_D8X3NT | 0x02000000)	//Inherits protocols & configuration from D8X3 & DM6X
+
+//VD641 module, athermalized focus-free lens (19mm, 25mm)
+#define _MODULE_VD641		0x00100000		//VD641(640*480)
+#define _MODULE_VD641N		0x00100001		//N: Network
+#define _MODULE_VD641NT		0x00100003		//N: Network, T: Temperature measurement
+
+//ZE1920 (1920*1080), LVCMOS parallel interface/MIPI CSI-2 serial interface, motorized focus lens (23mm, 45mm, 90mm)
+#define _MODULE_ZE1920		(_MODULE_VD641	| 0x00010000)	//Inherits from VD641 module protocol
+#define _MODULE_ZE1920N		(_MODULE_VD641N	| 0x00010000)	//Inherits from VD641 module protocol
+#define _MODULE_ZE1920NT	(_MODULE_VD641NT| 0x00010000)		//Inherits from VD641 module protocol
+
+//======================================================================================================================
+//------------------------------------------------------------------------------------------------------------Complete Unit Model Code
+
+//Any model
+#define _MODEL_ANY			0xFFFFFFFF		//Any model
+
+//--------------------------------------------------------------------------------DM Online Temperature Measurement Series Units
+//Legacy models, inheriting DM8X3/DM6X protocol (~2015)
+#define _MODEL_DM10			(_MODULE_D8X3NT	| 0x1000 | MODEL_ENABLE_TWS_)			//160*120 (Dual-spectrum)
+#define _MODEL_DM20			(_MODULE_D8X3NT	| 0x2000)						//160*120 (Infrared)
+#define _MODEL_DM60			(_MODULE_D8X3NT	| 0x6000)						//DM60
+#define _MODEL_DM60_WXD		(_MODULE_D8X3NT	| 0x6100)							//DM60-W-XD (384*288) (Low-temperature detection)
+#define _MODEL_DM63			(_MODULE_D8X3NT	| 0x6200)						//DM63 (384*288) (Motorized focus: 18mm, 37mm)
+#define _MODEL_DM63_F		(_MODULE_D8X3NT	| 0x6300)							//DM63-F (384*288) (Fixed focus: 18mm, 37mm)
+#define _MODEL_DM66			(_MODULE_D8X3NT	| 0x6400)						//DM66 (640*480) (Motorized focus: 25mm, 42mm)
+#define _MODEL_DM6X			(_MODULE_D8X3NT	| 0x6F00)						//DM63 (384*288) (Motorized focus: 18mm, 37mm) / DM63F (384*288) (Fixed focus: 18mm, 37mm) / DM66 (640*480) (Motorized focus: 25mm, 42mm)
+
+//--------------------------------------------------------------------------------W3 Series Human Body Temperature Measurement Units (Bi-spectrum)
+//Legacy models, inheriting DM8X3/DM6X/W3 protocols (~2020)
+#define _MODEL_DM60_W3P		(_MODEL_DM60 | 0x0A00 | MODEL_ENABLE_TWS_)					//DM60-W3P (640*480) (3-10m)
+#define _MODEL_DM60_W3S		(_MODEL_DM60 | 0x0B00 | MODEL_ENABLE_TWS_)					//DM60-W3S (384*288) (2-7m)
+#define _MODEL_DM60_WS		(_MODEL_DM60 | 0x0C00 | MODEL_ENABLE_TWS_)					//DM60-WS (320*240) (2-6m)
+#define _MODEL_DM60_WS1		(_MODEL_DM60 | 0x0D00 | MODEL_ENABLE_TWS_)					//DM60-WS1 (160*120) (1-3m)
+#define _MODEL_DM60_WS1PLUS	(_MODEL_DM60 | 0x0E00 | MODEL_ENABLE_TWS_)					//DM60-WS1-PLUS (160*120) (with built-in small blackbody)
+
+//New models, inheriting VD641 protocol (2023~)
+#define _MODEL_DM30		(_MODULE_VD641NT | 0x3000 |  MODEL_ENABLE_TWS_)				//160*120 (Dual-spectrum)
+#define _MODEL_DM30H		(_MODULE_VD641NT | 0x3100 |  MODEL_ENABLE_TWS_)				//256*192 (Dual-spectrum)
+#define _MODEL_DM80		(_MODULE_VD641NT | 0x8000)							//640*480 (Infrared)
+
+
+//------------------------------------------------------------------------------------------------------------
+
+#define MODEL_ENABLE_NET_				0x00000001		//Enable network
+#define MODEL_ENABLE_MES_				0x00000002		//Enable temperature measurement
+#define MODEL_ENABLE_PTZ_				0x00000004		//Enable PTZ
+#define MODEL_ENABLE_TWS_				0x00000008		//Enable dual-spectrum
+
+//------------------------------------------------------------------------------------------------------------
+#define OSD_CHANNEL				0x00000001L
+#define OSD_CUSTOM				0x00000002L	
+#define OSD_DATETIME				0x00000004L	
+
+#define MOSD_CROSS_NULL				0x00000000L
+#define MOSD_CROSS_HIGH				0x00000001L
+#define MOSD_CROSS_LOW				0x00000002L
+
+#define MOSD_TEMP_NULL				0x00000000L
+#define MOSD_TEMP_TRACK				0x00000001L
+#define MOSD_TEMP_ARRAY				0x00000002L
+
+#define SUPPORT_DISTANCEADJUST			0x00000100L		//Whether temperature measurement distance correction is supported
+#define SUPPORT_TLUNCH				0x00000200L		//Whether reporting temperature data via serial port is supported
+#define SUPPORT_TDEXT				0x00000400L		//Whether function expansion board is supported (via serial communication)
+#define SUPPORT_WIFI				0x00000800L		//Whether WIFI module is supported
+#define SUPPORT_HT10				0x00001000L		//Whether built-in small blackbody is supported
+#define SUPPORT_GB28181				0x00002000L		//Whether national standard GB28181 is supported
+#define SUPPORT_DMMEASURE			0x00004000L		//Whether point/line/area temperature measurement is supported
+#define SUPPORT_STORAGE				0x00008000L		//Whether storage management is supported
+#define SUPPORT_IMAGE				0x00010000L		//Whether image configuration is supported
+#define SUPPORT_SHIELD				0x00020000L		//Whether shield/mask area is supported
+#define SUPPORT_BLACKBODY				0x00040000L		//Whether blackbody configuration is supported
+#define SUPPORT_CCD				0x00080000L		//Whether visible light is supported
+#define SUPPORT_PTZ				0x00100000L		//Whether PTZ control is supported
+#define SUPPORT_FACEDETECT			0x00200000L		//Whether face detection is supported
+#define SUPPORT_CLIENTMEASURE			0x00400000L		//Whether face detection is supported
+#define SUPPORT_METARAW				0x00800000L		//Whether raw data is supported
+#define SUPPORT_ALLABILITY				0x00FFFF00L		//Whether all capability sets are supported
+
+#define NOPARITY		0
+#define ODDPARITY		1
+#define EVENPARITY	2
+#define MARKPARITY	3
+#define SPACEPARITY	4
+
+#define ONESTOPBIT	0
+#define ONE5STOPBITS	1
+#define TWOSTOPBITS	2
+
+#define CBR_110             110
+#define CBR_300             300
+#define CBR_600             600
+#define CBR_1200            1200
+#define CBR_2400            2400
+#define CBR_4800            4800
+#define CBR_9600            9600
+#define CBR_14400           14400
+#define CBR_19200           19200
+#define CBR_38400           38400
+#define CBR_56000           56000
+#define CBR_57600           57600
+#define CBR_115200          115200
+#define CBR_128000          128000
+#define CBR_256000          256000
+
+//------------------------------------------------------------------------------------------------------------
+enum _CAMERA_TYPE						//Lens type
+{
+	CAMERA_IR,                          //IR lens ID
+	CAMERA_CCD,                         //Visible light lens ID
+};
+
+enum _STREAM_TYPE						//Stream type
+{
+	STREAM_IR = 0x10000000,             //IR stream
+	STREAM_CCD = 0x20000000,            //Visible light stream
+	STREAM_MSX = 0x40000000,            //Fusion stream
+	STREAM_RAW = 0x80000000,            //Raw stream
+};
+
+//======================================================================================================================
+
+enum _IMAGE_ENHANCEFILTER					//Image processing algorithm
+{
+	IR_BRIGHTNESS,						//IR image brightness
+	IR_GAIN,							//IR image gain
+	IR_SHARPNESS,						//IR image sharpness
+	IR_ENHANCE,						//IR image enhancement
+	IR_FILTER,							//IR image filtering
+
+	CCD_BRIGHTNESS,						//Visible image brightness
+	CCD_CONTRAST,						//Visible image contrast
+	CCD_HUE,							//Visible image hue
+	CCD_SATURATION,						//Visible image saturation
+	CCD_WDR,						//Visible image WDR (wide dynamic range)
+};
+
+enum _MEDIA_FORMAT_TYPE_				//Media format
+{
+	_JPG_NORMAL = 0x10000000L,			//Standard JPG format
+	_JPG_RAW_SUFFIX = 0x10000001L,		//Raw JPG format
+	_JPG_GWS_SUFFIX = 0x10000002L,		//State Grid standard JPG format
+	_JPG_GWT_SUFFIX = 0x10000003L,		//State Grid UHV JPG format
+
+	_DLV_NORMAL = 0x20000000L,			//Standard DLV format
+
+	_FIR_NORMAL = 0x40000000L,			//Standard FIR format
+
+	_AVI_SUFFIX = 0x80000000L,			//Standard AVI container format
+
+	_MP4_SUFFIX = 0x80000001L,			//Standard MP4 container format
+};
+
+enum _MEDIA_ATTRIB_TYPE_				//Stored file attribute
+{
+	_ATTRIB_MANUAL = 0x00000001L,		//Manual
+	_ATTRIB_TIMER = 0x00000002L,		//Scheduled
+	_ATTRIB_ALARM = 0x00000004L,		//Alarm
+	_ATTRIB_ALL = 0x0000000FL,			//All
+};
+
+enum _MEDIA_FILE_TYPE_				//Stored file type
+{
+	_PIC_FILE_ = 0,					//Picture
+	_VIDEO_FILE_,					//Video
+};
+
+enum _MEDIA_REC_SRC_					//Media storage source
+{
+	_MEM_MEDIA_ = 0,					//Real-time computation & memory
+	_HDD_MEDIA_,					//Local storage card
+	_NAS_MEDIA_,					//Remote NAS storage
+};
+
+enum _MV_ADJUST_TYPE					//Shutter action type
+{
+	ADJUST_OFF = 0x00,					//Disable automatic mode
+	ADJUST_MIST = 0x01,				//Random jog (does not interrupt automatic mode actions)
+	ADJUST_LONG = 0x02,				//Long interval (automatic mode)
+	ADJUST_MIDDLE = 0x03,				//Medium interval (automatic mode)
+	ADJUST_SHORT = 0x04,				//Short interval (automatic mode)
+};
+
+#define WAIT_TIMEOUT		258
+#define WAIT_OBJECT_0   		0
+#define WAIT_FAILED 		0xFFFFFFFF
+#define INFINITE       		0xFFFFFFFF
+
+struct _ScreenPixPos_XY
+{
+	unsigned short	PosX;						//Video stream encoding resolution spatial coordinate X (e.g., 0~639)
+	unsigned short	PosY;						//Video stream encoding resolution spatial coordinate Y (e.g., 0~511)
+};
+struct _ScreenRatPos_XY
+{
+	unsigned short	RatX;						//Video stream encoding resolution spatial coordinate X / full-screen resolution size X = ratio X 10000 (e.g., 0~9999)
+	unsigned short	RatY;						//Video stream encoding resolution spatial coordinate Y / full-screen resolution size Y = ratio X 10000 (e.g., 0~9999)
+};
+
+struct _MeasurePos_XY
+{
+	unsigned short	PosX;						//Video stream encoding resolution spatial coordinate X
+	unsigned short	PosY;						//Video stream encoding resolution spatial coordinate Y
+	unsigned short	RatX;						//Video stream encoding resolution spatial coordinate X / full-screen resolution size X = ratio X 10000
+	unsigned short	RatY;						//Video stream encoding resolution spatial coordinate Y / full-screen resolution size Y = ratio X 10000
+};
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//DALI device callback function declarations (C style)
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+typedef void(*pLoginCallBack)(const char* pResponseStr, bool bLoginSuccess, void* pContext);
+
+typedef void(*pLogoutCallBack)(const char* pResponseStr, bool bLogoutSuccess, void* pContext);
+
+typedef void(*pDeviceSNCallBack)(const char* pDeviceSN, void* pContext);
+
+typedef void(*pDeviceNameCallBack)(const char* pDeviceName, void* pContext);
+
+typedef void(*pDeviceModelCallBack)(const char* pDeviceModelName, void* pContext);
+
+typedef void(*pDeviceModuleCallBack)(const char* pModuleType, _CAMERA_TYPE CameraType, void* pContext);
+
+typedef void(*pDeviceSensorCallBack)(unsigned short ResolutionX, unsigned short ResolutionY, _CAMERA_TYPE CameraType, void* pContext);
+
+typedef void(*pDeviceFirmWareCallBack)(const char* pFirmWareVer, const char* pFirmWareDate, void* pContext);
+
+typedef void(*pDeviceStateCallBack)(bool bRecording, bool bAlarmActive, void* pContext);
+
+typedef void(*pDeviceAbilityCallBack)(unsigned int SupportMask, void* pContext);
+
+
+typedef void(*pNetWorkBasicParamCallBack)(const char* pIPAddress, const char* pNetMask, const char* pGateway, const char* pMacAddress, void* pContext);
+
+typedef void(*pNetWorkExtParamCallBack)(const char* pDNSAddress, const char* pDNSAddress2, bool bDHCPEnable, bool bMulticastEnable, void* pContext);
+
+typedef void(*pNetWorkWifiParamCallBack)(const char* pIPAddress, const char* pPassWord, const char* pSSID, bool bDHCPEnable, bool bWIFIEnable, void* pContext);
+
+typedef void(*pNetWorkFtpParamCallBack)(const char* pFtpServerIP, unsigned short FtpPort, const char* pUserName, const char* pPassWord, const char* pStoreDirectory, bool bAnonymityEnable, bool bFTPEnable, void* pContext);
+
+typedef void(*pNetWorkSmtpParamCallBack)(const char* pSmtpServerIP, unsigned short SmtpPort, const char* pUserName, const char* pPassWord, const char* pFromAddr, const char* ReceiptAddr1, const char* ReceiptAddr2, const char* ReceiptAddr3, const char* ReceiptAddr4, bool bSSLEnable, bool bSMTPEnable, void* pContext);
+
+typedef void(*pNetWorkHttpsParamCallBack)(bool bHttpsEnable, void* pContext);
+
+typedef void(*pNetWorkOnvifParamCallBack)(unsigned short AuthType, unsigned short OnvifPort, bool bOnvifEnable, void* pContext);
+
+typedef void(*pNetWorkGB28181ParamCallBack)(const char* pSipServerIP, unsigned short SipServerPort, const char* pServerDomain, const char* pServerSipName, const char* pDeviceSipName, const char* pDeviceSipPSW, unsigned short LocalPort, void* pContext);
+
+typedef void(*pNetWorkGB28181StateCallBack)(bool bRegisterStatus, unsigned short SessionExpires, unsigned short HeartBeatTime, unsigned short HeartBeatCount, bool bGB28181Enable, void* pContext);
+
+typedef void(*pNetWorkGB28181DVIDCallBack)(unsigned short VideoDeviceCounts, const char* pVideoDeviceSipName[], void* pContext);
+
+
+typedef void(*pTimeParamCallBack)(const char* pTimeZone, const char* pLocalTime, const char* pUpTime, void* pContext);
+
+typedef void(*pTimeNtpCallBack)(const char* pNtpServerIP, unsigned short NtpPort, unsigned short Interval, bool bNtpEnable, void* pContext);
+
+
+typedef void(*pImagePaletteCallBack)(unsigned short PaletteID, void* pContext);
+
+typedef void(*pImageBasicParamCallBack)(_STREAM_TYPE StreamChannelType, const char* pLanguage, bool bMirror, bool bFlip, void* pContext);
+
+typedef void(*pImageEnhanceParamCallBack)(_STREAM_TYPE StreamChannelType, unsigned int EnhanceType, bool bAutoMode, unsigned char Value, void* pContext);
+
+
+typedef void(*pRtspStreamAddressCallBack)(_STREAM_TYPE StreamChannelType, bool bSubStream, const char* pRTSPStreamAddress, void* pContext);
+
+typedef void(*pHttpStreamAddressCallBack)(_STREAM_TYPE StreamChannelType, bool bSubStream, const char* pFLVStreamAddress, void* pContext);
+
+
+typedef void(*pVideoEncoderParamCallBack)(_STREAM_TYPE StreamChannelType, bool bSubStream, unsigned short EncodeResolutionX, unsigned short EncodeResolutionY, unsigned short EncodeFrameRate, void* pContext);
+
+typedef void(*pVideoDefaultOSDCallBack)(_STREAM_TYPE StreamChannelType, bool bSubStream, _MeasurePos_XY PosXY, const char* pDisplayContent, bool bEnable, void* pContext);
+
+typedef void(*pVideoDateTimeOSDCallBack)(_STREAM_TYPE StreamChannelType, bool bSubStream, _MeasurePos_XY PosXY, bool bEnable, void* pContext);
+
+typedef void(*pVideoCustomOSDCallBack)(_STREAM_TYPE StreamChannelType, bool bSubStream, unsigned short DisplayContentCounts, _MeasurePos_XY DisplayContentPosXY[], const char* pDisplayContent[], void* pContext);
+
+
+typedef void(*pUartExParamCallBack)(unsigned int BaudRate, unsigned char DataBits, unsigned char StopBits, unsigned char Parity, void* pContext);
+typedef void(*pLensCtrlParamCallBack)(unsigned char CameraZoom, bool bIRCutOn, _CAMERA_TYPE CameraType, void* pContext);
+typedef void(*pPTZAngleParamCallBack)(int HAngleX100, int VAngleX100, void* pContext);
+
+typedef void(*pPTZPresetNumCallBack)(unsigned short PresetCounts, void* pContext);
+typedef void(*pPTZPresetInfoCallBack)(unsigned short PresetID, const char* pPresetName, bool bEnable, void* pContext);
+typedef void(*pPTZPresetEndCallBack)(void* pContext);
+
+typedef void(*pMeasureRangeParamCallBack)(unsigned short MeasureRange, void* pContext);
+typedef void(*pMeasureParamCallBack)(short SurroundTemp, unsigned short AimHimidity, unsigned short AimDistance, unsigned short Emissivity100, void* pContext);
+
+typedef void(*pPointMeasureParamCallBack)(unsigned short PresetID, unsigned short PointCounts, unsigned short PointIDArray[], _MeasurePos_XY PosXYArray[], unsigned short FPara100Array[], unsigned short AimDistanceArray[], void* pContext);
+typedef void(*pLineMeasureParamCallBack)(unsigned short PresetID, unsigned short LineCounts, unsigned short LineIDArray[], _MeasurePos_XY PosXY1Array[], _MeasurePos_XY PosXY2Array[], unsigned short FPara100Array[], unsigned short AimDistanceArray[], void* pContext);
+
+typedef void(*pAreaMeasureParamNumCallBack)(unsigned short PresetID, unsigned short AreaCounts, void* pContext);
+typedef void(*pAreaMeasureParamCallBack)(unsigned short PresetID, unsigned short AreaID, unsigned short XYCounts, _MeasurePos_XY PosXYArray[], unsigned short FPara100, unsigned short AimDistance, void* pContext);
+typedef void(*pAreaMeasureParamEndCallBack)(unsigned short PresetID, void* pContext);
+
+typedef void(*pThermometryPointNumCallBack)(unsigned short PresetID, unsigned short PointCounts, void* pContext);
+typedef void(*pThermometryPointCallBack)(unsigned short PresetID, unsigned short PointID, _MeasurePos_XY PosXY, int ValueX10, void* pContext);
+typedef void(*pThermometryPointEndCallBack)(unsigned short PresetID, void* pContext);
+
+typedef void(*pThermometryLineNumCallBack)(unsigned short PresetID, unsigned short LineCounts, void* pContext);
+typedef void(*pThermometryLineMaxCallBack)(unsigned short PresetID, unsigned short LineID, _MeasurePos_XY PosXY, int ValueX10, void* pContext);
+typedef void(*pThermometryLineAvgCallBack)(unsigned short PresetID, unsigned short LineID, int ValueX10, void* pContext);
+typedef void(*pThermometryLineMinCallBack)(unsigned short PresetID, unsigned short LineID, _MeasurePos_XY PosXY, int ValueX10, void* pContext);
+typedef void(*pThermometryLineEndCallBack)(unsigned short PresetID, void* pContext);
+
+typedef void(*pThermometryAreaNumCallBack)(unsigned short PresetID, unsigned short AreaCounts, void* pContext);
+typedef void(*pThermometryAreaMaxCallBack)(unsigned short PresetID, unsigned short AreaID, _MeasurePos_XY PosXY, int ValueX10, void* pContext);
+typedef void(*pThermometryAreaAvgCallBack)(unsigned short PresetID, unsigned short AreaID, int ValueX10, void* pContext);
+typedef void(*pThermometryAreaMinCallBack)(unsigned short PresetID, unsigned short AreaID, _MeasurePos_XY PosXY, int ValueX10, void* pContext);
+typedef void(*pThermometryAreaEndCallBack)(unsigned short PresetID, void* pContext);
+
+typedef void(*pMMCStorageParamCallBack)(unsigned short MMCStatus, const char* pTotalSize, const char* pAvailableSize, unsigned short FullGrade, bool bFullAlarmEnable, bool bOverWriteEnable, bool bStorageEnable, void* pContext);
+
+typedef void(*pNASStorageParamCallBack)(unsigned short NASStatus, const char* pTotalSize, const char* pAvailableSize, unsigned short FullGrade, bool bFullAlarmEnable, bool bOverWriteEnable, bool bNASEnable, void* pContext);
+
+typedef void(*pStorageFileNumCallBack)(unsigned int FileCounts, void* pContext);
+typedef void(*pStorageFileInfoCallBack)(unsigned int FileSizeBytes, const char* pFileName, void* pContext);
+typedef void(*pStorageFileEndCallBack)(void* pContext);
+
+typedef void(*pMediaFileDownLoadCallBack)(_MEDIA_REC_SRC_ MediaRecType, _MEDIA_FILE_TYPE_ MediaFileType, _MEDIA_FORMAT_TYPE_ FileFormatType, _STREAM_TYPE StreamChannelType, const char* pFilePathName, unsigned int MediaLengthBytes, void* pMediaDataBuffer, void* pContext);
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//DALI device notification interface (C++ style)
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class IDMDeviceEvent
+{
+public:
+	IDMDeviceEvent() {};
+	virtual ~IDMDeviceEvent() {};
+
+public:
+	virtual void OnLogin(const char* pResponseStr, bool bLoginSuccess) = 0;
+
+	virtual void OnLogout(const char* pResponseStr, bool bLogoutSuccess) = 0;
+
+public:
+	virtual void OnOperationResponse(unsigned int OperationType, const char* pResponseStr, bool bOperationSuccess) = 0;
+
+public:
+	virtual void OnDeviceSN(const char* pDeviceSN) = 0;
+
+	virtual void OnDeviceName(const char* pDeviceName) = 0;
+
+	virtual void OnDeviceModel(const char* pDeviceModelName) = 0;
+
+	virtual void OnDeviceModule(const char* pModuleType, _CAMERA_TYPE CameraType) = 0;
+
+	virtual void OnDeviceSensor(unsigned short ResolutionX, unsigned short ResolutionY, _CAMERA_TYPE CameraType) = 0;
+
+	virtual void OnDeviceFirmWare(const char* pFirmWareVer, const char* pFirmWareDate) = 0;
+
+	virtual void OnDeviceState(bool bRecording, bool bAlarmActive) = 0;
+
+	virtual void OnDeviceAbility(unsigned int SupportMask) = 0;
+
+
+	virtual void OnNetWorkBasicParam(const char* pIPAddress, const char* pNetMask, const char* pGateway, const char* pMacAddress) = 0;
+
+	virtual void OnNetWorkExtParam(const char* pDNSAddress, const char* pDNSAddress2, bool bDHCPEnable, bool bMulticastEnable) = 0;
+
+	virtual void OnNetWorkWifiParam(const char* pIPAddress, const char* pPassWord, const char* pSSID, bool bDHCPEnable, bool bWIFIEnable) = 0;
+
+	virtual void OnNetWorkFtpParam(const char* pFtpServerIP, unsigned short FtpPort, const char* pUserName, const char* pPassWord, const char* pStoreDirectory, bool bAnonymityEnable, bool bFTPEnable) = 0;
+
+	virtual void OnNetWorkSmtpParam(const char* pSmtpServerIP, unsigned short SmtpPort, const char* pUserName, const char* pPassWord, const char* pFromAddr, const char* ReceiptAddr1, const char* ReceiptAddr2, const char* ReceiptAddr3, const char* ReceiptAddr4, bool bSSLEnable, bool bSMTPEnable) = 0;
+
+	virtual void OnNetWorkHttpsParam(bool bHttpsEnable) = 0;
+
+	virtual void OnNetWorkOnvifParam(unsigned short AuthType, unsigned short OnvifPort, bool bOnvifEnable) = 0;
+
+	virtual void OnNetWorkGB28181Param(const char* pSipServerIP, unsigned short SipServerPort, const char* pServerDomain, const char* pServerSipName, const char* pDeviceSipName, const char* pDeviceSipPSW, unsigned short LocalPort) = 0;
+
+	virtual void OnNetWorkGB28181State(bool bRegisterStatus, unsigned short SessionExpires, unsigned short HeartBeatTime, unsigned short HeartBeatCount, bool bGB28181Enable) = 0;
+
+	virtual void OnNetWorkGB28181DVID(unsigned short VideoDeviceCounts, const char* pVideoDeviceSipName[]) = 0;
+
+
+	virtual void OnTimeParam(const char* pTimeZone, const char* pLocalTime, const char* pUpTime) = 0;
+
+	virtual void OnTimeNtp(const char* pNtpServerIP, unsigned short NtpPort, unsigned short Interval, bool bNtpEnable) = 0;
+
+
+	virtual void OnRtspStreamAddress(_STREAM_TYPE StreamChannelType, bool bSubStream, const char* pRTSPStreamAddress) = 0;
+
+	virtual void OnHttpStreamAddress(_STREAM_TYPE StreamChannelType, bool bSubStream, const char* pFLVStreamAddress) = 0;
+
+	virtual void OnImagePalette(unsigned short PaletteID) = 0;
+
+	virtual void OnImageBasicParam(_STREAM_TYPE StreamChannelType, const char* pLanguage, bool bMirror, bool bFlip) = 0;
+
+	virtual void OnImageEnhanceParam(_STREAM_TYPE StreamChannelType, unsigned int EnhanceType, bool bAutoMode, unsigned char Value) = 0;
+
+	virtual void OnVideoEncoderParam(_STREAM_TYPE StreamChannelType, bool bSubStream, unsigned short EncodeResolutionX, unsigned short EncodeResolutionY, unsigned short EncodeFrameRate) = 0;
+
+	virtual void OnVideoDefaultOSD(_STREAM_TYPE StreamChannelType, bool bSubStream, _MeasurePos_XY PosXY, const char* pDisplayContent, bool bEnable) = 0;
+
+	virtual void OnVideoDateTimeOSD(_STREAM_TYPE StreamChannelType, bool bSubStream, _MeasurePos_XY PosXY, bool bEnable) = 0;
+
+	virtual void OnVideoCustomOSD(_STREAM_TYPE StreamChannelType, bool bSubStream, unsigned short DisplayContentCounts, _MeasurePos_XY DisplayContentPosXY[], const char* pDisplayContent[]) = 0;
+
+
+	virtual void OnUartExParam(unsigned int BaudRate, unsigned char DataBits, unsigned char StopBits, unsigned char Parity) = 0;
+	virtual void OnLensCtrlParam(unsigned char CameraZoom, bool bIRCutOn, _CAMERA_TYPE CameraType) = 0;
+	virtual void OnPTZAngleParam(int HAngleX100, int VAngleX100) = 0;
+
+
+	virtual void OnPTZPresetNum(unsigned short PresetCounts) = 0;
+	virtual void OnPTZPresetInfo(unsigned short PresetID, const char* pPresetName, bool bEnable) = 0;
+	virtual void OnPTZPresetEnd() = 0;
+
+	virtual void OnPointMeasureParamCallBack(unsigned short PresetID, unsigned short Counts, unsigned short PointIDArray[], _MeasurePos_XY PosXYArray[], unsigned short FPara100Array[], unsigned short AimDistanceArray[]) = 0;
+	virtual void OnLineMeasureParamCallBack(unsigned short PresetID, unsigned short Counts, unsigned short LineIDArray[], _MeasurePos_XY PosXY1Array[], _MeasurePos_XY PosXY2Array[], unsigned short FPara100Array[], unsigned short AimDistanceArray[]) = 0;
+	virtual void OnAreaMeasureParamCallBack(unsigned short PresetID, unsigned short Counts, unsigned short AreaIDArray[], vector<_MeasurePos_XY> PosXYArray[], unsigned short FPara100Array[], unsigned short AimDistanceArray[]) = 0;
+
+	virtual void OnThermometryPointNum(unsigned short PresetID, unsigned short PointCounts) = 0;
+	virtual void OnThermometryPoint(unsigned short PresetID, unsigned short PointID, _MeasurePos_XY PosXY, int ValueX10) = 0;
+	virtual void OnThermometryPointEnd(unsigned short PresetID) = 0;
+
+	virtual void OnThermometryLineNum(unsigned short PresetID, unsigned short LineCounts) = 0;
+	virtual void OnThermometryLineMax(unsigned short PresetID, unsigned short LineID, _MeasurePos_XY PosXY, int ValueX10) = 0;
+	virtual void OnThermometryLineAvg(unsigned short PresetID, unsigned short LineID, int ValueX10) = 0;
+	virtual void OnThermometryLineMin(unsigned short PresetID, unsigned short LineID, _MeasurePos_XY PosXY, int ValueX10) = 0;
+	virtual void OnThermometryLineEnd(unsigned short PresetID) = 0;
+
+	virtual void OnThermometryAreaNum(unsigned short PresetID, unsigned short AreaCounts) = 0;
+	virtual void OnThermometryAreaMax(unsigned short PresetID, unsigned short AreaID, _MeasurePos_XY PosXY, int ValueX10) = 0;
+	virtual void OnThermometryAreaAvg(unsigned short PresetID, unsigned short AreaID, int ValueX10) = 0;
+	virtual void OnThermometryAreaMin(unsigned short PresetID, unsigned short AreaID, _MeasurePos_XY PosXY, int ValueX10) = 0;
+	virtual void OnThermometryAreaEnd(unsigned short PresetID) = 0;
+
+	virtual void OnMMCStorageParam(unsigned short MMCStatus, const char* pTotalSize, const char* pAvailableSize, unsigned short FullGrade, bool bFullAlarmEnable, bool bOverWriteEnable, bool bMMCEnable) = 0;
+	virtual void OnNASStorageParam(unsigned short NASStatus, const char* pTotalSize, const char* pAvailableSize, unsigned short FullGrade, bool bFullAlarmEnable, bool bOverWriteEnable, bool bNASEnable) = 0;
+
+	virtual void OnStorageFileNum(unsigned int FileCounts) = 0;
+	virtual void OnStorageFileInfo(unsigned int FileSizeBytes, const char* pFileName) = 0;
+	virtual void OnStorageFileEnd() = 0;
+
+	virtual void OnMediaFileDownLoad(_MEDIA_REC_SRC_ MediaRecType, _MEDIA_FILE_TYPE_ MediaFileType, _MEDIA_FORMAT_TYPE_ FileFormatType, _STREAM_TYPE StreamChannelType, const char* pFilePathName, unsigned int MediaLengthBytes, void* pMediaDataBuffer) = 0;
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//DALI device control & query interface (C++ style)
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+class IDMDeviceControl
+{
+public:
+	IDMDeviceControl() {};
+	virtual ~IDMDeviceControl() {};
+
+public:
+	virtual bool OpenDevice(const char* pCameraAddress, unsigned short CameraPort, const char* pUserName, const char* pPassWord, pLoginCallBack = nullptr, pLogoutCallBack = nullptr, void* pContext = nullptr) = 0;
+
+	virtual bool CloseDevice(void* pContext = nullptr) = 0;
+
+public:
+	//Set IR zero calibration (NUC)
+	virtual bool SetZeroAdjust(_MV_ADJUST_TYPE AdjustType = ADJUST_MIST) = 0;
+
+	//Set preset position
+	virtual bool SetPreset(unsigned int PresetID) = 0;
+
+	//Delete preset position
+	virtual bool DelPreset(unsigned int PresetID) = 0;
+
+	//Call preset position
+	virtual bool CallPreset(unsigned int PresetID) = 0;
+
+	//Set palette
+	virtual bool SetImagePalette(unsigned int PaletteID) = 0;
+
+	//Set OSD content
+	virtual bool SetOSDContext(_STREAM_TYPE StreamChannelType, const char* pOSDContext, unsigned short x = 0, unsigned short y = 0, unsigned int OSDType = OSD_CUSTOM) = 0;
+
+	//Set OSD enable
+	virtual bool SetOSDEnable(_STREAM_TYPE StreamChannelType, bool bEnable, unsigned int OSDTypeMask = OSD_CHANNEL | OSD_CUSTOM | OSD_DATETIME) = 0;
+
+	//Set image algorithm
+	virtual bool SetImageEnhance(_STREAM_TYPE StreamChannelType, unsigned int EnhanceType, bool bAutoMode, unsigned char Value) = 0;
+
+	//Configure transparent channel
+	virtual bool SetUartEx(unsigned int BaudRate = 9600, unsigned char DataBits = 8, unsigned char StopBits = 0, unsigned char Parity = 0) = 0;
+
+public:
+	//Set temperature measurement range
+	virtual bool SetMeasureRange(unsigned short RangeType) = 0;
+
+	//Set common temperature measurement configuration parameters
+	virtual bool SetMeasureParam(bool bCelsiusUnit = true, short ReviseTemp100 = 0, short SurroundTemp = 25, unsigned short AimHimidity = 60, unsigned short AimDistance = 200, unsigned short FPara100 = 97, unsigned int CrossOSDType = MOSD_CROSS_HIGH, unsigned int TempOSDType = MOSD_TEMP_TRACK) = 0;
+
+	//Delete all temperature measurement types
+	virtual bool DelAllMeasure() = 0;
+
+	//Set point temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	virtual bool SetPointMeasure(unsigned int Index, bool bEnable, unsigned short x = 0, unsigned short y = 0) = 0;
+
+	//Set line temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	virtual bool SetLineMeasure(unsigned int Index, bool bEnable, unsigned short x1 = 0, unsigned short y1 = 0, unsigned short x2 = 0, unsigned short y2 = 0) = 0;
+
+	//Set area temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	virtual bool SetAreaMeasure(unsigned int Index, bool bEnable, unsigned short left = 0, unsigned short top = 0, unsigned short right = 0, unsigned short bottom = 0) = 0;
+
+	//Set point temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	virtual bool SetPointMeasureEx(unsigned int Index, bool bEnable, unsigned short x, unsigned short y, unsigned short FPara100, unsigned short AimDistance) = 0;
+
+	//Set line temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	virtual bool SetLineMeasureEx(unsigned int Index, bool bEnable, unsigned short x1, unsigned short y1, unsigned short x2, unsigned short y2, unsigned short FPara100, unsigned short AimDistance) = 0;
+
+	//Set area temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	virtual bool SetAreaMeasureEx(unsigned int Index, bool bEnable, unsigned short left, unsigned short top, unsigned short right, unsigned short bottom, unsigned short FPara100, unsigned short AimDistance) = 0;
+
+	//Set polygon area temperature measurement point (input parameters are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	virtual bool SetAreaPolygonPosMeasureEx(unsigned int Index, bool bEnable, vector<_ScreenPixPos_XY> PosXY, unsigned short FPara100, unsigned short AimDistance) = 0;
+
+	//Set polygon area temperature measurement point (input parameters are image encoding resolution space coordinate ratio X 10000)
+	virtual bool SetAreaPolygonRatMeasureEx(unsigned int Index, bool bEnable, vector<_ScreenRatPos_XY> RatXY, unsigned short FPara100, unsigned short AimDistance) = 0;
+
+
+public:
+	//Restart device
+	virtual bool Call_Reboot() = 0;
+
+	//Reset PTZ
+	virtual bool Call_Ptz_Reset() = 0;
+
+public:
+	//PTZ stop
+	virtual bool Call_Ptz_Stop() = 0;
+
+	//PTZ angle
+	virtual bool Call_PTZ_Angle(unsigned short HAnagelX100, int VAnagelX100) = 0;		//ADD 2026-03-14
+
+
+public:
+	//PTZ tilt up
+	virtual bool Call_Ptz_TiltUp(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+	//PTZ tilt down
+	virtual bool Call_Ptz_TiltDown(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+	//PTZ pan left
+	virtual bool Call_Ptz_PanLeft(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+	//PTZ pan right
+	virtual bool Call_Ptz_PanRight(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+	//PTZ tilt up and pan left
+	virtual bool Call_Ptz_UpLeft(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+	//PTZ tilt up and pan right
+	virtual bool Call_Ptz_UpRight(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+	//PTZ tilt down and pan left
+	virtual bool Call_Ptz_DownLeft(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+	//PTZ tilt down and pan right
+	virtual bool Call_Ptz_DownRight(unsigned int Speed = 0xFFFFFFFF) = 0;
+
+public:
+	//Zoom stop
+	virtual bool Call_Zoom_Stop(_CAMERA_TYPE CameraType = CAMERA_IR) = 0;
+
+	//Zoom to telephoto
+	virtual bool Call_Zoom_In(unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR) = 0;
+
+	//Zoom to wide angle
+	virtual bool Call_Zoom_Out(unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR) = 0;
+
+
+	//Focus stop
+	virtual bool Call_Focus_Stop(_CAMERA_TYPE CameraType = CAMERA_IR) = 0;
+
+	//Auto focus
+	virtual bool Call_Focus_Auto(unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR) = 0;
+
+	//Focus near
+	virtual bool Call_Focus_Near(unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR) = 0;
+
+	//Focus far
+	virtual bool Call_Focus_Far(unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR) = 0;
+
+public:
+	//Query interface (compatible with callback function style)
+	virtual bool QueryDeviceSN(pDeviceSNCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryDeviceName(pDeviceNameCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryDeviceModel(pDeviceModelCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryDeviceModule(pDeviceModuleCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryDeviceSensor(pDeviceSensorCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryDeviceState(pDeviceStateCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryDeviceFirmWare(pDeviceFirmWareCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryDeviceAbility(pDeviceAbilityCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkBasicParam(pNetWorkBasicParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkExtParam(pNetWorkExtParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkWifiParam(pNetWorkWifiParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkFtpParam(pNetWorkFtpParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkSmtpParam(pNetWorkSmtpParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkHttpsParam(pNetWorkHttpsParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkOnvifParam(pNetWorkOnvifParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkGB28181Param(pNetWorkGB28181ParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkGB28181State(pNetWorkGB28181StateCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNetWorkGB28181DVID(pNetWorkGB28181DVIDCallBack = nullptr, void* pContext = nullptr) = 0;
+
+	virtual bool QueryTimeParam(pTimeParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryTimeNtp(pTimeNtpCallBack = nullptr, void* pContext = nullptr) = 0;
+
+	virtual bool QueryImagePalette(pImagePaletteCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryImageBasicParam(_STREAM_TYPE StreamChannelType = STREAM_IR, pImageBasicParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryImageEnhanceParam(_STREAM_TYPE StreamChannelType = STREAM_IR, pImageEnhanceParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryRtspStreamAddress(_STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, pRtspStreamAddressCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryHttpStreamAddress(_STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, pHttpStreamAddressCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryVideoEncoderParam(_STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, pVideoEncoderParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryVideoDefaultOSD(_STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, pVideoDefaultOSDCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryVideoCustomOSD(_STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, pVideoCustomOSDCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryVideoDateTimeOSD(_STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, pVideoDateTimeOSDCallBack = nullptr, void* pContext = nullptr) = 0;
+
+	virtual bool QueryUartExParam(pUartExParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryPTZAngleParam(pPTZAngleParamCallBack pCallBack = NULL, void* pContext = nullptr) = 0;	//ADD 2026-03-14
+	virtual bool QueryLensCtrlParam(pLensCtrlParamCallBack = nullptr, _CAMERA_TYPE CameraType = CAMERA_IR, void* pContext = nullptr) = 0;
+	virtual bool QueryPTZPresetList(pPTZPresetNumCallBack = nullptr, pPTZPresetInfoCallBack = nullptr, pPTZPresetEndCallBack = nullptr, void* pContext = nullptr) = 0;
+
+	virtual bool QueryMeasureRange(pMeasureRangeParamCallBack pCallBack = NULL, void* pContext = NULL) = 0;
+	virtual bool QueryMeasureParam(pMeasureParamCallBack pCallBack = NULL, void* pContext = NULL) = 0;
+
+
+	virtual bool QueryPointMeasureParam(pPointMeasureParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryLineMeasureParam(pLineMeasureParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryAreaMeasureParam(pAreaMeasureParamNumCallBack pCallBack1 = nullptr, pAreaMeasureParamCallBack pCallBack2 = nullptr, pAreaMeasureParamEndCallBack pCallBack3 = nullptr, void* pContext = nullptr) = 0;
+
+	virtual bool QueryThermometryPoint(pThermometryPointNumCallBack = nullptr, pThermometryPointCallBack = nullptr, pThermometryPointEndCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryThermometryLine(pThermometryLineNumCallBack = nullptr, pThermometryLineMaxCallBack = nullptr, pThermometryLineAvgCallBack = nullptr, pThermometryLineMinCallBack = nullptr, pThermometryLineEndCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryThermometryArea(pThermometryAreaNumCallBack = nullptr, pThermometryAreaMaxCallBack = nullptr, pThermometryAreaAvgCallBack = nullptr, pThermometryAreaMinCallBack = nullptr, pThermometryAreaEndCallBack = nullptr, void* pContext = nullptr) = 0;
+
+	virtual bool QueryMMCStorageParam(pMMCStorageParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryNASStorageParam(pNASStorageParamCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool QueryMediaList(const char* pStartDateTime, const char* pEndDateTime, unsigned int FirstFileID = 0, _MEDIA_REC_SRC_ MediaRecType = _NAS_MEDIA_, _MEDIA_FILE_TYPE_ MediaFileType = _PIC_FILE_, _MEDIA_ATTRIB_TYPE_ AttributeMask = _ATTRIB_ALARM, pStorageFileNumCallBack = nullptr, pStorageFileInfoCallBack = nullptr, pStorageFileEndCallBack = nullptr, void* pContext = nullptr) = 0;
+	virtual bool DownLoadMediaFile(const char* pFilePathName, _STREAM_TYPE StreamChannelType = STREAM_IR, _MEDIA_REC_SRC_ MediaRecType = _MEM_MEDIA_, _MEDIA_FILE_TYPE_ MediaFileType = _PIC_FILE_, _MEDIA_FORMAT_TYPE_ FileFormatType = _JPG_NORMAL, pMediaFileDownLoadCallBack = nullptr, void* pContext = nullptr) = 0;
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//DALI device control & query functions (C style)
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+extern "C"
+{
+	//Create device control driver interface instance
+	void* CreateDMControlDriver(unsigned int ModelType = _MODEL_ANY);
+
+	//Create device control driver interface instance
+	void* CreateDMControlDriverEx(void* pDriverEvent, unsigned int ModelType = _MODEL_ANY, unsigned int ModuleType = _MODULE_VD641NT | _MODULE_ZE1920NT);
+
+	//Destroy driver interface instance
+	void DestoryDMControlDriver(void* pDriverHandle);
+
+	//Open device
+	bool OpenDevice(void* pDriverHandle, pLoginCallBack, pLogoutCallBack, const char* pCameraAddress, unsigned short CameraPort, const char* pUserName, const char* pPassWord, void* pContext = nullptr);
+
+	//Close device
+	bool CloseDevice(void* pDriverHandle, void* pContext = nullptr);
+
+	//Set IR zero calibration (NUC)
+	bool SetZeroAdjust(void* pDriverHandle, _MV_ADJUST_TYPE AdjustType = ADJUST_MIST);
+
+	//Set preset position
+	bool SetPreset(void* pDriverHandle, unsigned int PresetID);
+
+	//Delete preset position
+	bool DelPreset(void* pDriverHandle, unsigned int PresetID);
+
+	//Call preset position
+	bool CallPreset(void* pDriverHandle, unsigned int PresetID);
+
+	//Set palette
+	bool SetImagePalette(void* pDriverHandle, unsigned int PaletteID);
+
+	//Set OSD content
+	bool SetOSDContext(void* pDriverHandle, _STREAM_TYPE StreamChannelType, const char* pOSDContext, unsigned short x = 0, unsigned short y = 0, unsigned int OSDType = OSD_CUSTOM);
+
+	//Set OSD enable
+	bool SetOSDEnable(void* pDriverHandle, _STREAM_TYPE StreamChannelType, bool bEnable, unsigned int OSDTypeMask = OSD_CHANNEL | OSD_CUSTOM | OSD_DATETIME);
+
+	//Set image algorithm
+	bool SetImageEnhance(void* pDriverHandle, _STREAM_TYPE StreamChannelType, unsigned int EnhanceType, bool bAutoMode, unsigned char Value);
+
+	//Configure transparent channel
+	bool SetUartEx(void* pDriverHandle, unsigned int BaudRate = CBR_9600, unsigned char DataBits = 8, unsigned char  StopBits = ONESTOPBIT, unsigned char  Parity = NOPARITY);
+
+	//Set temperature measurement range
+	bool SetMeasureRange(void* pDriverHandle, unsigned short RangeType);
+
+	//Set common temperature measurement configuration parameters
+	bool SetMeasureParam(void* pDriverHandle, bool bCelsiusUnit = true, short ReviseTemp100 = 0, short SurroundTemp = 25, unsigned short AimHimidity = 60, unsigned short AimDistance = 200, unsigned short FPara100 = 97, unsigned int CrossOSDType = MOSD_CROSS_HIGH, unsigned int TempOSDType = MOSD_TEMP_TRACK);
+
+	//Delete all temperature measurement types
+	bool DelAllMeasure(void* pDriverHandle);
+
+	//Set point temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	bool SetPointMeasure(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short x = 0, unsigned short y = 0);
+
+	//Set line temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	bool SetLineMeasure(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short x1 = 0, unsigned short y1 = 0, unsigned short x2 = 0, unsigned short y2 = 0);
+
+	//Set area temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	bool SetAreaMeasure(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short left = 0, unsigned short top = 0, unsigned short right = 0, unsigned short bottom = 0);
+
+	//Set point temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	bool SetPointMeasureEx(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short x, unsigned short y, unsigned short FPara100, unsigned short AimDistance);
+
+	//Set line temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	bool SetLineMeasureEx(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short x1, unsigned short y1, unsigned short x2, unsigned short y2, unsigned short FPara100, unsigned short AimDistance);
+
+	//Set area temperature measurement (input coordinates are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	bool SetAreaMeasureEx(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short left, unsigned short top, unsigned short right, unsigned short bottom, unsigned short FPara100, unsigned short AimDistance);
+
+	//Set polygon area temperature measurement point (input parameters are in image encoding resolution space coordinates; internally mapped to sensor resolution space coordinates)
+	bool SetAreaPolygonPosMeasureEx(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short XYCounts, _ScreenPixPos_XY PosXY[], unsigned short FPara100, unsigned short AimDistance);
+
+	//Set polygon area temperature measurement point (input parameters are image encoding resolution space coordinate ratio X 10000)
+	bool SetAreaPolygonRatMeasureEx(void* pDriverHandle, unsigned int Index, bool bEnable, unsigned short XYCounts, _ScreenRatPos_XY RatXY[], unsigned short FPara100, unsigned short AimDistance);
+
+	//Restart device
+	bool Call_Reboot(void* pDriverHandle);
+
+	//Reset PTZ
+	bool Call_Ptz_Reset(void* pDriverHandle);
+
+	//PTZ stop
+	bool Call_Ptz_Stop(void* pDriverHandle);
+
+	//PTZ angle
+	bool Call_PTZ_Angle(void* pDriverHandle, unsigned short HAnagelX100, int VAnagelX100);
+
+	//PTZ tilt up
+	bool Call_Ptz_TiltUp(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//PTZ tilt down
+	bool Call_Ptz_TiltDown(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//PTZ pan left
+	bool Call_Ptz_PanLeft(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//PTZ pan right
+	bool Call_Ptz_PanRight(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//PTZ tilt up and pan left
+	bool Call_Ptz_UpLeft(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//PTZ tilt up and pan right
+	bool Call_Ptz_UpRight(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//PTZ tilt down and pan left
+	bool Call_Ptz_DownLeft(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//PTZ tilt down and pan right
+	bool Call_Ptz_DownRight(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF);
+
+	//Zoom stop
+	bool Call_Zoom_Stop(void* pDriverHandle, _CAMERA_TYPE CameraType = CAMERA_IR);
+
+	//Zoom to telephoto
+	bool Call_Zoom_In(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR);
+
+	//Zoom to wide angle
+	bool Call_Zoom_Out(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR);
+
+	//Focus stop
+	bool Call_Focus_Stop(void* pDriverHandle, _CAMERA_TYPE CameraType = CAMERA_IR);
+
+	//Auto focus
+	bool Call_Focus_Auto(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR);
+
+	//Focus near
+	bool Call_Focus_Near(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR);
+
+	//Focus far
+	bool Call_Focus_Far(void* pDriverHandle, unsigned int Speed = 0xFFFFFFFF, _CAMERA_TYPE CameraType = CAMERA_IR);
+
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	//C-style query interface (different from the C++-style query functions; for C-style callback functions, the callback function pointer is a required parameter)
+	bool QueryDeviceSN(void* pDriverHandle, pDeviceSNCallBack, void* pContext = nullptr);
+	bool QueryDeviceName(void* pDriverHandle, pDeviceNameCallBack, void* pContext = nullptr);
+	bool QueryDeviceModel(void* pDriverHandle, pDeviceModelCallBack, void* pContext = nullptr);
+	bool QueryDeviceModule(void* pDriverHandle, pDeviceModuleCallBack, void* pContext = nullptr);
+	bool QueryDeviceSensor(void* pDriverHandle, pDeviceSensorCallBack, void* pContext = nullptr);
+	bool QueryDeviceFirmWare(void* pDriverHandle, pDeviceFirmWareCallBack, void* pContext = nullptr);
+	bool QueryDeviceState(void* pDriverHandle, pDeviceStateCallBack, void* pContext = nullptr);
+	bool QueryDeviceAbility(void* pDriverHandle, pDeviceAbilityCallBack, void* pContext = nullptr);
+
+	bool QueryNetWorkBasicParam(void* pDriverHandle, pNetWorkBasicParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkExtParam(void* pDriverHandle, pNetWorkExtParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkWifiParam(void* pDriverHandle, pNetWorkWifiParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkFtpParam(void* pDriverHandle, pNetWorkFtpParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkSmtpParam(void* pDriverHandle, pNetWorkSmtpParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkHttpsParam(void* pDriverHandle, pNetWorkHttpsParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkOnvifParam(void* pDriverHandle, pNetWorkOnvifParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkGB28181Param(void* pDriverHandle, pNetWorkGB28181ParamCallBack, void* pContext = nullptr);
+	bool QueryNetWorkGB28181State(void* pDriverHandle, pNetWorkGB28181StateCallBack, void* pContext = nullptr);
+	bool QueryNetWorkGB28181DVID(void* pDriverHandle, pNetWorkGB28181DVIDCallBack, void* pContext = nullptr);
+
+	bool QueryTimeParam(void* pDriverHandle, pTimeParamCallBack, void* pContext = nullptr);
+	bool QueryTimeNtp(void* pDriverHandle, pTimeNtpCallBack, void* pContext = nullptr);
+
+	bool QueryImagePalette(void* pDriverHandle, pImagePaletteCallBack, void* pContext = nullptr);
+	bool QueryImageBasicParam(void* pDriverHandle, pImageBasicParamCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, void* pContext = nullptr);
+	bool QueryImageEnhanceParam(void* pDriverHandle, pImageEnhanceParamCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, void* pContext = nullptr);
+	bool QueryRtspStreamAddress(void* pDriverHandle, pRtspStreamAddressCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, void* pContext = nullptr);
+	bool QueryHttpStreamAddress(void* pDriverHandle, pHttpStreamAddressCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, void* pContext = nullptr);
+
+	bool QueryVideoEncoderParam(void* pDriverHandle, pVideoEncoderParamCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, void* pContext = nullptr);
+	bool QueryVideoDefaultOSD(void* pDriverHandle, pVideoDefaultOSDCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, void* pContext = nullptr);
+	bool QueryVideoCustomOSD(void* pDriverHandle, pVideoCustomOSDCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, void* pContext = nullptr);
+	bool QueryVideoDateTimeOSD(void* pDriverHandle, pVideoDateTimeOSDCallBack, _STREAM_TYPE StreamChannelType = STREAM_IR, bool bSubStream = false, void* pContext = nullptr);
+
+	bool QueryUartExParam(void* pDriverHandle, pUartExParamCallBack, void* pContext = nullptr);
+	bool QueryPTZAngleParam(void* pDriverHandle, pPTZAngleParamCallBack = nullptr, void* pContext = nullptr);
+	bool QueryLensCtrlParam(void* pDriverHandle, pLensCtrlParamCallBack, _CAMERA_TYPE CameraType = CAMERA_IR, void* pContext = nullptr);
+	bool QueryPTZPresetList(void* pDriverHandle, pPTZPresetNumCallBack, pPTZPresetInfoCallBack, pPTZPresetEndCallBack, void* pContext = nullptr);
+
+	bool QueryMeasureRange(void* pDriverHandle, pMeasureRangeParamCallBack = nullptr, void* pContext = nullptr);
+	bool QueryMeasureParam(void* pDriverHandle, pMeasureParamCallBack = nullptr, void* pContext = nullptr);
+
+	bool QueryPointMeasureParam(void* pDriverHandle, pPointMeasureParamCallBack = nullptr, void* pContext = nullptr);
+	bool QueryLineMeasureParam(void* pDriverHandle, pLineMeasureParamCallBack = nullptr, void* pContext = nullptr);
+	bool QueryAreaMeasureParam(void* pDriverHandle, pAreaMeasureParamNumCallBack = nullptr, pAreaMeasureParamCallBack = nullptr, pAreaMeasureParamEndCallBack = nullptr, void* pContext = nullptr);
+
+	bool QueryThermometryPoint(void* pDriverHandle, pThermometryPointNumCallBack, pThermometryPointCallBack, pThermometryPointEndCallBack, void* pContext = nullptr);
+	bool QueryThermometryLine(void* pDriverHandle, pThermometryLineNumCallBack, pThermometryLineMaxCallBack, pThermometryLineAvgCallBack, pThermometryLineMinCallBack, pThermometryLineEndCallBack, void* pContext = nullptr);
+	bool QueryThermometryArea(void* pDriverHandle, pThermometryAreaNumCallBack, pThermometryAreaMaxCallBack, pThermometryAreaAvgCallBack, pThermometryAreaMinCallBack, pThermometryAreaEndCallBack, void* pContext = nullptr);
+
+	bool QueryMMCStorageParam(void* pDriverHandle, pMMCStorageParamCallBack, void* pContext = nullptr);
+	bool QueryNASStorageParam(void* pDriverHandle, pNASStorageParamCallBack, void* pContext = nullptr);
+	bool QueryMediaList(void* pDriverHandle, pStorageFileNumCallBack, pStorageFileInfoCallBack, pStorageFileEndCallBack, const char* pStartDateTime, const char* pEndDateTime, unsigned int FirstFileID = 0, _MEDIA_REC_SRC_ MediaRecType = _NAS_MEDIA_, _MEDIA_FILE_TYPE_ MediaFileType = _PIC_FILE_, _MEDIA_ATTRIB_TYPE_ AttributeMask = _ATTRIB_ALARM, void* pContext = nullptr);
+
+	bool DownLoadMediaFile(void* pDriverHandle, pMediaFileDownLoadCallBack, const char* pFilePathName, _STREAM_TYPE VideoStreamType = STREAM_IR, _MEDIA_REC_SRC_ MediaRecType = _MEM_MEDIA_, _MEDIA_FILE_TYPE_ MediaFileType = _PIC_FILE_, _MEDIA_FORMAT_TYPE_ FileFormatType = _JPG_NORMAL, void* pContext = nullptr);
+}
+#endif

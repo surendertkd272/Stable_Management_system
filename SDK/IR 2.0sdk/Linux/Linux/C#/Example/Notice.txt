@@ -1,0 +1,7 @@
+Required dynamic libraries
+		Copy the appropriate `libVD641Module.so` for your specific Linux distribution to the runtime directory (the default version provided is for Ubuntu 22.04).
+		`DotNetToolKitLinux.dll` encapsulates `libVD641Module.so`.
+		`DotNetToolKitLinuxDemo.dll` calls the C# interfaces of `DotNetToolKitLinux.dll`.
+		`dotnet` executes `DotNetToolKitLinuxDemo.dll` to enable cross-platform operation.
+Program execution command
+		dotnet ./DotNetToolKitLinuxDemo.dll

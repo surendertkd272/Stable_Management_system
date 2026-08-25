@@ -1,0 +1,11 @@
+Thanks, that's exactly what we needed — the ISAPI /Thermometry/Point endpoint answers item 1. Understood that we implement the software ourselves; that was always our plan.
+
+To build the ROI set/move code, please share the complete ISAPI Thermometry section of the documentation — specifically:
+
+1. The Set / PUT request format for /ISAPI/Thermometry/Point (fields: PosX/PosY position, emissivity, distance, enable), not just the GET.
+2. The equivalent Line and Area endpoints (e.g. /ISAPI/Thermometry/Line and /ISAPI/Thermometry/Area), GET and PUT.
+3. The authentication method for ISAPI (e.g. HTTP Digest) and confirmation that ISAPI is enabled in the shipped firmware.
+
+On the eval units — per PO: one 25 mm thermal + one 13 mm thermal, both 4 mm visible, fixed focus set to 3.5 m.
+
+Thanks!

@@ -1,0 +1,28 @@
+Hi team, thank you for the SDK package. We've reviewed it. The core toolkit is good — headers, C/C++ and C# samples, and working calls for set-ROI, set-emissivity, poll-temperature and RTSP all present. But there are a few technical gaps before we can start development on our hardware.
+
+*BLOCKING (need to start):*
+
+*1. ARM64 / Jetson build.* All the shared libraries (libVD641Module.so + dependencies) and the bundled .NET runtime are x86-64 only (Ubuntu/Debian/Deepin folders). Our edge is NVIDIA Jetson (ARM64/aarch64), so none of these will run on it. Please send aarch64 builds of the libraries, and confirm the JetPack/Ubuntu version validated.
+
+*2. Visible↔thermal calibration (critical).* The SDK maps coordinates only within the thermal channel. We found no way to map a visible-image pixel to the matching thermal ROI point, and no calibration data for it. Our software finds the nostril/eye on the visible frame and must steer the thermal ROI — so we need the factory visible↔thermal mapping exposed in the SDK. Also: mapping accuracy (px/mm) at 3 m and 4 m, and whether re-calibration is needed after re-mounting.
+
+*Technical confirmations still needed (spec, not code):*
+- H.265 on all 3 streams @25fps (R13)
+- Per-stream + aggregate bitrate in Mbps (R12)
+- PTP support / can frame timestamps be embedded / recommended method to align video with polled temperature (R9) — only NTP is in the SDK
+- Max ROI reposition rate, updates/sec (R7)
+- Max temperature poll rate + per-device vs per-host limit (R8)
+- Thermal pixels on a 5 cm target at 3 m and 4 m for 25 mm and 13 mm lenses (R1)
+- Min focus distance + confirm fixed focus set to 3.5 m (R2)
+- Global-shutter visible sensor + model no. + lens distortion % (R16)
+- 940 nm IR (not 850), and IR disable-able while thermal + ROI temperature stay working in darkness (R18)
+- Fusion stream resolution + registration/parallax error at 3 m and 4 m (R15/R19)
+- Blackbody / higher-accuracy model in the same SDK family as an upgrade path (R5)
+- ONVIF Profile G event schema (R10)
+- Max simultaneous SDK/ONVIF clients + RTSP pulls, and whether polling contends with triple-RTSP @25fps (R14)
+- IK rating (R22), power-loss auto-recovery (auto-resume all 3 streams + restore ROIs) (R23), worst-case power / is 6W the max with everything active (R24)
+- Windows SDK — only Linux was shared; please confirm if a Windows build exists
+
+*Hardware config:* please confirm the 2 eval units are built as ordered — one 25 mm + one 13 mm thermal, both 4 mm visible, fixed focus at 3.5 m.
+
+Top priority for us: items 1 and 2. Thanks!
