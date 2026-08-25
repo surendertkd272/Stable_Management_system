@@ -70,8 +70,45 @@ Host Postgres in-region (Mumbai / `ap-south-1`) for **DPDP-2023** residency.
 | `GET /api/alerts` | Rule-engine alerts (matches `Alert`). |
 | `POST /api/alerts/:id/ack` | Acknowledge (persisted). |
 | `GET /api/series` | Dashboard sparklines. |
+| `GET /api/series?days=N` | Dashboard/report sparklines over N days (1–90, default 7). |
 | `GET /api/coverage` | **Which of the 12 points are live vs pending hardware.** |
-| `GET /health` | Store backend + reading counts. Always open. |
+| `GET /api/notify/status` | Notification transport + delivery counters. |
+| `GET /health` | Store backend, reading counts, record counts. Always open. |
+
+### Record collections (CRUD)
+
+`horses` · `diary` · `health` · `feed` · `invoices` · `coverings` · `stallions`
+
+| Method | Path | |
+|---|---|---|
+| `GET` | `/api/<kind>` | list |
+| `POST` | `/api/<kind>` | create (validates required fields → 400) |
+| `PATCH` | `/api/<kind>/:id` | partial update |
+| `DELETE` | `/api/<kind>/:id` | delete |
+
+The SPA **supplies the id** on create. If the server minted its own, a later
+patch/delete would reference an id the server never saw, 404, and the record would
+reappear on reload.
+
+**The roster is data, not a file.** `roster.json` seeds `horses` on first boot; after
+that the store owns it. This is what makes a horse added in the UI actually monitored —
+previously the rollup only ever saw the seed file, so a new horse got no alerts at all.
+
+## Notifications
+
+Settings offers WhatsApp/digest/escalation toggles; [notify.mjs](server/notify.mjs)
+delivers them. Alerts are dispatched **once each** (alert ids are day-scoped, so a
+condition doesn't re-notify on every poll).
+
+```bash
+NOTIFY_WEBHOOK_URL=https://…   # POST alert JSON (Slack, n8n, WhatsApp gateway)
+NOTIFY_MIN_SEVERITY=alert      # alert (default) | warn | ok
+NOTIFY_DISABLED=1              # log only
+```
+
+No WhatsApp Business or SMS vendor is hardcoded — that needs an account, verified
+sender and message template, which is a commercial decision. The webhook points at
+whatever you procure.
 
 Auth: set `AUTH_API_TOKEN` / `AUTH_INGEST_TOKEN` → `Authorization: Bearer <token>`.
 Unset ⇒ open. On a rejected flush the edge agent **keeps readings queued** (verified).
@@ -133,7 +170,7 @@ Settings also carries a **Monitoring coverage** card driven by `/api/coverage` �
 ## Tests
 
 ```bash
-cd server && npm test        # 26 rule-engine tests, node:test, no deps
+cd server && npm test        # 33 tests (rule engine + records + notify), no deps
 ```
 
 They pin the **clinical** behaviour (fever/hypothermia/resp/colic/lameness/water

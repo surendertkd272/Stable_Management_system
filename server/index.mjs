@@ -16,17 +16,43 @@ import { fileURLToPath } from "node:url";
 
 import { isKnownMetric, coverage } from "./contract.mjs";
 import { createStore } from "./store.mjs";
+import { dispatch, notifyStatus } from "./notify.mjs";
 import {
   summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries,
 } from "./rollup.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROSTER = JSON.parse(readFileSync(join(HERE, "roster.json"), "utf8"));
+const SEED_ROSTER = JSON.parse(readFileSync(join(HERE, "roster.json"), "utf8"));
 const PORT = Number(process.env.PORT) || 8080;
 const INGEST_TOKEN = process.env.AUTH_INGEST_TOKEN || "";
 const API_TOKEN = process.env.AUTH_API_TOKEN || "";
 
 const store = await createStore();
+
+// The roster is DATA, not a frozen file: seeded from roster.json on first boot,
+// then owned by the store. This is what makes a horse added in the UI actually
+// get monitored — previously the rollup only ever saw the seed file.
+store.seed("horses", SEED_ROSTER);
+const roster = () => store.list("horses");
+
+// Record kinds the SPA can create/update/delete. Each is a plain collection;
+// adding one here is the only change needed to expose a new record type.
+const KINDS = {
+  horses:    { path: "horses",    required: ["name"] },
+  diary:     { path: "diary",     required: ["horse", "note"] },
+  health:    { path: "health",    required: ["horse", "type"] },
+  feed:      { path: "feed",      required: ["horse", "feed"] },
+  invoices:  { path: "invoices",  required: ["owner", "amount"] },
+  coverings: { path: "coverings", required: ["mare", "stallion"] },
+  stallions: { path: "stallions", required: ["name"] },
+};
+
+// Defaults so a horse created from the UI satisfies the SPA's Horse type even
+// before any sensor reading exists for it.
+const HORSE_DEFAULTS = {
+  breed: "—", age: "—", sex: "Mare", stall: "—", owner: "—",
+  photo: "https://images.unsplash.com/photo-1598974357801-cbca100e65d3?auto=format&fit=crop&w=600&q=70",
+};
 
 // --------------------------------------------------------------------------- //
 const json = (res, code, body) => {
@@ -34,7 +60,7 @@ const json = (res, code, body) => {
   res.writeHead(code, {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
     "Content-Length": Buffer.byteLength(s),
   });
@@ -45,7 +71,11 @@ const readBody = (req) => new Promise((resolve) => {
 });
 const bearer = (req) => (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
 const authed = (req, token) => !token || bearer(req) === token;   // no token configured => open
-const bioById = (id) => ROSTER.find((h) => h.id === id);
+const slugId = (name, kind) => {
+  const base = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return base || `${kind}-${Date.now()}`;
+};
+const bioById = (id) => roster().find((h) => h.id === id);
 
 // --------------------------------------------------------------------------- //
 const server = createServer(async (req, res) => {
@@ -80,7 +110,7 @@ const server = createServer(async (req, res) => {
 
     if (path === "/api/horses" && method === "GET") {
       const all = store.allReadings();
-      return json(res, 200, ROSTER.map((bio) => summarizeHorse(bio, all)));
+      return json(res, 200, roster().map((bio) => summarizeHorse(bio, all)));
     }
 
     const detail = path.match(/^\/api\/horses\/([^/]+)$/);
@@ -100,14 +130,60 @@ const server = createServer(async (req, res) => {
       });
     }
 
-    if (path === "/api/alerts" && method === "GET")
-      return json(res, 200, buildAlerts(ROSTER, store.allReadings(), store.isAcked));
+    if (path === "/api/alerts" && method === "GET") {
+      const alerts = buildAlerts(roster(), store.allReadings(), store.isAcked);
+      dispatch(alerts).catch((e) => console.error("[notify]", e.message));
+      return json(res, 200, alerts);
+    }
 
     const ack = path.match(/^\/api\/alerts\/(.+)\/ack$/);
     if (ack && method === "POST") { store.ackAlert(decodeURIComponent(ack[1])); return json(res, 200, { ok: true }); }
 
-    if (path === "/api/series" && method === "GET")
-      return json(res, 200, buildSeries(ROSTER, store.allReadings()));
+    if (path === "/api/series" && method === "GET") {
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days")) || 7));
+      return json(res, 200, buildSeries(roster(), store.allReadings(), days));
+    }
+
+    if (path === "/api/notify/status" && method === "GET")
+      return json(res, 200, notifyStatus());
+
+    // ---- generic CRUD over record collections --------------------------- //
+    // GET    /api/<kind>            list
+    // POST   /api/<kind>            create
+    // PATCH  /api/<kind>/:id        partial update
+    // DELETE /api/<kind>/:id        delete
+    const crud = path.match(/^\/api\/([a-z]+)(?:\/(.+))?$/);
+    if (crud && KINDS[crud[1]]) {
+      const kind = crud[1], id = crud[2] ? decodeURIComponent(crud[2]) : null;
+      const spec = KINDS[kind];
+
+      if (method === "GET" && !id) return json(res, 200, store.list(kind));
+
+      if (method === "POST" && !id) {
+        let body;
+        try { body = JSON.parse((await readBody(req)) || "{}"); }
+        catch (e) { return json(res, 400, { error: "malformed JSON", detail: e.message }); }
+        const missing = spec.required.filter((f) => body[f] === undefined || body[f] === "");
+        if (missing.length) return json(res, 400, { error: "missing required fields", missing });
+        const seedRow = kind === "horses"
+          ? { ...HORSE_DEFAULTS, ...body, id: body.id ?? slugId(body.name, kind) }
+          : body;
+        return json(res, 201, store.create(kind, seedRow));
+      }
+
+      if (method === "PATCH" && id) {
+        let body;
+        try { body = JSON.parse((await readBody(req)) || "{}"); }
+        catch (e) { return json(res, 400, { error: "malformed JSON", detail: e.message }); }
+        const row = store.update(kind, id, body);
+        return row ? json(res, 200, row) : json(res, 404, { error: "not found", kind, id });
+      }
+
+      if (method === "DELETE" && id)
+        return store.remove(kind, id)
+          ? json(res, 200, { ok: true })
+          : json(res, 404, { error: "not found", kind, id });
+    }
 
     return json(res, 404, { error: "not found", path });
   } catch (e) {
@@ -118,5 +194,5 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, "127.0.0.1", () => {
   const s = store.statsSummary();
   console.log(`[equicare-server] http://127.0.0.1:${PORT}  store=${s.backend}  auth=${API_TOKEN ? "on" : "open"}`);
-  console.log(`  roster: ${ROSTER.length} horses · ${JSON.stringify(s)}`);
+  console.log(`  roster: ${roster().length} horses · ${JSON.stringify(s)}`);
 });

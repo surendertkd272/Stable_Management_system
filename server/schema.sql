@@ -30,3 +30,17 @@ CREATE TABLE IF NOT EXISTS alert_acks (
 --   SELECT create_hypertable('readings','ts', if_not_exists => TRUE);
 --   -- retention: drop raw readings older than 90 days
 --   SELECT add_retention_policy('readings', INTERVAL '90 days');
+
+-- User-authored records (horses, diary notes, health tasks, feed plans,
+-- invoices, breeding records). Stored generically so adding a record type is
+-- an API change, not a migration.
+CREATE TABLE IF NOT EXISTS entities (
+  kind        TEXT NOT NULL,
+  id          TEXT NOT NULL,
+  data        JSONB NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (kind, id)
+);
+
+CREATE INDEX IF NOT EXISTS entities_kind_idx ON entities (kind, created_at);

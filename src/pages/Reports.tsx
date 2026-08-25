@@ -1,14 +1,30 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { FileText, Download, Share2, Moon, Droplet, Activity, Sun } from "lucide-react";
 import { useStable, useToast } from "../store";
+import { getSeries } from "../data/api";
 import { Sparkline } from "../components/ui";
 
 export default function Reports() {
-  const { horses, series } = useStable();
+  const { horses, series: storeSeries } = useStable();
   const notify = useToast();
   const [params] = useSearchParams();
   const [range, setRange] = useState<"7" | "30">("7");
+
+  // The range toggle previously relabelled the same 7-day data. Fetch the real
+  // window when a backend is reachable; fall back to the store's series.
+  const [ranged, setRanged] = useState<Record<string, number[]> | null>(null);
+  useEffect(() => {
+    let stop = false;
+    setRanged(null);
+    getSeries(Number(range)).then((s) => {
+      if (!stop && s) setRanged(s);
+    });
+    return () => {
+      stop = true;
+    };
+  }, [range]);
+  const series = { ...storeSeries, ...(ranged ?? {}) };
   const [horseId, setHorseId] = useState(params.get("horse") ?? horses[0].id);
   const horse = horses.find((h) => h.id === horseId) ?? horses[0];
 

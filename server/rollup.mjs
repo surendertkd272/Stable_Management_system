@@ -224,9 +224,9 @@ export function buildAlerts(roster, allReadings, isAcked) {
   return alerts.map(({ _ts, ...a }) => a);
 }
 
-/** Global dashboard sparklines (matches `series` in mock.ts), last 7 days. */
-export function buildSeries(roster, allReadings) {
-  const days = [...Array(7)].map((_, i) => dayKey(Date.now() - (6 - i) * DAY_MS));
+/** Global dashboard sparklines (matches `series` in mock.ts). `span` days. */
+export function buildSeries(roster, allReadings, span = 7) {
+  const days = [...Array(span)].map((_, i) => dayKey(Date.now() - (span - 1 - i) * DAY_MS));
   const per = (fn) => days.map((d) => fn(d));
   const onDay = (metric, d) => allReadings.filter((r) => r.metric === metric && dayKey(r.ts) === d);
   const nHorses = roster.length || 1;

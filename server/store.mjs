@@ -34,12 +34,12 @@ const valid = (r) => r && typeof r.metric === "string" && typeof r.value === "nu
 function makeJsonStore() {
   const DATA_DIR = join(HERE, "data");
   const STATE_FILE = join(DATA_DIR, "state.json");
-  let state = { readings: [], acks: {}, seq: 0 };
+  let state = { readings: [], acks: {}, seq: 0, entities: {} };
   let saveTimer = null;
 
   try {
     state = JSON.parse(readFileSync(STATE_FILE, "utf8"));
-    state.readings ||= []; state.acks ||= {}; state.seq ||= 0;
+    state.readings ||= []; state.acks ||= {}; state.seq ||= 0; state.entities ||= {};
   } catch { /* fresh */ }
 
   const save = () => {
@@ -67,12 +67,37 @@ function makeJsonStore() {
     readingsForHorse: (id) => state.readings.filter((r) => r.horseId === id),
     isAcked: (k) => !!state.acks[k],
     ackAlert(k) { state.acks[k] = true; save(); },
+
+    // ---- entities: user-authored records (horses, diary, health, …) ----- //
+    list(kind) { return state.entities[kind] ?? []; },
+    seed(kind, rows) {
+      if (!state.entities[kind]?.length) { state.entities[kind] = rows; save(); }
+      return state.entities[kind];
+    },
+    create(kind, obj) {
+      const row = { ...obj, id: obj.id ?? `${kind}-${Date.now()}-${++state.seq}` };
+      (state.entities[kind] ||= []).push(row); save(); return row;
+    },
+    update(kind, id, patch) {
+      const list = state.entities[kind] ||= [];
+      const i = list.findIndex((r) => r.id === id);
+      if (i < 0) return null;
+      list[i] = { ...list[i], ...patch, id }; save(); return list[i];
+    },
+    remove(kind, id) {
+      const list = state.entities[kind] ||= [];
+      const i = list.findIndex((r) => r.id === id);
+      if (i < 0) return false;
+      list.splice(i, 1); save(); return true;
+    },
+
     statsSummary: () => ({
       backend: "json",
       readings: state.readings.length,
       horses: new Set(state.readings.map((r) => r.horseId)).size,
       oldest: state.readings[0]?.ts ?? null,
       newest: state.readings[state.readings.length - 1]?.ts ?? null,
+      entities: Object.fromEntries(Object.entries(state.entities).map(([k, v]) => [k, v.length])),
     }),
   };
 }

@@ -1,6 +1,7 @@
-// In-memory app store for the prototype (no backend).
-// Seeds from mock data, then lets the UI add horses / diary notes and
-// acknowledge alerts so buttons produce real, visible changes.
+// App store. Reads sensor-derived data (horses/alerts/series) from the backend
+// when one is reachable and writes user-authored records through to it; falls
+// back entirely to mock seeds + localStorage when no backend is configured, so
+// the standalone prototype keeps working unchanged.
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
 import * as api from "./data/api";
 import {
@@ -104,6 +105,26 @@ export function StableProvider({ children }: { children: ReactNode }) {
   // standalone demo still works. Management data below stays local for now.
   useEffect(() => {
     let stop = false;
+    // one-time hydration of user-authored collections (horses/alerts/series
+    // are polled separately below, since the backend derives those)
+    (async () => {
+      const [d, he, f, inv, cov, st] = await Promise.all([
+        api.getEntities<DiaryEntry>("diary"),
+        api.getEntities<HealthTask>("health"),
+        api.getEntities<FeedItem>("feed"),
+        api.getEntities<Invoice>("invoices"),
+        api.getEntities<Covering>("coverings"),
+        api.getEntities<Stallion>("stallions"),
+      ]);
+      if (stop) return;
+      if (d?.length) setDiary(d);
+      if (he?.length) setHealth(he);
+      if (f?.length) setFeed(f);
+      if (inv?.length) setInvoices(inv);
+      if (cov?.length) setCoverings(cov);
+      if (st?.length) setStallions(st);
+    })();
+
     const poll = async () => {
       const [h, a, s] = await Promise.all([api.getHorses(), api.getAlerts(), api.getSeries()]);
       if (stop) return;
@@ -126,11 +147,16 @@ export function StableProvider({ children }: { children: ReactNode }) {
   useEffect(() => persist("stallions", stallions), [stallions]);
 
   const addHorse = useCallback((h: NewHorse) => {
+    // Send the id we generate rather than letting the server mint its own:
+    // otherwise a later patch/delete would reference an id the server never
+    // saw, 404, and the record would reappear on the next reload.
+    const id = nextId("horse");
+    api.createEntity("horses", { ...h, id });
     setHorses((list) => [
       ...list,
       {
         ...h,
-        id: nextId("horse"),
+        id,
         photo: DEFAULT_PHOTO,
         status: "calm",
         statusNote: "New arrival — baseline calibrating",
@@ -144,54 +170,78 @@ export function StableProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addDiary = useCallback((d: NewDiary) => {
-    setDiary((list) => [{ ...d, id: nextId("diary"), date: "Just now" }, ...list]);
+    const id = nextId("diary");
+    const row = { ...d, id, date: "Just now" };
+    api.createEntity("diary", row);
+    setDiary((list) => [row, ...list]);
   }, []);
 
   const addHealth = useCallback((t: NewHealth) => {
-    setHealth((list) => [...list, { ...t, id: nextId("health"), done: false }]);
+    const row = { ...t, id: nextId("health"), done: false };
+    api.createEntity("health", row);
+    setHealth((list) => [...list, row]);
   }, []);
 
   const toggleHealth = useCallback((id: string) => {
-    setHealth((list) => list.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+    setHealth((list) => {
+      const next = list.map((t) => (t.id === id ? { ...t, done: !t.done } : t));
+      const row = next.find((t) => t.id === id);
+      if (row) api.patchEntity("health", id, { done: row.done });
+      return next;
+    });
   }, []);
 
   const addFeed = useCallback((f: NewFeed) => {
-    setFeed((list) => [...list, { ...f, id: nextId("feed") }]);
+    const row = { ...f, id: nextId("feed") };
+    api.createEntity("feed", row);
+    setFeed((list) => [...list, row]);
   }, []);
 
   const removeFeed = useCallback((id: string) => {
+    api.deleteEntity("feed", id);
     setFeed((list) => list.filter((f) => f.id !== id));
   }, []);
 
   const addInvoice = useCallback((inv: NewInvoice) => {
-    setInvoices((list) => [
-      {
+    setInvoices((list) => {
+      const row = {
         ...inv,
         id: nextId("inv"),
         number: `INV-${1001 + list.length}`,
         issued: new Date().toISOString().slice(0, 10),
         paid: false,
-      },
-      ...list,
-    ]);
+      };
+      api.createEntity("invoices", row);
+      return [row, ...list];
+    });
   }, []);
 
   const markPaid = useCallback((id: string, method: Invoice["method"]) => {
+    api.patchEntity("invoices", id, { paid: true, method });
     setInvoices((list) => list.map((inv) => (inv.id === id ? { ...inv, paid: true, method } : inv)));
   }, []);
 
   const addCovering = useCallback((c: NewCovering) => {
-    setCoverings((list) => [{ ...c, id: nextId("cov") }, ...list]);
+    const row = { ...c, id: nextId("cov") };
+    api.createEntity("coverings", row);
+    setCoverings((list) => [row, ...list]);
   }, []);
 
   const addStallion = useCallback((s: NewStallion) => {
-    setStallions((list) => [...list, { ...s, id: nextId("st") }]);
+    const row = { ...s, id: nextId("st") };
+    api.createEntity("stallions", row);
+    setStallions((list) => [...list, row]);
   }, []);
 
   const adjustStraws = useCallback((id: string, delta: number) => {
-    setStallions((list) =>
-      list.map((s) => (s.id === id ? { ...s, straws: Math.max(0, s.straws + delta) } : s))
-    );
+    setStallions((list) => {
+      const next = list.map((s) =>
+        s.id === id ? { ...s, straws: Math.max(0, s.straws + delta) } : s
+      );
+      const row = next.find((s) => s.id === id);
+      if (row) api.patchEntity("stallions", id, { straws: row.straws });
+      return next;
+    });
   }, []);
 
   const acknowledge = useCallback((id: string) => {

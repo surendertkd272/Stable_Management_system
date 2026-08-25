@@ -51,8 +51,8 @@ export const getHorseDetail = (id: string) =>
 
 export const getHorses = () => get<Horse[]>("/api/horses");
 export const getAlerts = () => get<Alert[]>("/api/alerts");
-export const getSeries = () =>
-  get<Record<string, number[]>>("/api/series");
+export const getSeries = (days = 7) =>
+  get<Record<string, number[]>>(`/api/series?days=${days}`);
 
 export async function ackAlert(id: string): Promise<void> {
   if (!apiConfigured) return;
@@ -65,3 +65,38 @@ export async function ackAlert(id: string): Promise<void> {
     /* best-effort; UI already updated optimistically */
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Record collections (horses, diary, health, feed, invoices, breeding).
+   Writes are fire-and-forget from the caller's perspective: the store updates
+   optimistically and these persist to the backend. With no backend configured
+   every call is a no-op, so the standalone prototype behaves exactly as before.
+--------------------------------------------------------------------------- */
+export type Kind =
+  | "horses" | "diary" | "health" | "feed" | "invoices" | "coverings" | "stallions";
+
+export const getEntities = <T,>(kind: Kind) => get<T[]>(`/api/${kind}`);
+
+async function send<T>(method: string, path: string, body?: unknown): Promise<T | null> {
+  if (!apiConfigured) return null;
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json;charset=utf8", ...authHeaders() },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null; // offline — the optimistic local update stands
+  }
+}
+
+export const createEntity = <T,>(kind: Kind, body: unknown) =>
+  send<T>("POST", `/api/${kind}`, body);
+
+export const patchEntity = <T,>(kind: Kind, id: string, patch: unknown) =>
+  send<T>("PATCH", `/api/${kind}/${encodeURIComponent(id)}`, patch);
+
+export const deleteEntity = (kind: Kind, id: string) =>
+  send<{ ok: boolean }>("DELETE", `/api/${kind}/${encodeURIComponent(id)}`);

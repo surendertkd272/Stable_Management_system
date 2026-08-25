@@ -17,6 +17,7 @@ export async function makePgStore(url, { RETENTION_MS, MAX_READINGS, normalize, 
   // in-memory cache for synchronous reads (mirrors the JSON store's behaviour)
   let readings = [];
   const acks = new Set();
+  const entities = {};        // kind -> rows (cached; Postgres is source of truth)
   let seq = 0;
 
   // load recent window + acks into cache on boot
@@ -30,6 +31,8 @@ export async function makePgStore(url, { RETENTION_MS, MAX_READINGS, normalize, 
     readings = rows.map((r) => ({ ...r, value: Number(r.value), confidence: Number(r.confidence) }));
     const a = await pool.query(`SELECT alert_key FROM alert_acks`);
     for (const row of a.rows) acks.add(row.alert_key);
+    const e = await pool.query(`SELECT kind, id, data FROM entities ORDER BY created_at ASC`);
+    for (const row of e.rows) (entities[row.kind] ||= []).push({ ...row.data, id: row.id });
   }
 
   const insert = `INSERT INTO readings
@@ -61,12 +64,51 @@ export async function makePgStore(url, { RETENTION_MS, MAX_READINGS, normalize, 
       pool.query(`INSERT INTO alert_acks(alert_key) VALUES($1) ON CONFLICT DO NOTHING`, [k])
         .catch((e) => console.error("[pg] ack failed:", e.message));
     },
+
+    // ---- entities: same contract as the JSON store ---------------------- //
+    list(kind) { return entities[kind] ?? []; },
+    seed(kind, rows) {
+      if (entities[kind]?.length) return entities[kind];
+      entities[kind] = rows;
+      for (const r of rows)
+        pool.query(`INSERT INTO entities(kind,id,data) VALUES($1,$2,$3)
+                    ON CONFLICT (kind,id) DO NOTHING`, [kind, r.id, r])
+          .catch((e) => console.error("[pg] seed failed:", e.message));
+      return rows;
+    },
+    create(kind, obj) {
+      const row = { ...obj, id: obj.id ?? `${kind}-${Date.now()}-${++seq}` };
+      (entities[kind] ||= []).push(row);
+      pool.query(`INSERT INTO entities(kind,id,data) VALUES($1,$2,$3)
+                  ON CONFLICT (kind,id) DO UPDATE SET data = $3`, [kind, row.id, row])
+        .catch((e) => console.error("[pg] entity insert failed:", e.message));
+      return row;
+    },
+    update(kind, id, patch) {
+      const list = entities[kind] ||= [];
+      const i = list.findIndex((r) => r.id === id);
+      if (i < 0) return null;
+      list[i] = { ...list[i], ...patch, id };
+      pool.query(`UPDATE entities SET data = $3 WHERE kind = $1 AND id = $2`, [kind, id, list[i]])
+        .catch((e) => console.error("[pg] entity update failed:", e.message));
+      return list[i];
+    },
+    remove(kind, id) {
+      const list = entities[kind] ||= [];
+      const i = list.findIndex((r) => r.id === id);
+      if (i < 0) return false;
+      list.splice(i, 1);
+      pool.query(`DELETE FROM entities WHERE kind = $1 AND id = $2`, [kind, id])
+        .catch((e) => console.error("[pg] entity delete failed:", e.message));
+      return true;
+    },
     statsSummary: () => ({
       backend: "postgres",
       readings: readings.length,
       horses: new Set(readings.map((r) => r.horseId)).size,
       oldest: readings[0]?.ts ?? null,
       newest: readings[readings.length - 1]?.ts ?? null,
+      entities: Object.fromEntries(Object.entries(entities).map(([k, v]) => [k, v.length])),
     }),
   };
 }
