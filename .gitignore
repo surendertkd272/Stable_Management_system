@@ -7,3 +7,18 @@ dist-ssr
 npm-debug.log*
 yarn-error.log*
 *.tsbuildinfo
+
+# EquiCare runtime artifacts
+server/data/
+edge/outbox.jsonl
+.env.local
+
+# Vendor SDK: keep the documentation and sample source, exclude prebuilt
+# binaries. They are x86-64 only (we need aarch64), are re-obtainable from the
+# vendor, and would permanently bloat git history by ~50 MB.
+SDK/**/*.so
+SDK/**/*.dll
+SDK/**/*.tar.gz
+SDK/**/bin/
+SDK/**/Warehouse/Release/
+SDK/**/obj/
