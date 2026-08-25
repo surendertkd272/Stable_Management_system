@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""
+BSV EquiCare edge agent — runs on the per-barn edge box (Jetson).
+
+Two modes:
+  --simulate   generate realistic readings for ALL 12 monitoring points across
+               the roster and POST them to the backend. Backfills history so the
+               dashboard, baselines, alerts and charts are alive BEFORE hardware.
+  (real)       use sparsh_camera.py for the camera-derived points (2 body temp,
+               3 respiration, 4 respiratory rate). Other points stay simulated /
+               manual until their sensors (IMU, feed/water, mic) are procured.
+
+Offline-first: readings are appended to a local queue file and flushed to the
+cloud; anything that fails to send stays queued (>=24h buffering requirement).
+
+Stdlib only.  Examples:
+    python3 edge_agent.py --simulate --backfill-days 14         # seed + exit
+    python3 edge_agent.py --simulate --live --interval 10       # seed then stream
+    python3 edge_agent.py --camera 192.168.1.102 --pass PW --live
+"""
+import os
+import sys
+import json
+import time
+import random
+import argparse
+import datetime as dt
+import urllib.request
+from pathlib import Path
+
+random.seed(7)  # deterministic-ish demo (Date/rand vary only by horse+hour)
+
+# roster mirrors server/roster.json (id, stall)
+ROSTER = [
+    ("zarina", "A-04"), ("shaan", "B-01"), ("noor", "A-07"), ("raja", "C-02"),
+    ("meher", "B-05"), ("sultan", "C-06"), ("laila", "A-09"),
+]
+
+# per-horse profiles reproduce the demo narrative from real pipeline data
+PROFILES = {
+    "zarina": dict(restless=True,  rest_scale=0.3),                 # colic pattern -> urgent
+    "shaan":  dict(water_scale=0.4),                                # low water -> watch
+    "noor":   dict(resp_offset=10),                                 # elevated resp -> watch
+    "raja":   dict(vice="crib_biting"),                             # vice -> ok note, calm
+    "meher":  dict(backfill_days=10),                               # still learning baseline
+    "sultan": dict(),                                               # calm
+    "laila":  dict(temp_offset=1.2),                                # fever -> urgent
+}
+
+QUEUE = Path(__file__).with_name("outbox.jsonl")
+
+
+# --------------------------------------------------------------------------- #
+# transport (offline-buffered)
+# --------------------------------------------------------------------------- #
+def enqueue(readings):
+    with QUEUE.open("a") as f:
+        for r in readings:
+            f.write(json.dumps(r) + "\n")
+
+
+def flush(api_url, token=""):
+    if not QUEUE.exists():
+        return 0, 0
+    lines = QUEUE.read_text().splitlines()
+    if not lines:
+        return 0, 0
+    batch = [json.loads(x) for x in lines]
+    try:
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(
+            f"{api_url}/ingest/readings",
+            data=json.dumps({"readings": batch}).encode(),
+            headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            res = json.loads(resp.read())
+        QUEUE.unlink()  # sent -> clear buffer
+        return res.get("accepted", 0), res.get("dropped", 0)
+    except Exception as e:
+        print(f"[edge] flush failed ({e}); {len(batch)} readings stay queued")
+        return 0, 0
+
+
+def reading(horse_id, stall, metric, value, unit, ts, source, conf=0.95, meta=None):
+    return dict(horseId=horse_id, stallId=stall, metric=metric, value=round(value, 3),
+                unit=unit, ts=ts, source=source, confidence=conf, meta=meta)
+
+
+# --------------------------------------------------------------------------- #
+# simulation
+# --------------------------------------------------------------------------- #
+def sim_hour(horse_id, stall, when, p):
+    """All-12-point readings for one horse for one clock hour."""
+    hour = when.hour
+    night = hour < 6 or hour >= 20
+    ts = when.replace(microsecond=0).isoformat() + "Z"
+    out = []
+    R = lambda m, v, u, s, **k: out.append(reading(horse_id, stall, m, v, u, ts, s, **k))
+
+    # 2 body temperature (eye region, thermal)
+    R("body_temp_c", 37.6 + p.get("temp_offset", 0) + random.uniform(-0.15, 0.2), "°C", "thermal_camera")
+    # 3/4 respiration (nostril thermal -> rate)
+    resp = 11 + p.get("resp_offset", 0) + (1.5 if night else 0) + random.uniform(-1.5, 2)
+    R("respiratory_rate_bpm", max(6, resp), "bpm", "thermal_camera")
+    # 5 activity (IMU+optical) — low at night unless restless
+    base_act = (0.08 if night else 0.28)
+    if p.get("restless"):
+        base_act += 0.5
+    R("activity_index", min(1, max(0, base_act + random.uniform(-0.05, 0.08))), "0..1", "imu_optical")
+    # 6 rest / lying minutes this hour (more at night), + time outside during day
+    lying = (random.uniform(35, 55) if night else random.uniform(0, 20)) * p.get("rest_scale", 1.0)
+    R("rest_minutes", lying, "min", "imu_optical")
+    if not night and 8 <= hour <= 17 and random.random() < 0.5:
+        R("outside_minutes", random.uniform(20, 55), "min", "optical")
+    # 1 steps (IMU)
+    R("steps", (20 if night else 140) * (2 if p.get("restless") else 1) + random.uniform(0, 40), "count", "imu")
+    # 7 lameness / gait asymmetry (sampled a few times/day)
+    if random.random() < 0.15:
+        R("gait_asymmetry", max(0, 0.08 + p.get("gait_offset", 0) + random.uniform(-0.03, 0.05)), "0..1", "imu_optical", conf=0.8)
+    # 9 water — a few visits/day
+    if random.random() < (0.35 if not night else 0.1):
+        ml = random.uniform(2500, 4500) * p.get("water_scale", 1.0)
+        R("water_visit", 1, "event", "flow_meter")
+        R("water_ml", ml, "ml", "flow_meter")
+    # 10 feed — at feed slots
+    if hour in (7, 12, 18):
+        given = random.uniform(1800, 2400)
+        R("feed_intake_g", given, "g", "feeder")
+        R("feed_refusal_g", max(0, random.uniform(-200, 400)), "g", "feeder")
+    # 8 vices (optical+audio)
+    if p.get("vice") and random.random() < 0.12:
+        R("vice_event", 1, "event", "optical_audio", conf=0.7, meta={"kind": p["vice"]})
+    # 11/12 elimination (optical CV)
+    if random.random() < 0.06:
+        R("urination_event", 1, "event", "optical", conf=0.75)
+    if random.random() < 0.08:
+        R("excretion_event", 1, "event", "optical", conf=0.75)
+    return out
+
+
+def simulate(api_url, backfill_days, live, interval, token=""):
+    now = dt.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    total = 0
+    for hid, stall in ROSTER:
+        p = PROFILES.get(hid, {})
+        days = p.get("backfill_days", backfill_days)
+        start = now - dt.timedelta(days=days)
+        t = start
+        buf = []
+        while t <= now:
+            buf.extend(sim_hour(hid, stall, t, p))
+            t += dt.timedelta(hours=1)
+        enqueue(buf)
+        total += len(buf)
+    a, d = flush(api_url, token)
+    print(f"[edge] backfill queued {total} readings -> accepted {a}, dropped {d}")
+
+    if not live:
+        return
+    print(f"[edge] live mode: emitting a fresh hourly tick every {interval}s (Ctrl-C to stop)")
+    while True:
+        time.sleep(interval)
+        when = dt.datetime.utcnow().replace(second=0, microsecond=0)
+        batch = []
+        for hid, stall in ROSTER:
+            batch.extend(sim_hour(hid, stall, when, PROFILES.get(hid, {})))
+        enqueue(batch)
+        a, d = flush(api_url, token)
+        print(f"[edge] tick {when.isoformat()}Z -> accepted {a}")
+
+
+# --------------------------------------------------------------------------- #
+# real camera mode (points 2,3,4)  — needs sparsh_camera.py + a live unit
+# --------------------------------------------------------------------------- #
+def compute_resp_rate(samples, fs):
+    """Respiratory rate (bpm) from a window of nostril-ROI avg temps via
+    autocorrelation (breath = warm-air oscillation). Pure-python, no numpy."""
+    n = len(samples)
+    if n < fs * 15:
+        return None
+    mean = sum(samples) / n
+    x = [s - mean for s in samples]
+    best_lag, best = 0, 0.0
+    lo, hi = int(fs / 0.6), int(fs / 0.1)          # 0.1–0.6 Hz => 6–36 bpm
+    for lag in range(lo, min(hi, n - 1)):
+        c = sum(x[i] * x[i + lag] for i in range(n - lag))
+        if c > best:
+            best, best_lag = c, lag
+    return None if not best_lag else 60.0 * fs / best_lag
+
+
+def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, token=""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from sparsh_camera import IsapiClient  # noqa
+
+    cam = IsapiClient(ip, user, password)
+    if not cam.login():
+        sys.exit("[edge] camera login failed")
+    cam.set_basic_param(emissivity_100=98, distance_cm=350)
+    cam.set_point(0, 5000, 5000, name="eye")                      # eye/max ROI
+    cam.set_area(1, [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)], name="nostril")
+    print("[edge] camera ROIs set; sampling…")
+
+    while True:
+        window, fs, t0 = [], 5.0, time.time()
+        while time.time() - t0 < 60:                              # 60s window @ ~5 Hz
+            temps = {t["type"]: t for t in cam.query_temps()}
+            if "Area" in temps and temps["Area"].get("avg_c") is not None:
+                window.append(temps["Area"]["avg_c"])
+            time.sleep(1 / fs)
+        now = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        latest = {t["type"]: t for t in cam.query_temps()}
+        batch = []
+        if latest.get("Point", {}).get("point_c") is not None:
+            batch.append(reading(horse_id, stall, "body_temp_c", latest["Point"]["point_c"], "°C", now, "thermal_camera"))
+        rr = compute_resp_rate(window, fs)
+        if rr:
+            batch.append(reading(horse_id, stall, "respiratory_rate_bpm", rr, "bpm", now, "thermal_camera", conf=0.7))
+        enqueue(batch)
+        a, _ = flush(api_url, token)
+        print(f"[edge] camera tick -> {len(batch)} readings (resp={rr}), accepted {a}")
+        if not live:
+            return
+
+
+# --------------------------------------------------------------------------- #
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--api", default=os.environ.get("EQUICARE_API", "http://127.0.0.1:8080"))
+    ap.add_argument("--simulate", action="store_true")
+    ap.add_argument("--backfill-days", type=int, default=14)
+    ap.add_argument("--live", action="store_true")
+    ap.add_argument("--interval", type=int, default=10)
+    ap.add_argument("--camera"); ap.add_argument("--user", default="admin"); ap.add_argument("--pass", dest="pw")
+    ap.add_argument("--horse", default="zarina"); ap.add_argument("--stall", default="A-04")
+    ap.add_argument("--token", default=os.environ.get("EQUICARE_TOKEN", ""),
+                    help="device ingest token (Bearer) if the backend requires one")
+    a = ap.parse_args()
+
+    if a.simulate:
+        simulate(a.api, a.backfill_days, a.live, a.interval, a.token)
+    elif a.camera:
+        real_camera(a.api, a.camera, a.user, a.pw, a.stall, a.horse, a.live, a.interval, a.token)
+    else:
+        ap.error("choose --simulate or --camera <ip>")
+
+
+if __name__ == "__main__":
+    main()
