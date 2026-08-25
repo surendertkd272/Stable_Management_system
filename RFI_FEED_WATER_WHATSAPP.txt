@@ -1,0 +1,44 @@
+Hi — we're building a 24/7 monitoring system for stabled horses (Bharat Sports Venture). We need to measure *per-horse water and feed intake* into an on-site edge computer. A drop in feed or water is one of the earliest signs of illness, so we need timestamped per-horse consumption — not just totals. All analytics/alerting is our software.
+
+*Pass/fail for us:*
+
+*1. Open local protocol* — Modbus RTU/TCP, RS-485, pulse, or MQTT, with the *register map / protocol doc sent up front*. If you supply a driver instead, it must work on *Linux ARM64 (aarch64 / NVIDIA Jetson)* — not x86-64 only. (A previous vendor shipped x86-only binaries and couldn't rebuild — weeks lost.)
+
+*2. No mandatory cloud* — data must be readable on the local network (India DPDP + rural internet).
+
+*3. Per-horse attribution* — a dedicated per-stall vessel, or RFID at a shared vessel. A shared trough with no ID is unusable for us clinically.
+
+*4. IP66/67 washdown, corrosion-resistant, food-grade wetted parts.*
+
+*WATER questions:*
+1. Inline flow meter or load-cell (weighed) bucket — which do you supply, and which do you recommend for horses? We prefer no/low moving parts (hard water + debris).
+2. Resolution & accuracy — *ml per pulse* and accuracy across *0.1–8 L/min*; or for a load cell, resolution in grams + 24h drift.
+3. *Minimum detectable flow* — a horse sipping slowly must not read as zero. What's the cut-off?
+4. *Can you separate drinking from refilling*, as two timestamped events? Critical — otherwise a refill looks like a horse drinking 20 L at once.
+5. Load-cell only: can you separate drinking from *spillage/evaporation*? If not, expected daily error?
+6. Output interface + please *attach the register map*.
+7. On-device timestamping and *≥24h buffering* with backfill after outage?
+8. Clock sync (*PTP preferred, NTP ok*) and drift over 24h?
+9. Power — PoE (class/watts) or DC?
+
+*FEED questions:*
+10. Dose resolution + accuracy *in grams* — stated for pellets, textured feed, and whole grain if they differ.
+11. *Weigh-back:* can you measure what the horse actually ATE (dispensed minus leftover), not just what was dispensed? A horse going off its feed is a key early warning.
+12. Do you offer a *load-cell hay manger/haynet*? Horses eat mostly forage, so this matters a lot to us.
+13. Programmable schedule per horse, settable via the *local* API (not only front panel/cloud)?
+14. Dispense confirmation + fault alarms (*empty hopper / jam / motor stall*)? Which fault codes are exposed over the protocol?
+15. IP rating, cleaning procedure, and consumables (augers/seals) with service intervals — feed dust + ammonia are aggressive.
+16. *Load-cell debounce:* horses nudge, lean on and bite buckets — how are those spikes rejected without losing real drinking events?
+17. Tolerance to *high-TDS Indian groundwater / scaling*, hay debris and bio-fouling? Cleaning interval?
+18. *Event model:* continuous totals, or discrete bouts with start/end/duration/volume? We need timestamped bouts, not a daily counter.
+19. If RFID: which standard — *LF 134.2 kHz ISO equine microchip*, UHF or BLE? Read reliability while the horse is actually feeding (head down, moving)?
+20. Are feed/water-contact parts *removable and disinfectant-safe daily without re-calibration*?
+21. Mechanical abuse rating (kick/lean/crib/rub) and a *guard or recessed mount* option?
+
+*Please reply once, covering everything.* We're evaluating a few suppliers in parallel and won't be sending rounds of follow-ups. If something isn't supported, just write that — "not supported" is a fine answer. A skipped item we have to record as not supported, because we can't tell the difference. And please *attach the actual files* (datasheet, protocol doc/register map, ARM64 build or a clear statement that none exists) rather than "available on request" — with a previous supplier we were told "Linux SDK yes", the package arrived x86-only, and it cost both sides weeks.
+
+*Evaluation:* we'd like *1 water sensor + 1 weigh-back feeder* with protocol docs + sample code, to validate on our Jetson bench.
+
+Commercial terms separately once technical fit is clear.
+
+Thanks!

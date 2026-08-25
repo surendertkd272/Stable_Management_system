@@ -1,0 +1,43 @@
+Hi — we're building a 24/7 monitoring system for stabled horses (Bharat Sports Venture). We need *per-stall audio* feeding an on-site edge computer, so our models can detect specific sounds: crib-biting (teeth on wood), wind-sucking (a grunt/gulp), coughing, and weaving. All detection is done by our own models — we need clean audio, not your sound-classification output.
+
+*Pass/fail for us:*
+
+*1. Uncompressed PCM audio* — not only AAC/Opus/G.711. This is the single most important item: lossy codecs destroy exactly the sharp transients (teeth-on-wood, cough onset) our models depend on.
+
+*2. AGC / noise-suppression / noise-gate must be fully DISABLE-able.* Automatic gain flattens the amplitude information we use, and a noise gate would delete quiet breathing. Voice-optimised DSP actively harms us.
+
+*3. Linux ARM64 (aarch64 / NVIDIA Jetson)* — driver or standard protocol (ONVIF/RTSP/USB-UAC/I2S) must work on aarch64, not x86-64 only. (A previous vendor shipped x86-only binaries and couldn't rebuild — weeks lost.)
+
+*4. No mandatory cloud* — stall audio can capture *staff speech*, so under India DPDP it must stay on-site with configurable retention and no phone-home we can't disable.
+
+*Technical questions:*
+1. Mic element — MEMS or condenser? Part number + datasheet.
+2. Frequency response with tolerance (±3 dB)? We need usable *~50 Hz – 12 kHz* — low end for the wind-suck grunt/footfall, high end for teeth-on-wood.
+3. *Max SPL before clipping* — we need *>100 dB* (a horse striking a wall a metre away is loud and we can't lose the peak).
+4. Self-noise (dB-A) and SNR? A resting horse breathing at 2–3 m is a very low-level signal.
+5. Directionality — omni, cardioid, or array? We want *directional/per-stall pickup to limit cross-talk*; audio bleeding from the next stall causes false attribution.
+6. Any DSP in the path (high-pass, compression, limiter, noise gate) — can each be disabled individually?
+7. Sample rate + bit depth? We need *≥16 kHz* (32/48 kHz preferred), 16-bit or better, configurable.
+8. How does PCM reach the edge box — *PoE network audio (ONVIF/RTSP)*, *USB (UAC)*, or *I2S*? If RTSP, is there an *uncompressed/lossless (L16/PCM)* payload option? Please *attach the interface doc*.
+9. Timestamping at the device? Clock sync (*PTP preferred, NTP ok*) + drift over 24h? A cough must line up with the video frame showing which horse coughed.
+10. Any on-device buffering to survive a brief network drop? How much?
+11. IP rating — we need *IP65+*, tolerant of *ammonia, humidity and washdown*. How is the acoustic port protected without killing high-frequency response?
+12. Operating temperature — Indian barns, expect *0–50 °C*.
+13. Power — PoE (class/watts) or DC?
+14. Mounting for stall ceiling/wall at *2.5–3.5 m*, out of reach of the horse. Any impact-resistant housing?
+15. *Effective pickup radius* — will it reliably catch quiet breathing and crib-biting anywhere in a 3.5 x 3.5 m stall? Recommended mounting height?
+16. *Off-axis rejection in dB* (not just "is it directional") — a cough from the next stall must not be attributed to this horse.
+17. Can *each* DSP stage be disabled individually (high-pass, compression, limiter, gate)? A limiter left on will distort our peaks.
+18. Per-packet metadata — timestamp, channel ID, gain, *clip flag*, sample rate?
+19. Wind / vibration / structure-borne noise mitigation? Stall walls transmit impact noise.
+20. MTBF and *anti-condensation / anti-fungal* provision for monsoon?
+
+*Please reply once, covering everything.* We're evaluating a few suppliers in parallel and won't be sending rounds of follow-ups. If something isn't supported, just write that — "not supported" is a fine answer. A skipped item we have to record as not supported, because we can't tell the difference. And please *attach the actual files* (datasheet, protocol doc/register map, ARM64 build or a clear statement that none exists) rather than "available on request" — with a previous supplier we were told "Linux SDK yes", the package arrived x86-only, and it cost both sides weeks.
+
+*Evaluation:* we'd like *2 mics + any required interface/injector* with driver/interface docs + sample code for ARM64, to validate recording quality on our Jetson bench.
+
+Commercial terms separately once technical fit is clear.
+
+Also: if you've deployed audio in *livestock or veterinary* settings, we'd welcome your recommendation on mic choice/placement for a 3.5 x 3.5 m stall, and any sample recordings from a similar environment.
+
+Thanks!

@@ -1,0 +1,34 @@
+Hi — we're building a 24/7 monitoring system for stabled horses (Bharat Sports Venture) and need an *edge compute + barn infrastructure* partner. Per stall: 1 dual thermal+optical camera, 1 IMU leg tag, feed/water sensing, 1 mic. Per barn: edge computer, PoE network, 4G failover, UPS.
+
+*Important — what we are NOT buying.* Our software is already built and running: camera driver (the camera speaks HTTP/JSON + Modbus, so it's pure Python on ARM64 — no SDK wrapper needed), edge agent, data pipeline, alerting engine, web app, and all CV/DSP models. We need the *hardware platform, barn infrastructure and installation* — please don't price the software.
+
+*Pass/fail for us:*
+1. *NVIDIA Jetson (ARM64)* based platform, Ubuntu 22.04+ / current JetPack — our whole stack is aarch64.
+2. *All processing/storage on-premise in India*; any cloud sync to an India region only (e.g. GCP asia-south1), including OTA/telemetry. Please send a data-flow diagram naming every egress point + region.
+3. *Full local operation with no internet* — inference, alerting and buffering must continue through a WAN/4G outage.
+4. *Barn-rated enclosure* — dust, ammonia, humidity, *45–50 °C*, insects/rodents, vibration.
+
+*Key questions:*
+1. Per stall the load is ~3x RTSP 1080p@25fps decoded on NVDEC + thermal ROI polling at 5–20 Hz + 1 BLE IMU at 100–200 Hz raw + 1 audio channel, plus OUR concurrent CV and respiration DSP. *How many stalls per edge box, and which exact Jetson tier* (Orin Nano / NX 8–16GB / AGX 32–64GB) for 1, 4, 8, 16, 24 stalls?
+2. Please give a *measured benchmark* (GPU%, NVDEC%, CPU%, RAM, thermal headroom) — not theoretical. State the models used.
+3. *De-rating:* stalls per box at *45 °C ambient* vs 25 °C, after thermal throttling?
+4. NVMe capacity/endurance with *power-loss protection*; sizing for readings + event clips at N stalls. (The camera has only 12 GB, so the edge box carries retention.)
+5. *PoE switch* spec per barn — per-port + total budget with 25% headroom, gigabit uplinks, VLAN/QoS for RTSP — for 4/8/16/24 cameras at 6W each, 100 m runs.
+6. Per-stall + aggregate *LAN bandwidth*, then *WAN sync* Mbps after edge filtering — does it fit Indian rural broadband?
+7. *4G failover* — dual-SIM industrial router (Indian bands), failover time, expected monthly GB per site, throttle-to-readings-only option?
+8. *UPS sizing* — VA/Wh for stated ride-through, clean shutdown (no DB corruption), auto-restart. Total barn wattage at N stalls?
+9. *Camera mounting:* we need the horse's head in frame at ~3.5 m; the thermal lens is in focus only ~3.0–4.3 m. Can you survey/mount to hold that, with *impact-protected or recessed mounts*? (The camera has no published IK rating and horses will contact it.)
+10. *Time discipline* — how is the box's clock kept accurate (NTP/PTP/GPS), and can it act as an *NTP/PTP server* for the cameras and sensors on the barn LAN? All our cross-sensor fusion depends on this.
+11. *Fleet/OTA* — platform (Balena/Mender/other), staged rollout with auto-rollback, health telemetry, and recovering a bricked box *without a site visit*.
+12. *Edge security* — full-disk encryption, secure boot, TPM/secure-element keys, per-device certs. Nothing readable in plaintext if a box is stolen from a barn.
+13. *Multi-tenant isolation* — we'll run multiple client sites; a compromised box must not reach another site's data.
+14. *Per-site BoM* (edge box + switch + router + UPS + enclosure + cabling + mounts) at 8, 16 and 24 stalls.
+15. *Boundary + support* — exactly what you deliver vs what we build, acceptance tests, *RMA turnaround in India*, support SLA for remote barns.
+
+*Please reply once, covering everything.* We're evaluating a few suppliers in parallel and won't be sending rounds of follow-ups. If something isn't supported, just write that — "not supported" is a fine answer. A skipped item we have to record as not supported, because we can't tell the difference. And please *attach the actual files* (datasheet, protocol doc/register map, ARM64 build or a clear statement that none exists) rather than "available on request" — with a previous supplier we were told "Linux SDK yes", the package arrived x86-only, and it cost both sides weeks.
+
+*Evaluation:* we'd like *one edge unit configured for the pilot* (plus switch/router/UPS recommendations) so we can deploy our existing stack and measure real stall capacity before scaling.
+
+Commercial terms separately once technical fit is clear.
+
+Thanks!

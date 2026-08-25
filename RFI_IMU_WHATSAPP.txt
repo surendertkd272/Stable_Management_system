@@ -1,0 +1,35 @@
+Hi — we're building a 24/7 monitoring system for stabled horses (Bharat Sports Venture). We need a *leg-mounted IMU tag* that streams raw motion data to an on-site edge computer. All analytics (steps, lying time, gait/lameness) are done by our software — we only need raw data + docs.
+
+*The 2 biggest pass/fail items (full list H1–H4 in the attached PDF):*
+
+*1. Linux ARM64 (aarch64) support* — our edge box is an NVIDIA Jetson. Your SDK/driver must be built and tested for aarch64, not x86-64 only. (A previous vendor shipped x86-only binaries and couldn't rebuild — it cost us weeks.) If it's an open protocol like BLE GATT or serial, that's even better — just tell us.
+
+*2. Raw per-axis data* — we need the actual accel/gyro waveform, not only step counts or your computed summaries.
+
+*Technical questions:*
+1. IMU part number + datasheet. 6-axis (accel+gyro) or 9-axis?
+2. Accel range? We need *≥ ±16 g* (a horse kicking a wall clips lower ranges).
+3. Gyro range? We need *≥ ±2000 °/s*.
+4. Sample rate — we need *≥100 Hz (target 100–200 Hz)*, configurable. Which rates?
+5. How does raw data leave the tag (BLE / Wi-Fi / gateway / USB)? Please *send the protocol doc or API reference with your reply.*
+6. Can it *stream continuously* at 100 Hz, or only upload batches? If batches, what interval?
+7. Are samples timestamped *on the tag*? Clock sync method (*PTP preferred, NTP ok*) and drift over 24h? We must align IMU data with video + thermal.
+8. On-tag buffering — we need *≥24h* with auto-backfill (barns lose power/network). How many hours at 100 Hz?
+9. Unique hardware ID per tag, readable via API (so we can bind a tag to one horse)?
+10. Battery life at 100 Hz continuous + charging method. Tag weight (target ≤50 g)?
+11. IP rating — we need *IP67+* (washdown, mud, ammonia). Strap equine-rated?
+12. India *WPC/ETA + BIS* approval for the radio?
+13. If a gateway is needed: tags per gateway, gateway-to-edge interface (PoE preferred), range through barn walls?
+14. Can any on-firmware activity classification be *disabled*? We classify on our edge and don't want firmware pre-filtering the raw data.
+15. Gyro bias drift at *45–50 °C* (Indian barns), and can it be recalibrated in the field *without removing the tag*?
+16. Welfare: any 24/7 wear data showing no rub sores? Observed *tag-loss rate per tag-year*?
+
+*Please reply once, covering everything.* We're evaluating a few suppliers in parallel and won't be sending rounds of follow-ups. If something isn't supported, just write that — "not supported" is a fine answer. A skipped item we have to record as not supported, because we can't tell the difference. And please *attach the actual files* (datasheet, protocol doc/register map, ARM64 build or a clear statement that none exists) rather than "available on request" — with a previous supplier we were told "Linux SDK yes", the package arrived x86-only, and it cost both sides weeks.
+
+*Evaluation:* we'd like *3–5 tags + 1 gateway + charging dock* with SDK/docs/sample code for ARM64, to validate on our Jetson bench.
+
+Commercial terms we can discuss separately once technical fit is clear.
+
+Also: if you have any *equine* validation data (steps, lying time, gait), please share — most tags are validated on cattle or humans and horse gait differs.
+
+Thanks!
