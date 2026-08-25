@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Moon, Droplet, Sun as SunIcon } from "lucide-react";
 import { Status } from "../data/mock";
 import { useStable } from "../store";
-import { StatusPill, riskScore, riskBand } from "../components/ui";
+import { StatusPill, MonitoringPill, isBlind, riskScore, riskBand } from "../components/ui";
 
 const FILTERS: { key: Status | "all"; label: string }[] = [
   { key: "all", label: "All" },
@@ -38,7 +38,7 @@ export default function Horses() {
           <div key={h.id} className="horse-card" onClick={() => nav(`/horses/${h.id}`)}>
             <div className="photo" style={{ backgroundImage: `url(${h.photo})` }}>
               <div className="status">
-                <StatusPill status={h.status} />
+                {isBlind(h.monitoring) ? <MonitoringPill monitoring={h.monitoring} /> : <StatusPill status={h.status} />}
               </div>
             </div>
             <div className="flex between center">

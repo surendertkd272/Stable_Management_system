@@ -11,12 +11,12 @@ import {
   Clock,
 } from "lucide-react";
 import { StatCard, RadialGauge, Sparkline, statusColor, Modal, riskScore, riskBand } from "../components/ui";
-import { series, yardSlots, breedingMares, highlight } from "../data/mock";
+import { yardSlots, breedingMares, highlight } from "../data/mock";
 import { useStable } from "../store";
 
 export default function Dashboard() {
   const nav = useNavigate();
-  const { horses } = useStable();
+  const { horses, series } = useStable();
   const focus = horses[0]; // Zarina — needs attention
   const labourMare = breedingMares.find((m) => m.status === "labour");
   const count = (s: string) => horses.filter((h) => h.status === s).length;

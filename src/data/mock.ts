@@ -3,6 +3,10 @@
 
 export type Status = "calm" | "watch" | "urgent";
 
+/** Data-freshness state, set by the backend. A monitor that has gone blind must
+ *  be visibly distinct from a horse that is genuinely unwell. */
+export type Monitoring = "live" | "stale" | "offline" | "no-data";
+
 export interface Horse {
   id: string;
   name: string;
@@ -19,6 +23,9 @@ export interface Horse {
   outside: string; // time outside box
   stress: "Low" | "Medium" | "High";
   baselineProgress: number; // 0-100
+  // present when served by the backend; absent on mock data (treated as "live")
+  monitoring?: Monitoring;
+  lastSeen?: string | null;
 }
 
 const img = (seed: string) =>

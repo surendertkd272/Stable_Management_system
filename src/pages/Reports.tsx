@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { FileText, Download, Share2, Moon, Droplet, Activity, Sun } from "lucide-react";
-import { series } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { Sparkline } from "../components/ui";
 
 export default function Reports() {
-  const { horses } = useStable();
+  const { horses, series } = useStable();
   const notify = useToast();
   const [params] = useSearchParams();
   const [range, setRange] = useState<"7" | "30">("7");

@@ -2,6 +2,7 @@
 // Seeds from mock data, then lets the UI add horses / diary notes and
 // acknowledge alerts so buttons produce real, visible changes.
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
+import * as api from "./data/api";
 import {
   horses as seedHorses,
   alerts as seedAlerts,
@@ -11,6 +12,7 @@ import {
   invoices as seedInvoices,
   coverings as seedCoverings,
   stallions as seedStallions,
+  series as seedSeries,
   Horse,
   Alert,
   DiaryEntry,
@@ -65,6 +67,7 @@ interface StableCtx {
   invoices: Invoice[];
   coverings: Covering[];
   stallions: Stallion[];
+  series: typeof seedSeries;
   addHorse: (h: NewHorse) => void;
   addDiary: (d: NewDiary) => void;
   addHealth: (t: NewHealth) => void;
@@ -91,9 +94,30 @@ export function StableProvider({ children }: { children: ReactNode }) {
   const [invoices, setInvoices] = useState<Invoice[]>(() => load("invoices", seedInvoices));
   const [coverings, setCoverings] = useState<Covering[]>(() => load("coverings", seedCoverings));
   const [stallions, setStallions] = useState<Stallion[]>(() => load("stallions", seedStallions));
+  const [series, setSeries] = useState<typeof seedSeries>(seedSeries);
 
   useEffect(() => persist("horses", horses), [horses]);
   useEffect(() => persist("alerts", alerts), [alerts]);
+
+  // Live data: when the edge/cloud backend is reachable, sensor-derived horses
+  // and alerts come from it (polled); otherwise we keep the mock seeds so the
+  // standalone demo still works. Management data below stays local for now.
+  useEffect(() => {
+    let stop = false;
+    const poll = async () => {
+      const [h, a, s] = await Promise.all([api.getHorses(), api.getAlerts(), api.getSeries()]);
+      if (stop) return;
+      if (h && h.length) setHorses(h);
+      if (a) setAlerts(a);
+      if (s) setSeries((prev) => ({ ...prev, ...s }));
+    };
+    poll();
+    const t = setInterval(poll, 15000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, []);
   useEffect(() => persist("diary", diary), [diary]);
   useEffect(() => persist("health", health), [health]);
   useEffect(() => persist("feed", feed), [feed]);
@@ -172,6 +196,7 @@ export function StableProvider({ children }: { children: ReactNode }) {
 
   const acknowledge = useCallback((id: string) => {
     setAlerts((list) => list.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
+    api.ackAlert(id); // best-effort; no-op when no backend configured
   }, []);
 
   const reset = useCallback(() => {
@@ -196,6 +221,7 @@ export function StableProvider({ children }: { children: ReactNode }) {
         invoices,
         coverings,
         stallions,
+        series,
         addHorse,
         addDiary,
         addHealth,

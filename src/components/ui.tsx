@@ -1,6 +1,29 @@
 import { ReactNode } from "react";
-import { TrendingUp, TrendingDown, X } from "lucide-react";
-import type { Status } from "../data/mock";
+import { TrendingUp, TrendingDown, X, WifiOff, AlertTriangle } from "lucide-react";
+import type { Status, Monitoring } from "../data/mock";
+
+/* ---------- monitoring / data-freshness badge ----------
+   A horse whose sensors have gone quiet must never be mistaken for a healthy
+   one — nor for a sick one. "live" renders nothing (the normal case). */
+const MONITORING_MAP: Record<Exclude<Monitoring, "live">, { label: string; cls: string; icon: ReactNode }> = {
+  offline: { label: "Monitoring offline", cls: "alert", icon: <WifiOff size={13} /> },
+  stale: { label: "Data delayed", cls: "warn", icon: <AlertTriangle size={13} /> },
+  "no-data": { label: "No sensor data", cls: "muted", icon: <WifiOff size={13} /> },
+};
+
+export function MonitoringPill({ monitoring }: { monitoring?: Monitoring }) {
+  if (!monitoring || monitoring === "live") return null;
+  const m = MONITORING_MAP[monitoring];
+  return (
+    <span className={`pill ${m.cls}`} title="Sensor data freshness — not a clinical finding">
+      {m.icon}
+      {m.label}
+    </span>
+  );
+}
+
+/** True when readings are too old to trust the clinical summary. */
+export const isBlind = (m?: Monitoring) => m === "offline" || m === "no-data";
 
 /* ---------- modal ---------- */
 export function Modal({

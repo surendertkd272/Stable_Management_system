@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus } from "lucide-react";
-import { series, DiaryEntry } from "../data/mock";
+import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff } from "lucide-react";
+import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { StatusPill, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand } from "../components/ui";
+import { getHorseDetail, type HorseDetail as HorseVitals } from "../data/api";
+import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand } from "../components/ui";
 
 const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
   { icon: "feed", label: "Feed change" },
@@ -16,14 +17,27 @@ const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
 export default function HorseDetail() {
   const { id } = useParams();
   const nav = useNavigate();
-  const { horses, alerts, diary, addDiary } = useStable();
+  const { horses, alerts, diary, addDiary, series } = useStable();
   const notify = useToast();
   const [cam, setCam] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   const [icon, setIcon] = useState<DiaryEntry["icon"]>("vet");
   const [clock, setClock] = useState("");
+  const [live, setLive] = useState<HorseVitals | null>(null);
   const horse = horses.find((h) => h.id === id);
+
+  // live camera-derived vitals (points 2/3/4) when a backend is reachable
+  useEffect(() => {
+    if (!id) return;
+    let stop = false;
+    getHorseDetail(id).then((d) => {
+      if (!stop && d) setLive({ vitals: d.vitals, charts: d.charts });
+    });
+    return () => {
+      stop = true;
+    };
+  }, [id]);
 
   useEffect(() => {
     if (!cam) return;
@@ -84,7 +98,10 @@ export default function HorseDetail() {
           <div className="grow" style={{ minWidth: 220 }}>
             <div className="flex between center wrap" style={{ gap: 10 }}>
               <h2 style={{ fontFamily: "var(--font-display)", fontSize: 26, color: "var(--ink)" }}>{horse.name}</h2>
-              <StatusPill status={horse.status} />
+              <div className="flex gap-sm center wrap">
+                <MonitoringPill monitoring={horse.monitoring} />
+                <StatusPill status={horse.status} />
+              </div>
             </div>
             <p className="muted" style={{ marginTop: 4 }}>
               {horse.breed} · {horse.sex} · {horse.age} · Stall {horse.stall}
@@ -97,13 +114,23 @@ export default function HorseDetail() {
               style={{
                 marginTop: 16,
                 marginBottom: 0,
-                background: horse.status === "calm" ? "var(--positive-soft)" : "var(--warn-soft)",
+                background: isBlind(horse.monitoring)
+                  ? "var(--alert-soft)"
+                  : horse.status === "calm"
+                    ? "var(--positive-soft)"
+                    : "var(--warn-soft)",
                 borderColor: "transparent",
               }}
             >
-              <Heart size={17} style={{ flexShrink: 0 }} />
+              {isBlind(horse.monitoring) ? <WifiOff size={17} style={{ flexShrink: 0 }} /> : <Heart size={17} style={{ flexShrink: 0 }} />}
               <span style={{ fontSize: 13, fontWeight: 600 }}>{horse.statusNote}</span>
             </div>
+            {isBlind(horse.monitoring) && (
+              <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                Figures below are the last known values and may be out of date
+                {horse.lastSeen ? ` (last reading ${new Date(horse.lastSeen).toLocaleString()})` : ""}.
+              </p>
+            )}
             <div className="flex gap-sm" style={{ marginTop: 16, flexWrap: "wrap" }}>
               <button className="btn-primary" onClick={() => setCam(true)}>
                 <Play size={16} /> Live camera
@@ -118,6 +145,43 @@ export default function HorseDetail() {
           </div>
         </div>
       </div>
+
+      {/* live vitals from the thermal camera (points 2, 3, 4) */}
+      {live?.vitals?.body_temp_c && (
+        <>
+          <h3 style={{ margin: "4px 0 12px" }}>
+            Live vitals <span style={{ color: "var(--text-secondary)", fontWeight: 400, fontSize: 13 }}>· thermal camera</span>
+          </h3>
+          <div className="grid cols-4" style={{ marginBottom: 24 }}>
+            <MetricCard
+              icon={<Heart size={18} />}
+              label="Body temperature"
+              value={`${live.vitals.body_temp_c.value.toFixed(1)}°C`}
+              delta={0}
+              spark={live.charts.body_temp_c}
+            />
+            {live.vitals.respiratory_rate_bpm && (
+              <MetricCard
+                icon={<Activity size={18} />}
+                label="Respiratory rate"
+                value={`${Math.round(live.vitals.respiratory_rate_bpm.value)} bpm`}
+                delta={0}
+                spark={live.charts.respiratory_rate_bpm}
+              />
+            )}
+            {live.vitals.activity_index && (
+              <MetricCard
+                icon={<Activity size={18} />}
+                label="Activity index"
+                value={live.vitals.activity_index.value.toFixed(2)}
+                delta={0}
+                spark={live.charts.activity_index}
+                type="bar"
+              />
+            )}
+          </div>
+        </>
+      )}
 
       {/* metric cards */}
       <div className="grid cols-4" style={{ marginBottom: 24 }}>

@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Sun, Moon, Globe, RotateCcw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Sun, Moon, Globe, RotateCcw, CheckCircle2, Clock } from "lucide-react";
 import { useTheme } from "../theme";
 import { useStable, useToast } from "../store";
+import { getCoverage, type CoverageRow } from "../data/api";
 
 function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
@@ -147,6 +148,79 @@ export default function SettingsPage() {
             <RotateCcw size={15} /> Reset
           </button>
         </div>
+      </div>
+
+      <CoverageCard />
+    </div>
+  );
+}
+
+/* ---------- 12-point monitoring coverage ----------
+   Honest per-point state: which of the client's 12 monitoring points are
+   actually sourced today vs awaiting sensor procurement. Driven by
+   /api/coverage, so it can never drift from what the backend really supports.
+   Hidden entirely when no backend is configured. */
+function CoverageCard() {
+  const [rows, setRows] = useState<CoverageRow[] | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    getCoverage().then((r) => {
+      if (!stop) setRows(r);
+    });
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  if (!rows || rows.length === 0) return null;
+
+  // group metrics under their monitoring point
+  const points = new Map<number, { labels: string[]; available: boolean; sources: Set<string> }>();
+  for (const r of rows) {
+    const p = points.get(r.point) ?? { labels: [], available: false, sources: new Set<string>() };
+    p.labels.push(r.label);
+    if (r.status === "available") p.available = true;
+    p.sources.add(r.source.replace(/_/g, " "));
+    points.set(r.point, p);
+  }
+  const ordered = [...points.entries()].sort((a, b) => a[0] - b[0]);
+  const liveCount = ordered.filter(([, p]) => p.available).length;
+
+  return (
+    <div className="card" style={{ gridColumn: "1 / -1" }}>
+      <div className="card-head">
+        <h3>Monitoring coverage</h3>
+        <span className="pill accent">
+          {liveCount} of {ordered.length} points sourced
+        </span>
+      </div>
+      <p className="muted" style={{ fontSize: 13, marginTop: -4, marginBottom: 14 }}>
+        Which of the 12 monitoring points have a live data source today. Pending points are
+        waiting on sensor procurement — the software already carries their data.
+      </p>
+      <div className="grid cols-2" style={{ gap: 10 }}>
+        {ordered.map(([point, p]) => (
+          <div key={point} className="setting-row" style={{ alignItems: "center" }}>
+            <div className="info">
+              <b>
+                {point}. {[...new Set(p.labels)].join(" · ")}
+              </b>
+              <span>{[...p.sources].join(", ")}</span>
+            </div>
+            <span className={`pill ${p.available ? "ok" : "muted"}`}>
+              {p.available ? (
+                <>
+                  <CheckCircle2 size={13} /> live
+                </>
+              ) : (
+                <>
+                  <Clock size={13} /> pending
+                </>
+              )}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
