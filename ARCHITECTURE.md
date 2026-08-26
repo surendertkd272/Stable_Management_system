@@ -94,6 +94,40 @@ reappear on reload.
 that the store owns it. This is what makes a horse added in the UI actually monitored —
 previously the rollup only ever saw the seed file, so a new horse got no alerts at all.
 
+## Authentication
+
+Earlier the SPA sent a shared `VITE_API_TOKEN`. Vite **compiles env vars into the
+JS bundle**, so anyone opening devtools on the deployed site had full API access.
+Verified and removed: real per-user sessions now.
+
+| Endpoint | |
+|---|---|
+| `POST /auth/login` | `{username, password}` → `{token, user, expiresIn}` |
+| `POST /auth/logout` | invalidates the session immediately |
+| `GET /auth/me` | current user, or `authRequired:false` if the backend is open |
+
+- Passwords: **scrypt** with a per-user salt (`node:crypto`, no dependency). The hash
+  never leaves the server — `publicUser()` strips it on every response.
+- Sessions: opaque 32-byte random tokens, held server-side, 12 h TTL (a barn shift).
+  Unknown users are still verified against a dummy hash so response timing doesn't
+  reveal whether a username exists.
+- Roles: **admin** (full, may manage users) · **staff** (read/write) · **owner**
+  (read-only — the Portal view; non-GET returns 403).
+- `AUTH_API_TOKEN` still works for machine/server-to-server callers, and
+  `AUTH_INGEST_TOKEN` for the edge agent — those are not browser-delivered.
+
+First boot creates an admin and prints a generated password **once**; set
+`ADMIN_USER` / `ADMIN_PASSWORD` to choose it.
+
+**The backend is closed by default.** Because an admin always exists after first
+boot, `/api/*` always requires a caller — there is no accidental open window. The
+standalone prototype is unaffected: with `VITE_API_URL` unset the SPA never calls
+the API at all and runs purely on mock data.
+
+`/ingest/*` is separate — it is open unless `AUTH_INGEST_TOKEN` is set, so an edge
+box can be brought up before credentials are distributed. **Set it before the
+network is anything but a closed lab VLAN.**
+
 ## Notifications
 
 Settings offers WhatsApp/digest/escalation toggles; [notify.mjs](server/notify.mjs)
@@ -170,7 +204,7 @@ Settings also carries a **Monitoring coverage** card driven by `/api/coverage` �
 ## Tests
 
 ```bash
-cd server && npm test        # 33 tests (rule engine + records + notify), no deps
+cd server && npm test        # 40 tests (rules + records + notify + auth), no deps
 ```
 
 They pin the **clinical** behaviour (fever/hypothermia/resp/colic/lameness/water

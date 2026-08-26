@@ -11,11 +11,86 @@ const BASE = (
   (import.meta.env.DEV ? "http://127.0.0.1:8080" : "")
 ).replace(/\/$/, "");
 
-const TOKEN = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "";
 export const apiConfigured = BASE.length > 0;
 
+/* --- session --------------------------------------------------------------
+   The API token used to come from VITE_API_TOKEN, which Vite compiles into the
+   JS bundle — anyone opening devtools on the deployed site had full API access.
+   The token is now a per-user session issued by /auth/login and held only in
+   this browser. */
+const SESSION_KEY = "bsv-session";
+
+export interface SessionUser {
+  id: string; username: string; name: string;
+  role: "admin" | "staff" | "owner"; owner: string | null;
+}
+
+let token: string | null = null;
+try {
+  token = localStorage.getItem(SESSION_KEY);
+} catch {
+  /* private mode — stay in memory for this tab */
+}
+
+export const getToken = () => token;
+function setToken(value: string | null) {
+  token = value;
+  try {
+    if (value) localStorage.setItem(SESSION_KEY, value);
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* in-memory only */
+  }
+}
+
 const authHeaders = (): Record<string, string> =>
-  TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+  token ? { Authorization: `Bearer ${token}` } : {};
+
+/** Sign in. Returns the user on success, or an error message. */
+export async function login(username: string, password: string):
+  Promise<{ user?: SessionUser; error?: string }> {
+  if (!apiConfigured) return { error: "No backend configured" };
+  try {
+    const res = await fetch(`${BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json;charset=utf8" },
+      body: JSON.stringify({ username, password }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body.error ?? `Sign-in failed (${res.status})` };
+    setToken(body.token);
+    return { user: body.user as SessionUser };
+  } catch {
+    return { error: "Cannot reach the server" };
+  }
+}
+
+export async function logout(): Promise<void> {
+  if (apiConfigured && token) {
+    try {
+      await fetch(`${BASE}/auth/logout`, { method: "POST", headers: authHeaders() });
+    } catch {
+      /* clear locally regardless */
+    }
+  }
+  setToken(null);
+}
+
+/** Who am I? `authRequired:false` means the backend is open (local demo). */
+export async function me(): Promise<{ user: SessionUser | null; authRequired: boolean }> {
+  if (!apiConfigured) return { user: null, authRequired: false };
+  try {
+    const res = await fetch(`${BASE}/auth/me`, { headers: authHeaders() });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) return { user: body.user as SessionUser, authRequired: true };
+    if (res.status === 401 && body.authRequired === false)
+      return { user: null, authRequired: false };
+    setToken(null);                       // stale/expired session
+    return { user: null, authRequired: body.authRequired ?? true };
+  } catch {
+    return { user: null, authRequired: false };   // offline → mock mode
+  }
+}
 
 async function get<T>(path: string): Promise<T | null> {
   if (!apiConfigured) return null;

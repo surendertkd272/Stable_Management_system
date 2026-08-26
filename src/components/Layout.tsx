@@ -13,6 +13,7 @@ import {
   MessageCircle,
   Sun,
   Moon,
+  LogOut,
   Plus,
   Menu,
   X,
@@ -23,6 +24,7 @@ import {
   LucideIcon,
 } from "lucide-react";
 import { useTheme } from "../theme";
+import { useAuth } from "../auth";
 import { useStable, useToast } from "../store";
 import { breedingMares, Horse } from "../data/mock";
 import { Modal } from "./ui";
@@ -110,15 +112,35 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
             <Moon size={15} /> Dark
           </button>
         </div>
-        <div className="profile">
-          <div className="avatar">SY</div>
-          <div className="meta">
-            <b>Surender Y.</b>
-            <span>Yard Manager</span>
-          </div>
-        </div>
+        <UserBlock />
       </div>
     </aside>
+  );
+}
+
+/** Signed-in user + sign-out. Falls back to the demo profile when the backend
+ *  is open (standalone prototype), where there is nobody to sign out. */
+function UserBlock() {
+  const { user, authRequired, signOut } = useAuth();
+  const initials = (user?.name ?? "Surender Y.")
+    .split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+  const roleLabel = user
+    ? { admin: "Administrator", staff: "Yard Staff", owner: "Owner" }[user.role]
+    : "Yard Manager";
+
+  return (
+    <div className="profile">
+      <div className="avatar">{initials}</div>
+      <div className="meta">
+        <b>{user?.name ?? "Surender Y."}</b>
+        <span>{roleLabel}</span>
+      </div>
+      {authRequired && user && (
+        <button className="icon-btn" onClick={signOut} title="Sign out" aria-label="Sign out">
+          <LogOut size={16} />
+        </button>
+      )}
+    </div>
   );
 }
 

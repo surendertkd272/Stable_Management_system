@@ -17,6 +17,8 @@ import { fileURLToPath } from "node:url";
 import { isKnownMetric, coverage } from "./contract.mjs";
 import { createStore } from "./store.mjs";
 import { dispatch, notifyStatus } from "./notify.mjs";
+import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
+         verifyPassword, hashPassword, publicUser, ROLES } from "./auth.mjs";
 import {
   summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries,
 } from "./rollup.mjs";
@@ -33,6 +35,7 @@ const store = await createStore();
 // then owned by the store. This is what makes a horse added in the UI actually
 // get monitored — previously the rollup only ever saw the seed file.
 store.seed("horses", SEED_ROSTER);
+ensureAdmin(store);   // first boot only; prints a generated password once
 const roster = () => store.list("horses");
 
 // Record kinds the SPA can create/update/delete. Each is a plain collection;
@@ -45,6 +48,7 @@ const KINDS = {
   invoices:  { path: "invoices",  required: ["owner", "amount"] },
   coverings: { path: "coverings", required: ["mare", "stallion"] },
   stallions: { path: "stallions", required: ["name"] },
+  users:     { path: "users",     required: ["username"], adminOnly: true },
 };
 
 // Defaults so a horse created from the UI satisfies the SPA's Horse type even
@@ -70,7 +74,20 @@ const readBody = (req) => new Promise((resolve) => {
   let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => resolve(b));
 });
 const bearer = (req) => (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-const authed = (req, token) => !token || bearer(req) === token;   // no token configured => open
+const authed = (req, token) => !token || bearer(req) === token;   // machine tokens (edge ingest)
+
+// Browser auth: a bearer token is a session token issued by /auth/login.
+// AUTH_API_TOKEN remains accepted for machine/server-to-server access.
+function principal(req) {
+  const tok = bearer(req);
+  if (!tok) return null;
+  if (API_TOKEN && tok === API_TOKEN) return { role: "admin", name: "service", service: true };
+  return getSession(tok);
+}
+
+// When no users exist and no API token is set, the API stays open — that is the
+// local-demo posture. As soon as either is configured, /api/* requires a caller.
+const authRequired = () => Boolean(API_TOKEN) || store.list("users").length > 0;
 const slugId = (name, kind) => {
   const base = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return base || `${kind}-${Date.now()}`;
@@ -86,7 +103,7 @@ const server = createServer(async (req, res) => {
   if (method === "OPTIONS") return json(res, 204, {});
 
   try {
-    if (path === "/health") return json(res, 200, { ok: true, ...store.statsSummary() });
+    if (path === "/health") return json(res, 200, { ok: true, ...store.statsSummary(), sessions: sessionCount(), authRequired: authRequired() });
     if (path === "/api/coverage") return json(res, 200, coverage());
 
     // ---- ingest (edge -> cloud) ------------------------------------------ //
@@ -104,9 +121,43 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { accepted, dropped: batch.length - clean.length });
     }
 
-    // ---- query (SPA -> cloud) — all /api/* require the API token if set --- //
-    if (path.startsWith("/api/") && !authed(req, API_TOKEN))
+    // ---- authentication ------------------------------------------------- //
+    if (path === "/auth/login" && method === "POST") {
+      let body;
+      try { body = JSON.parse((await readBody(req)) || "{}"); }
+      catch { return json(res, 400, { error: "malformed JSON" }); }
+      const u = store.list("users").find((x) => x.username === body.username);
+      // Verify even when the user is unknown, so response time does not reveal
+      // whether a username exists.
+      const ok = verifyPassword(body.password || "", u?.password || "scrypt$0$0");
+      if (!u || !ok) return json(res, 401, { error: "invalid username or password" });
+      const s = createSession(u);
+      return json(res, 200, { ...s, user: publicUser(u) });
+    }
+
+    if (path === "/auth/logout" && method === "POST") {
+      destroySession(bearer(req));
+      return json(res, 200, { ok: true });
+    }
+
+    if (path === "/auth/me" && method === "GET") {
+      const p = principal(req);
+      return p ? json(res, 200, { user: p, authRequired: authRequired() })
+               : json(res, 401, { error: "not signed in", authRequired: authRequired() });
+    }
+
+    // ---- query (SPA -> cloud) -------------------------------------------- //
+    const who = principal(req);
+    if (path.startsWith("/api/") && authRequired() && !who)
       return json(res, 401, { error: "unauthorized" });
+
+    // Owners get a read-only view; only admins may touch user accounts.
+    if (path.startsWith("/api/") && who) {
+      if (who.role === "owner" && method !== "GET")
+        return json(res, 403, { error: "read-only account" });
+      if (path.startsWith("/api/users") && who.role !== "admin")
+        return json(res, 403, { error: "admin only" });
+    }
 
     if (path === "/api/horses" && method === "GET") {
       const all = store.allReadings();
@@ -157,7 +208,10 @@ const server = createServer(async (req, res) => {
       const kind = crud[1], id = crud[2] ? decodeURIComponent(crud[2]) : null;
       const spec = KINDS[kind];
 
-      if (method === "GET" && !id) return json(res, 200, store.list(kind));
+      if (method === "GET" && !id)
+        return json(res, 200, kind === "users"
+          ? store.list(kind).map(publicUser)
+          : store.list(kind));
 
       if (method === "POST" && !id) {
         let body;
@@ -165,18 +219,30 @@ const server = createServer(async (req, res) => {
         catch (e) { return json(res, 400, { error: "malformed JSON", detail: e.message }); }
         const missing = spec.required.filter((f) => body[f] === undefined || body[f] === "");
         if (missing.length) return json(res, 400, { error: "missing required fields", missing });
-        const seedRow = kind === "horses"
+        let seedRow = kind === "horses"
           ? { ...HORSE_DEFAULTS, ...body, id: body.id ?? slugId(body.name, kind) }
           : body;
-        return json(res, 201, store.create(kind, seedRow));
+        if (kind === "users") {
+          if (!body.password) return json(res, 400, { error: "password required" });
+          if (!ROLES.includes(body.role)) return json(res, 400, { error: "invalid role", roles: ROLES });
+          if (store.list("users").some((u) => u.username === body.username))
+            return json(res, 409, { error: "username already exists" });
+          seedRow = { ...body, password: hashPassword(body.password) };
+        }
+        const created = store.create(kind, seedRow);
+        return json(res, 201, kind === "users" ? publicUser(created) : created);
       }
 
       if (method === "PATCH" && id) {
         let body;
         try { body = JSON.parse((await readBody(req)) || "{}"); }
         catch (e) { return json(res, 400, { error: "malformed JSON", detail: e.message }); }
-        const row = store.update(kind, id, body);
-        return row ? json(res, 200, row) : json(res, 404, { error: "not found", kind, id });
+        const patch = kind === "users" && body.password
+          ? { ...body, password: hashPassword(body.password) }
+          : body;
+        const row = store.update(kind, id, patch);
+        if (!row) return json(res, 404, { error: "not found", kind, id });
+        return json(res, 200, kind === "users" ? publicUser(row) : row);
       }
 
       if (method === "DELETE" && id)
