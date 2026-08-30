@@ -88,6 +88,22 @@ function principal(req) {
 // When no users exist and no API token is set, the API stays open — that is the
 // local-demo posture. As soon as either is configured, /api/* requires a caller.
 const authRequired = () => Boolean(API_TOKEN) || store.list("users").length > 0;
+// RFC-4180 quoting, plus a leading apostrophe on anything a spreadsheet would
+// treat as a formula. Without it a crafted value like =HYPERLINK(...) in a
+// horse name or note becomes executable when the vet opens the file in Excel.
+function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  let s = String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function toCsv(columns, rows) {
+  const head = columns.join(",");
+  const body = rows.map((r) => columns.map((c) => csvCell(r[c])).join(","));
+  return [head, ...body].join("\r\n") + "\r\n";
+}
+
 const slugId = (name, kind) => {
   const base = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return base || `${kind}-${Date.now()}`;
@@ -116,9 +132,30 @@ const server = createServer(async (req, res) => {
         return json(res, 400, { error: "malformed JSON", detail: String(e.message) });
       }
       const batch = Array.isArray(body) ? body : body.readings || [];
-      const clean = batch.filter((r) => r && isKnownMetric(r.metric));
+      const known = batch.filter((r) => r && isKnownMetric(r.metric));
+
+      // A camera knows its STALL, not which horse is standing in it, and horses
+      // change stalls routinely. Resolve stall -> horse here, against the
+      // current roster, so the edge never has to hardcode that mapping.
+      const byStall = new Map(roster().filter((h) => h.stall).map((h) => [h.stall, h.id]));
+      const unattributed = [];
+      const clean = [];
+      for (const r of known) {
+        if (r.horseId) { clean.push(r); continue; }
+        const horseId = r.stallId ? byStall.get(r.stallId) : undefined;
+        if (horseId) clean.push({ ...r, horseId });
+        // Previously a stall-only reading was counted as accepted and then
+        // silently never reached any horse — a fever could vanish. Report it.
+        else unattributed.push(r.stallId ?? null);
+      }
       const accepted = store.appendReadings(clean);
-      return json(res, 200, { accepted, dropped: batch.length - clean.length });
+      const resBody = { accepted, dropped: batch.length - known.length };
+      if (unattributed.length) {
+        resBody.unattributed = unattributed.length;
+        resBody.unknownStalls = [...new Set(unattributed)];
+        console.warn(`[ingest] ${unattributed.length} reading(s) with no horse for stall(s): ${resBody.unknownStalls.join(", ")}`);
+      }
+      return json(res, 200, resBody);
     }
 
     // ---- authentication ------------------------------------------------- //
@@ -208,6 +245,36 @@ const server = createServer(async (req, res) => {
 
     if (path === "/api/notify/status" && method === "GET")
       return json(res, 200, notifyStatus());
+
+    // ---- CSV export ------------------------------------------------------ //
+    // GET /api/export/readings.csv?horse=<id>&days=N&metric=<m>
+    if (path === "/api/export/readings.csv" && method === "GET") {
+      const horseId = url.searchParams.get("horse");
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days")) || 30));
+      const metric = url.searchParams.get("metric");
+      const cutoff = Date.now() - days * 24 * 3600 * 1000;
+
+      const allowed = new Set(visibleRoster().map((h) => h.id));
+      if (horseId && !allowed.has(horseId))
+        return json(res, 404, { error: "unknown horse" });
+
+      const rows = store.allReadings().filter((r) =>
+        Date.parse(r.ts) >= cutoff &&
+        (horseId ? r.horseId === horseId : allowed.has(r.horseId)) &&
+        (!metric || r.metric === metric));
+
+      const csv = toCsv(
+        ["ts", "horseId", "stallId", "metric", "value", "unit", "source", "confidence"],
+        rows);
+      const name = `equicare-${horseId || "all"}-${days}d.csv`;
+      res.writeHead(200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${name}"`,
+        "Access-Control-Allow-Origin": "*",
+        "Content-Length": Buffer.byteLength(csv),
+      });
+      return res.end(csv);
+    }
 
     // ---- generic CRUD over record collections --------------------------- //
     // GET    /api/<kind>            list

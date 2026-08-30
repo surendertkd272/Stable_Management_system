@@ -194,6 +194,30 @@ map, the `stream/meta` frame layout and the known limitations are captured in
 [SDK/PROTOCOL_REFERENCE.md](SDK/PROTOCOL_REFERENCE.md) so the driver does not depend
 on a vendor PDF sitting in someone's inbox.
 
+## Attribution — stall, not horse
+
+A camera knows **which stall it watches**, not which horse is standing in it, and
+horses change stalls routinely. So a reading may carry `stallId` with no `horseId`,
+and the backend resolves it against the current roster at ingest.
+
+- an explicit `horseId` always wins, so the edge can pin a reading when it knows
+- a stall with **no horse assigned** is reported back as `unattributed` with the
+  offending stall ids, and logged. Previously such a reading returned
+  `accepted: 1` and then reached no horse at all — a fever could vanish behind a
+  200 OK. The edge agent now prints a warning when this happens.
+- moving a horse re-points its stall immediately; history stays attached to the
+  horse, and the vacated stall stops resolving to it
+
+## CSV export
+
+`GET /api/export/readings.csv?horse=<id>&days=N&metric=<m>` returns raw readings —
+what a vet or insurer can actually re-analyse, unlike the PDF summary. Owner
+scoping applies, so an owner can only export their own horses.
+
+Values beginning `=`, `+`, `-` or `@` are prefixed with an apostrophe: without it a
+crafted horse name or note becomes an **executable formula** when the file is
+opened in Excel or Sheets.
+
 ## Monitoring-gap safety net
 
 A 24/7 monitor that goes blind must **say so** — stale data must never render as "calm".

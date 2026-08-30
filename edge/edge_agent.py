@@ -77,6 +77,9 @@ def flush(api_url, token=""):
         with urllib.request.urlopen(req, timeout=10) as resp:
             res = json.loads(resp.read())
         QUEUE.unlink()  # sent -> clear buffer
+        if res.get("unattributed"):
+            print(f"[edge] WARNING: {res['unattributed']} reading(s) matched no horse — "
+                  f"unknown stall(s): {', '.join(str(s) for s in res.get('unknownStalls', []))}")
         return res.get("accepted", 0), res.get("dropped", 0)
     except Exception as e:
         print(f"[edge] flush failed ({e}); {len(batch)} readings stay queued")
@@ -84,8 +87,18 @@ def flush(api_url, token=""):
 
 
 def reading(horse_id, stall, metric, value, unit, ts, source, conf=0.95, meta=None):
-    return dict(horseId=horse_id, stallId=stall, metric=metric, value=round(value, 3),
-                unit=unit, ts=ts, source=source, confidence=conf, meta=meta)
+    """Build one reading.
+
+    `horse_id` may be None: a camera knows its stall, not which horse is standing
+    in it, and horses change stalls routinely. The backend resolves stall ->
+    horse against the current roster, and reports anything it could not attribute
+    rather than silently accepting it.
+    """
+    r = dict(stallId=stall, metric=metric, value=round(value, 3),
+             unit=unit, ts=ts, source=source, confidence=conf, meta=meta)
+    if horse_id:
+        r["horseId"] = horse_id
+    return r
 
 
 # --------------------------------------------------------------------------- #
@@ -234,7 +247,10 @@ def main():
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--interval", type=int, default=10)
     ap.add_argument("--camera"); ap.add_argument("--user", default="admin"); ap.add_argument("--pass", dest="pw")
-    ap.add_argument("--horse", default="zarina"); ap.add_argument("--stall", default="A-04")
+    ap.add_argument("--stall", default="A-04",
+                    help="the stall this camera watches; the backend maps it to the horse")
+    ap.add_argument("--horse", default=None,
+                    help="optional: pin readings to a horse id instead of resolving by stall")
     ap.add_argument("--token", default=os.environ.get("EQUICARE_TOKEN", ""),
                     help="device ingest token (Bearer) if the backend requires one")
     a = ap.parse_args()

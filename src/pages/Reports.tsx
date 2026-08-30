@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { FileText, Download, Share2, Moon, Droplet, Activity, Sun } from "lucide-react";
+import { FileText, Download, Share2, Moon, Droplet, Activity, Sun, Table } from "lucide-react";
 import { useStable, useToast } from "../store";
-import { getSeries } from "../data/api";
+import { getSeries, exportReadingsCsv } from "../data/api";
 import { Sparkline } from "../components/ui";
 
 export default function Reports() {
@@ -61,6 +61,13 @@ export default function Reports() {
     );
     w.document.close();
     notify("Opening print dialog…");
+  };
+
+  const exportCsv = async () => {
+    const ok = await exportReadingsCsv(horse.id, Number(range));
+    notify(ok
+      ? `Exported ${range} days of ${horse.name}'s readings`
+      : "Raw data export needs the backend — not available in demo mode");
   };
 
   const shareToVet = async () => {
@@ -125,6 +132,9 @@ export default function Reports() {
           <div className="flex gap-sm">
             <button className="btn-ghost" onClick={shareToVet}>
               <Share2 size={15} /> Share to vet
+            </button>
+            <button className="btn-ghost" onClick={exportCsv} title="Raw readings a vet can re-analyse">
+              <Table size={15} /> Export CSV
             </button>
             <button className="btn-primary" onClick={exportPdf}>
               <Download size={16} /> Export PDF

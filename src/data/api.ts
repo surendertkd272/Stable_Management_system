@@ -175,3 +175,29 @@ export const patchEntity = <T,>(kind: Kind, id: string, patch: unknown) =>
 
 export const deleteEntity = (kind: Kind, id: string) =>
   send<{ ok: boolean }>("DELETE", `/api/${kind}/${encodeURIComponent(id)}`);
+
+/** Download raw readings as CSV. Returns false when no backend is configured. */
+export async function exportReadingsCsv(horseId: string, days = 30): Promise<boolean> {
+  if (!apiConfigured) return false;
+  try {
+    const res = await fetch(
+      `${BASE}/api/export/readings.csv?horse=${encodeURIComponent(horseId)}&days=${days}`,
+      { headers: authHeaders() }
+    );
+    if (!res.ok) return false;
+    // The endpoint is authenticated, so a plain link cannot carry the session
+    // token — fetch the body and hand the browser a blob instead.
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `equicare-${horseId}-${days}d.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
