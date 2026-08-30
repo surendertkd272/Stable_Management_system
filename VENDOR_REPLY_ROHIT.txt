@@ -1,0 +1,28 @@
+@~Rohit Fair question — let me explain why I shared those documents.
+
+*Why I sent them:* our client's brief is *12 monitoring points* per horse. My understanding was that Sparsh would be providing the hardware for all 12, so I shared our requirements for the points the camera cannot cover, expecting you to tell me what Sparsh can supply.
+
+The camera covers a good part of the brief — body temperature, respiration and respiratory rate from the thermal side, plus the visible stream we run our own CV on for activity, resting, urination and excretion.
+
+But *4 points need hardware the camera cannot provide:*
+1. *Steps / locomotion + lameness* → leg-mounted *IMU tag* (accel + gyro)
+2. *Feeding — quantity, pattern, time* → *metered / weigh-back feeder*
+3. *Watering — quantity, pattern, time* → *flow meter or load-cell water vessel*
+4. *Stable vices + cough* → *stall microphone*
+
+Plus the *edge computer, PoE switch, UPS and 4G failover* per barn.
+
+Those 3 PDFs are simply our specifications for those items — not complaints, and nothing in them is aimed at Sparsh's camera.
+
+*So my actual question is:* can Sparsh supply any or all of these — either directly or through a partner? Or is Sparsh scoped to the *thermal camera only*, with the rest sourced by us?
+
+Either answer is completely fine. I just need to know so we either work with you on it or approach other suppliers. If you *can* supply, those documents already tell you exactly what we need.
+
+*On the ARM64 note — thank you, and it is not a problem.* We are not using your SDK at all. We integrated over *ISAPI (HTTP/JSON)* for ROI control and temperature, *Modbus/TCP* for readings, and *RTSP* for the IR / visible / fusion streams. All are network protocols, so they run natively on our Jetson with no vendor library. The ISAPI Web API document and Modbus spec you sent were exactly what we needed — that integration is written and tested on our side, so no engineering help is required from Sparsh.
+
+*The only thing still pending from Sparsh is the hardware* — the 2 evaluation units per the PO:
+• 1 × *25 mm thermal* + 4 mm visible
+• 1 × *13 mm thermal* + 4 mm visible
+• both *fixed focus factory-set to 3.5 m* (you confirmed focus is built to order, so please ensure this is on the build sheet)
+
+Could you share the expected dispatch date? Thanks for the support.

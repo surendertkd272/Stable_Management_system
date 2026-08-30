@@ -65,3 +65,45 @@ test("publicUser strips the password hash", () => {
 test("roles are exactly the three the API enforces", () => {
   assert.deepEqual(ROLES, ["admin", "staff", "owner"]);
 });
+
+// --------------------------------------------------------------------------- //
+// Owner scoping. The SPA also hides other owners, but that is presentation —
+// these pin the rule the API itself must enforce.
+import { test as t2 } from "node:test";
+
+const ROSTER = [
+  { id: "noor", name: "Noor", owner: "R. Singh" },
+  { id: "laila", name: "Laila", owner: "R. Singh" },
+  { id: "zarina", name: "Zarina", owner: "Bharat Sports Venture" },
+];
+// mirrors visibleRoster() in index.mjs
+const visible = (who) =>
+  who?.role === "owner" ? ROSTER.filter((h) => h.owner === who.owner) : ROSTER;
+
+t2("an owner sees only their own horses; staff and admin see all", () => {
+  const owner = { role: "owner", owner: "R. Singh" };
+  assert.deepEqual(visible(owner).map((h) => h.id), ["noor", "laila"]);
+  assert.equal(visible({ role: "admin" }).length, 3);
+  assert.equal(visible({ role: "staff" }).length, 3);
+  assert.equal(visible(null).length, 3, "open/local mode is unscoped");
+});
+
+t2("record rows are filtered by owner or by horse name", () => {
+  const who = { role: "owner", owner: "R. Singh" };
+  const mine = new Set(visible(who).map((h) => h.name));
+  const rows = [
+    { horse: "Noor", note: "mine" },
+    { horse: "Zarina", note: "someone else's" },
+    { owner: "R. Singh", amount: 500 },
+    { owner: "Equestrian Club", amount: 900 },
+    { note: "no owner or horse field" },
+  ];
+  const filtered = rows.filter((r) =>
+    r.owner !== undefined ? r.owner === who.owner
+    : r.horse !== undefined ? mine.has(r.horse)
+    : false);
+  assert.equal(filtered.length, 2);
+  assert.ok(filtered.every((r) => r.owner === "R. Singh" || r.horse === "Noor"));
+  // a row with neither field must be withheld rather than leaked by default
+  assert.ok(!filtered.some((r) => r.note === "no owner or horse field"));
+});

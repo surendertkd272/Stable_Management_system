@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Leaf, Wheat, Pill, Plus, X, Sun, Sunset, CloudSun, Infinity as InfinityIcon } from "lucide-react";
 import { FeedItem } from "../data/mock";
 import { useStable, useToast } from "../store";
+import { getHorseDetail } from "../data/api";
+import { Sparkline } from "../components/ui";
 import { Modal } from "../components/ui";
 
 const KIND_ICON: Record<FeedItem["kind"], React.ReactNode> = {
@@ -18,6 +20,9 @@ const SLOTS: { slot: FeedItem["slot"]; icon: React.ReactNode }[] = [
   { slot: "Free-choice", icon: <InfinityIcon size={16} /> },
 ];
 
+/** Last value of a series, 0 when empty. */
+const last = (a: number[]) => (a.length ? a[a.length - 1] : 0);
+
 export default function Feed() {
   const { horses, feed, addFeed, removeFeed } = useStable();
   const notify = useToast();
@@ -32,6 +37,30 @@ export default function Feed() {
 
   const horse = horses.find((h) => h.name === horseName) ?? horses[0];
   const mine = feed.filter((f) => f.horse === horse?.name);
+
+  // Planned rations are only half the picture. What the horse actually ATE —
+  // and especially what it refused — is the earliest illness signal we have,
+  // so surface the measured intake alongside the plan when sensors report it.
+  const [actual, setActual] = useState<{
+    intake: number[]; refusal: number[]; latestIntake?: number; latestRefusal?: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!horse) return;
+    let stop = false;
+    getHorseDetail(horse.id).then((d) => {
+      if (stop || !d) return;
+      const intake = d.charts?.feed_intake_g ?? [];
+      const refusal = d.charts?.feed_refusal_g ?? [];
+      if (!intake.some((v) => v > 0)) { setActual(null); return; }   // no feed sensor yet
+      setActual({
+        intake, refusal,
+        latestIntake: d.vitals?.feed_intake_g?.value,
+        latestRefusal: d.vitals?.feed_refusal_g?.value,
+      });
+    });
+    return () => { stop = true; };
+  }, [horse?.id]);
   const supplements = mine.filter((f) => f.kind === "supplement").length;
 
   const save = () => {
@@ -88,6 +117,45 @@ export default function Feed() {
           <span className="pill muted">{horse?.breed} · {horse?.sex}</span>
         </div>
       </div>
+
+      {/* Measured intake — only rendered when a feed sensor is actually
+          reporting. Refusal is the signal that matters clinically. */}
+      {actual && (
+        <div className="card" style={{ marginBottom: 22 }}>
+          <div className="card-head">
+            <h3>Measured intake</h3>
+            <span className="pill accent">from feeder</span>
+          </div>
+          <div className="grid cols-2" style={{ gap: 16 }}>
+            <div>
+              <p className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Eaten today</p>
+              <b style={{ fontSize: 22, color: "var(--ink)", fontFamily: "var(--font-display)" }}>
+                {(last(actual.intake) / 1000).toFixed(1)} kg
+              </b>
+              <Sparkline data={actual.intake} />
+            </div>
+            <div>
+              <p className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Refused today</p>
+              <b
+                style={{
+                  fontSize: 22,
+                  fontFamily: "var(--font-display)",
+                  color: last(actual.refusal) > 500 ? "var(--alert)" : "var(--ink)",
+                }}
+              >
+                {(last(actual.refusal) / 1000).toFixed(1)} kg
+              </b>
+              <Sparkline data={actual.refusal} type="bar" color="var(--alert)" />
+            </div>
+          </div>
+          {last(actual.refusal) > 500 && (
+            <p style={{ fontSize: 13, marginTop: 12, color: "var(--alert)" }}>
+              Refusal is above normal for {horse?.name} — a horse going off its feed is often
+              the earliest sign of illness. Worth a check.
+            </p>
+          )}
+        </div>
+      )}
 
       {mine.length === 0 && (
         <div className="card" style={{ textAlign: "center", padding: 48 }}>

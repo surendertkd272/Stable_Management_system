@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Heart, IndianRupee, Bell, FileText, CalendarClock, Lock } from "lucide-react";
 import { useStable } from "../store";
+import { useAuth } from "../auth";
 import { StatusPill, riskScore, riskBand } from "../components/ui";
 
 const inr = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
@@ -12,8 +13,18 @@ const fmtDate = (iso: string) =>
 export default function Portal() {
   const nav = useNavigate();
   const { horses, invoices, health, alerts } = useStable();
-  const owners = Array.from(new Set(horses.map((h) => h.owner)));
-  const [owner, setOwner] = useState(owners[0] ?? "");
+  const { user } = useAuth();
+
+  // A signed-in owner is pinned to their own record and cannot switch. The
+  // switcher previously "stood in for owner login" — now that owner accounts
+  // exist, leaving it live would let one owner read another's horses,
+  // invoices and health data.
+  const isOwnerAccount = user?.role === "owner";
+  const owners = isOwnerAccount
+    ? [user.owner ?? ""]
+    : Array.from(new Set(horses.map((h) => h.owner)));
+  const [selected, setSelected] = useState(owners[0] ?? "");
+  const owner = isOwnerAccount ? (user.owner ?? "") : selected;
 
   const myHorses = horses.filter((h) => h.owner === owner);
   const myNames = new Set(myHorses.map((h) => h.name));
@@ -28,7 +39,7 @@ export default function Portal() {
 
   return (
     <>
-      {/* "viewing as" owner switch — stands in for owner login */}
+      {/* Owner switcher — staff/admin only; an owner account is pinned to itself. */}
       <div className="card" style={{ marginBottom: 22 }}>
         <div className="flex between center wrap" style={{ gap: 12 }}>
           <div className="flex gap-md center">
@@ -38,16 +49,19 @@ export default function Portal() {
             <div>
               <b style={{ fontSize: 15, color: "var(--ink)" }}>Owner portal — read-only</b>
               <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
-                Each owner signs in to see only their own horses, reports and invoices. Preview the view here.
+                {isOwnerAccount
+                  ? "You are seeing only your own horses, reports and invoices."
+                  : "Each owner signs in to see only their own horses, reports and invoices. Preview that view here."}
               </p>
             </div>
           </div>
           <div className="flex gap-sm wrap">
-            {owners.map((o) => (
-              <button key={o} className={o === owner ? "btn-ghost accent" : "btn-ghost"} onClick={() => setOwner(o)}>
-                {o}
-              </button>
-            ))}
+            {!isOwnerAccount &&
+              owners.map((o) => (
+                <button key={o} className={o === owner ? "btn-ghost accent" : "btn-ghost"} onClick={() => setSelected(o)}>
+                  {o}
+                </button>
+              ))}
           </div>
         </div>
       </div>

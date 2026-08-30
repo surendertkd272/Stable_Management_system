@@ -159,15 +159,23 @@ const server = createServer(async (req, res) => {
         return json(res, 403, { error: "admin only" });
     }
 
+    // An owner account sees only its own horses. The SPA also hides other
+    // owners, but that is presentation — this is the actual access control.
+    const visibleRoster = () =>
+      who?.role === "owner" ? roster().filter((h) => h.owner === who.owner) : roster();
+
     if (path === "/api/horses" && method === "GET") {
       const all = store.allReadings();
-      return json(res, 200, roster().map((bio) => summarizeHorse(bio, all)));
+      return json(res, 200, visibleRoster().map((bio) => summarizeHorse(bio, all)));
     }
 
     const detail = path.match(/^\/api\/horses\/([^/]+)$/);
     if (detail && method === "GET") {
       const bio = bioById(detail[1]);
       if (!bio) return json(res, 404, { error: "unknown horse" });
+      // 404 rather than 403: do not confirm the existence of another owner's horse
+      if (who?.role === "owner" && bio.owner !== who.owner)
+        return json(res, 404, { error: "unknown horse" });
       const rd = store.readingsForHorse(bio.id);
       return json(res, 200, {
         ...summarizeHorse(bio, store.allReadings()),
@@ -177,12 +185,15 @@ const server = createServer(async (req, res) => {
           respiratory_rate_bpm: metricSeries(rd, "respiratory_rate_bpm", 7, "avg"),
           rest_hours: metricSeries(rd, "rest_minutes", 7, "sum").map((m) => +(m / 60).toFixed(1)),
           activity_index: metricSeries(rd, "activity_index", 7, "avg"),
+          feed_intake_g: metricSeries(rd, "feed_intake_g", 7, "sum"),
+          feed_refusal_g: metricSeries(rd, "feed_refusal_g", 7, "sum"),
+          water_ml: metricSeries(rd, "water_ml", 7, "sum"),
         },
       });
     }
 
     if (path === "/api/alerts" && method === "GET") {
-      const alerts = buildAlerts(roster(), store.allReadings(), store.isAcked);
+      const alerts = buildAlerts(visibleRoster(), store.allReadings(), store.isAcked);
       dispatch(alerts).catch((e) => console.error("[notify]", e.message));
       return json(res, 200, alerts);
     }
@@ -208,10 +219,18 @@ const server = createServer(async (req, res) => {
       const kind = crud[1], id = crud[2] ? decodeURIComponent(crud[2]) : null;
       const spec = KINDS[kind];
 
-      if (method === "GET" && !id)
-        return json(res, 200, kind === "users"
-          ? store.list(kind).map(publicUser)
-          : store.list(kind));
+      if (method === "GET" && !id) {
+        if (kind === "users") return json(res, 200, store.list(kind).map(publicUser));
+        let rows = store.list(kind);
+        if (who?.role === "owner") {
+          const mine = new Set(visibleRoster().map((h) => h.name));
+          rows = rows.filter((r) =>
+            r.owner !== undefined ? r.owner === who.owner
+            : r.horse !== undefined ? mine.has(r.horse)
+            : false);      // collections with neither field are not owner-scoped
+        }
+        return json(res, 200, rows);
+      }
 
       if (method === "POST" && !id) {
         let body;
