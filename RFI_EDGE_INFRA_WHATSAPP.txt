@@ -2,6 +2,8 @@ Hi — we're building a 24/7 monitoring system for stabled horses (Bharat Sports
 
 *Important — what we are NOT buying.* Our software is already built and running: camera driver (the camera speaks HTTP/JSON + Modbus, so it's pure Python on ARM64 — no SDK wrapper needed), edge agent, data pipeline, alerting engine, web app, and all CV/DSP models. We need the *hardware platform, barn infrastructure and installation* — please don't price the software.
 
+*Scope — please size to this, not to a fleet.* This is a *single-client, single-site* system: one facility, one on-premise deployment. It is NOT multi-tenant or SaaS, and we are not building a multi-site fleet. Please don't quote for tenant isolation, central multi-site management or cloud fleet orchestration — we don't want them. We need *one* site running reliably, with remote support for the few boxes at that site.
+
 *Pass/fail for us:*
 1. *NVIDIA Jetson (ARM64)* based platform, Ubuntu 22.04+ / current JetPack — our whole stack is aarch64.
 2. *All processing/storage on-premise in India*; any cloud sync to an India region only (e.g. GCP asia-south1), including OTA/telemetry. Please send a data-flow diagram naming every egress point + region.
@@ -19,9 +21,9 @@ Hi — we're building a 24/7 monitoring system for stabled horses (Bharat Sports
 8. *UPS sizing* — VA/Wh for stated ride-through, clean shutdown (no DB corruption), auto-restart. Total barn wattage at N stalls?
 9. *Camera mounting:* we need the horse's head in frame at ~3.5 m; the thermal lens is in focus only ~3.0–4.3 m. Can you survey/mount to hold that, with *impact-protected or recessed mounts*? (The camera has no published IK rating and horses will contact it.)
 10. *Time discipline* — how is the box's clock kept accurate (NTP/PTP/GPS), and can it act as an *NTP/PTP server* for the cameras and sensors on the barn LAN? All our cross-sensor fusion depends on this.
-11. *Fleet/OTA* — platform (Balena/Mender/other), staged rollout with auto-rollback, health telemetry, and recovering a bricked box *without a site visit*.
+11. *Remote update/recovery* for the few boxes at this one site — OS/container updates, auto-rollback on a failed update, and recovering a bricked box *without a site visit*. (Not asking for multi-site fleet orchestration.)
 12. *Edge security* — full-disk encryption, secure boot, TPM/secure-element keys, per-device certs. Nothing readable in plaintext if a box is stolen from a barn.
-13. *Multi-tenant isolation* — we'll run multiple client sites; a compromised box must not reach another site's data.
+13. *Credential handling* — how are per-device keys provisioned and rotated, and what's the blast radius if a box is stolen from a barn?
 14. *Per-site BoM* (edge box + switch + router + UPS + enclosure + cabling + mounts) at 8, 16 and 24 stalls.
 15. *Boundary + support* — exactly what you deliver vs what we build, acceptance tests, *RMA turnaround in India*, support SLA for remote barns.
 

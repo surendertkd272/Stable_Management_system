@@ -19,6 +19,11 @@
 > | `RFI_MICROPHONE` | 🔁 **Superseded** | `RFI_MICROPHONE.md` → `pdf/RFI_MICROPHONE.pdf` |
 > | `RFI_EDGE_INFRA` box & integration | ⚠️ **Partly obsolete** — see warning below | `RFI_EDGE_INFRA.md` → `pdf/RFI_EDGE_INFRA.pdf` |
 >
+> **Scope correction:** this document repeatedly asks about **multi-tenant isolation and
+> multi-site fleet management**. That is no longer in scope — the system is
+> **single-client, single-site, not SaaS**. Do not ask a vendor to quote for tenant
+> separation or cross-site orchestration.
+>
 > **§6 obsolete items — do not ask a vendor to quote for these:**
 > - *"Camera SDK is C/C++/C# only (no Python) — who builds the native wrapper?"* — **no wrapper
 >   is needed.** The camera exposes an HTTP/JSON API (ISAPI) plus Modbus/TCP; the driver is

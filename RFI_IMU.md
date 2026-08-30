@@ -181,7 +181,7 @@ Please answer with **specific values / part numbers**, not "yes — supported".
     **Reply:**
 
 25. **Fleet management** — firmware OTA, battery/health monitoring, remote configuration, and
-    tenant isolation if you host anything.
+    and what data (if any) passes through systems you host.
     **Reply:**
 
 ## 9. Evaluation

@@ -94,6 +94,21 @@ reappear on reload.
 that the store owns it. This is what makes a horse added in the UI actually monitored —
 previously the rollup only ever saw the seed file, so a new horse got no alerts at all.
 
+## Deployment shape — single client, single site
+
+**This is not a SaaS product.** One client, one facility, one on-premise deployment that
+the client owns. There is deliberately **no tenant concept anywhere in the code**: no
+`tenantId` on readings, no tenant tables, no cross-site fleet management.
+
+That is a decision, not an omission. Adding multi-tenancy later would be a real
+architectural change (row-level scoping on every query, key isolation, per-tenant
+retention) — but building it now would cost complexity for a second client that does not
+exist, and would complicate the DPDP story rather than simplify it.
+
+**Multi-owner is not multi-tenant, and we do need it.** One stable has many horse
+*owners*, which is why `owner` accounts and the Portal exist. That scoping is real and
+enforced server-side — see below.
+
 ## Authentication
 
 Earlier the SPA sent a shared `VITE_API_TOKEN`. Vite **compiles env vars into the

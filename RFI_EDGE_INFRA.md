@@ -55,6 +55,14 @@ computer**, PoE network, 4G failover and UPS.
 it, and installation/commissioning. If you also offer software services, say so separately —
 but please do not price the items listed above.
 
+**Deployment shape — please size to this, not to a fleet.** This is a **single-client,
+single-site** system: one facility, one on-premise deployment, owned and operated by that
+client. It is **not** a multi-tenant or SaaS product, and we are not building a
+multi-site fleet. Please do not quote for tenant isolation, central multi-site
+management, or cloud fleet orchestration — we do not want them and will not pay for
+them. What we do need is that **one** site running reliably and securely, and remote
+support for **a small number of boxes at that one site**.
+
 ## 2. Hard requirements — please confirm these first
 
 Pass/fail. If any cannot be met, say so plainly rather than leaving it blank.
@@ -168,17 +176,19 @@ Pass/fail. If any cannot be met, say so plainly rather than leaving it blank.
     *All cross-sensor fusion depends on this.*
     **Reply:**
 
-18. **Fleet management / OTA across sites** — platform (Balena / Mender / other), OS and
-    container updates, staged or canary rollout with **automatic rollback**, health telemetry,
-    remote reboot, and recovery of a bricked box **without a site visit**.
+18. **Remote update and recovery** — for the handful of boxes at this one site: how are OS and
+    container updates applied, is there **automatic rollback** on a failed update, and can a
+    bricked box be recovered **without a site visit**? *We are not asking for multi-site fleet
+    orchestration — just that these boxes can be maintained remotely.*
     **Reply:**
 
 19. **Edge security** — full-disk encryption, secure boot, TPM or secure-element key storage,
     per-device certificates. Nothing recoverable in plaintext if a box is stolen from a barn.
     **Reply:**
 
-20. **Multi-tenant isolation** — we will run multiple client sites. Per-site credential and key
-    isolation, such that a stolen or compromised box cannot read or write another site's data.
+20. **Credential handling** — how are per-device credentials and keys provisioned and rotated,
+    and what is the blast radius if one box is stolen from a barn? *Single site, single client —
+    we are asking about device security, not tenant separation.*
     **Reply:**
 
 ## 8. Deployment model and boundary
@@ -225,4 +235,5 @@ why, so we can factor it in rather than assume the worst.*
 
 *Commercial terms are not part of this RFI — we will discuss those separately once the
 technical fit is confirmed. Note that our software stack is already built and running; we are
-looking for the platform and infrastructure to deploy it on, not a software rebuild.*
+looking for the platform and infrastructure to deploy it on, not a software rebuild — and for
+**one site**, not a fleet.*

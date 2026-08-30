@@ -109,7 +109,8 @@ A **single-stall (scalable to 2) test rig** that captures all 12 data streams an
 - **Local NVMe storage** (retention) with power-loss protection; **offline buffer + auto-resync**.
 - **Managed PoE switch** (cameras ≤6 W each, headroom), **dual-SIM 4G failover**, **UPS** (clean shutdown).
 - **Time-sync service** (aligns all sensors, compensates camera's lack of sync); **horse-identity service** (stall→horse).
-- **Data-contract emitter** → GCP **asia-south1**; multi-tenant tagging.
+- **Data-contract emitter** → GCP **asia-south1**. Single-client, single-site: no tenant
+  tagging (see ARCHITECTURE.md — this is not a SaaS product).
 - **Enclosure** rated for barn (dust/heat/humidity), fanless or filtered.
 **Prototype:** 1 edge box provisioned for the 1–2 stall rig.
 
