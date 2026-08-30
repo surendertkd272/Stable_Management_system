@@ -128,27 +128,18 @@ the API at all and runs purely on mock data.
 box can be brought up before credentials are distributed. **Set it before the
 network is anything but a closed lab VLAN.**
 
-## Access control
+### Owner scoping
 
-Sign-in issues a per-user session; there is no shared secret in the browser.
-(`VITE_API_TOKEN` used to be compiled into the JS bundle, so anyone with devtools
-had full API access — that is gone.)
+An `owner` account sees **only its own horses**, and this is enforced
+**server-side** — `/api/horses`, `/api/horses/:id`, `/api/alerts` and every record
+collection filter by owner. The Portal page also hides its owner switcher for an
+owner account, but that is presentation; the API is the access control. (That
+switcher's own comment described it as "standing in for owner login" — once owner
+accounts existed, leaving it live would have let one owner read another's data.)
 
-| Role | Can |
-|---|---|
-| `admin` | everything, including user accounts |
-| `staff` | full read/write on horses and records |
-| `owner` | **read-only, and only their own horses** |
-
-Owner scoping is enforced **server-side** — `/api/horses`, `/api/horses/:id`,
-`/api/alerts` and every record collection filter by owner. The Portal page also
-hides the owner switcher for an owner account, but that is presentation; the API
-is the access control. Requesting another owner's horse returns **404, not 403**,
-so the response does not confirm that the horse exists.
-
-First boot creates an admin and prints a generated password once
-(`ADMIN_USER` / `ADMIN_PASSWORD` to choose them). With no users and no
-`AUTH_API_TOKEN`, the API stays open — the local demo posture.
+Requesting another owner's horse returns **404, not 403**, so the response does not
+confirm the horse exists. A record row carrying neither an `owner` nor a `horse`
+field is withheld rather than leaked by default.
 
 ## Notifications
 
