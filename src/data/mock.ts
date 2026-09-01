@@ -18,10 +18,14 @@ export interface Horse {
   photo: string;
   status: Status;
   statusNote: string;
-  rest: string; // daily rest
-  water: number; // visits
-  outside: string; // time outside box
-  stress: "Low" | "Medium" | "High";
+  // null = nothing measures this on this install (e.g. a camera-only barn with
+  // no IMU or flow meter). Distinct from a measured zero, which is a finding.
+  rest: string | null; // daily rest
+  water: number | null; // visits
+  outside: string | null; // time outside box
+  stress: "Low" | "Medium" | "High" | null;
+  /** metric keys with no sensor here, from /api/horses */
+  uninstrumented?: string[];
   baselineProgress: number; // 0-100
   // present when served by the backend; absent on mock data (treated as "live")
   monitoring?: Monitoring;

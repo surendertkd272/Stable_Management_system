@@ -189,7 +189,7 @@ export default function HorseDetail() {
         <MetricCard
           icon={<Droplet size={18} />}
           label="Water visits"
-          value={String(horse.water)}
+          value={horse.water === null ? null : String(horse.water)}
           delta={-6}
           spark={series.water}
           type="bar"
@@ -245,11 +245,26 @@ export default function HorseDetail() {
         <div className="card">
           <div className="card-head">
             <h3>Stress level</h3>
-            <span className={`pill ${horse.stress === "High" ? "alert" : horse.stress === "Medium" ? "warn" : "ok"}`}>
-              {horse.stress}
+            <span
+              className={`pill ${
+                horse.stress === null
+                  ? "muted"
+                  : horse.stress === "High"
+                    ? "alert"
+                    : horse.stress === "Medium"
+                      ? "warn"
+                      : "ok"
+              }`}
+            >
+              {horse.stress ?? "not measured"}
             </span>
           </div>
-          <RadialGauge value={stressVal} display={horse.stress} label="5-min macro-movement" color={stressColor} />
+          <RadialGauge
+            value={horse.stress === null ? 0 : stressVal}
+            display={horse.stress ?? "—"}
+            label={horse.stress === null ? "needs activity sensor" : "5-min macro-movement"}
+            color={horse.stress === null ? "var(--text-secondary)" : stressColor}
+          />
         </div>
 
         {/* baseline learning */}
@@ -385,24 +400,40 @@ function MetricCard({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: string;
+  value: string | null;
   delta: number;
-  spark: number[];
+  spark: (number | null)[];
   type?: "line" | "bar";
   color?: string;
 }) {
+  // No sensor for this metric here. Show that plainly instead of a number:
+  // a "0h 00m" rest figure would describe a horse that never lay down.
+  const measured = value !== null && value !== undefined;
   return (
     <div className="card stat">
       <div className="top">
         <div className="chip sm">{icon}</div>
-        <Delta value={delta} />
+        {measured && <Delta value={delta} />}
       </div>
-      <div className="value" style={{ fontSize: 30, marginTop: 12 }}>
-        {value}
+      <div
+        className="value"
+        style={{
+          fontSize: measured ? 30 : 17,
+          marginTop: 12,
+          color: measured ? undefined : "var(--text-secondary)",
+        }}
+      >
+        {measured ? value : "Not measured"}
       </div>
       <div className="foot">
         <span className="label">{label}</span>
-        <Sparkline data={spark} type={type} color={color} w={70} h={28} />
+        {measured ? (
+          <Sparkline data={spark as number[]} type={type} color={color} w={70} h={28} />
+        ) : (
+          <span className="muted" style={{ fontSize: 11 }}>
+            no sensor
+          </span>
+        )}
       </div>
     </div>
   );

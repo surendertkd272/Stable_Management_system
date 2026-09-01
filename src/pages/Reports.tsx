@@ -33,9 +33,9 @@ export default function Reports() {
       `${horse.name} — ${range}-day vet-ready report`,
       `${horse.breed} · ${horse.sex} · Stall ${horse.stall} · Owner: ${horse.owner}`,
       ``,
-      `Avg rest / night:        ${horse.rest}`,
-      `Avg water visits / day:  ${horse.water}`,
-      `Avg time outside box:    ${horse.outside}`,
+      `Avg rest / night:        ${horse.rest ?? "not measured (no sensor)"}`,
+      `Avg water visits / day:  ${horse.water ?? "not measured (no sensor)"}`,
+      `Avg time outside box:    ${horse.outside ?? "not measured (no sensor)"}`,
       `Stress episodes (${range}d):   ${horse.status === "urgent" ? 5 : 1}`,
       ``,
       horse.status === "urgent"
@@ -145,7 +145,7 @@ export default function Reports() {
 
       <div className="grid cols-2" style={{ marginBottom: 24 }}>
         <ReportMetric icon={<Moon size={18} />} label="Avg rest / night" value={horse.rest} note="Stable, within baseline" spark={series.rest} />
-        <ReportMetric icon={<Droplet size={18} />} label="Avg water visits / day" value={String(horse.water)} note={range === "30" ? "Slight dip mid-month" : "Consistent"} spark={series.water} type="bar" />
+        <ReportMetric icon={<Droplet size={18} />} label="Avg water visits / day" value={horse.water === null ? null : String(horse.water)} note={range === "30" ? "Slight dip mid-month" : "Consistent"} spark={series.water} type="bar" />
         <ReportMetric icon={<Sun size={18} />} label="Avg time outside box" value={horse.outside} note="Good turnout activity" spark={series.outside} />
         <ReportMetric icon={<Activity size={18} />} label="Stress episodes" value={horse.status === "urgent" ? "5" : "1"} note={`${range}-day total`} spark={series.alerts} type="bar" color="var(--alert)" />
       </div>
@@ -156,8 +156,19 @@ export default function Reports() {
           <span className="pill muted">Context, not diagnosis</span>
         </div>
         <p style={{ fontSize: 14, lineHeight: 1.7, color: "var(--ink-soft)" }}>
-          Over the last {range} days, {horse.name} maintained an average nightly rest of {horse.rest} and{" "}
-          {horse.water} water-area visits per day. Time outside the box averaged {horse.outside}.{" "}
+          Over the last {range} days,{" "}
+          {horse.rest === null && horse.water === null && horse.outside === null ? (
+            <>
+              {horse.name} was monitored by camera only — rest, water and turnout have no sensor
+              on this install and are not reported here.
+            </>
+          ) : (
+            <>
+              {horse.name} maintained an average nightly rest of {horse.rest ?? "—"} and{" "}
+              {horse.water ?? "—"} water-area visits per day. Time outside the box averaged{" "}
+              {horse.outside ?? "—"}.
+            </>
+          )}{" "}
           {horse.status === "urgent"
             ? "An elevated cluster of restlessness and lying-up cycling was recorded overnight and flagged as a possible early colic pattern — clinical assessment recommended."
             : "All behavioural signals stayed within this horse's learned baseline, with no incident-level deviations."}{" "}
@@ -179,9 +190,9 @@ function ReportMetric({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: string;
+  value: string | null;
   note: string;
-  spark: number[];
+  spark: (number | null)[];
   type?: "line" | "bar";
   color?: string;
 }) {
@@ -194,13 +205,23 @@ function ReportMetric({
             {label}
           </span>
         </div>
-        <Sparkline data={spark} type={type} color={color} w={80} h={30} />
+        {/* an all-null series has nothing to plot — a flat zero line would
+            read as a real measured trend of nothing */}
+        {value !== null && <Sparkline data={spark as number[]} type={type} color={color} w={80} h={30} />}
       </div>
-      <div style={{ fontFamily: "var(--font-display)", fontSize: 32, fontWeight: 700, color: "var(--ink)", marginTop: 14 }}>
-        {value}
+      <div
+        style={{
+          fontFamily: "var(--font-display)",
+          fontSize: value === null ? 18 : 32,
+          fontWeight: 700,
+          color: value === null ? "var(--text-secondary)" : "var(--ink)",
+          marginTop: 14,
+        }}
+      >
+        {value ?? "Not measured"}
       </div>
       <span className="muted" style={{ fontSize: 12.5 }}>
-        {note}
+        {value === null ? "no sensor for this point yet" : note}
       </span>
     </div>
   );

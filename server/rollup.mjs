@@ -3,6 +3,8 @@
 // health/behaviour summaries and alerts. Clinical thresholds are resting-horse
 // screening-grade (the camera is +-2 C), tune with vet input + learned baselines.
 
+import { METRICS, SOURCE_STATUS } from "./contract.mjs";
+
 const DAY_MS = 24 * 3600 * 1000;
 const BASELINE_TARGET_DAYS = 14;
 
@@ -142,6 +144,28 @@ function statusFromChecks(checks) {
   return "calm";
 }
 
+/** Metrics this horse has no sensor for at all.
+ *
+ *  A metric counts as uninstrumented when the hardware for its source is still
+ *  pending AND nothing has ever arrived for this horse. The second half matters:
+ *  the simulator emits all 12 points, so simulated horses keep their real
+ *  values — only a genuinely un-sensed metric goes null.
+ *
+ *  Why this exists: on a camera-only install nothing feeds rest, water or time
+ *  outside, and reporting those as 0 renders a horse that never lay down and
+ *  drank nothing — an animal in crisis, or software that looks broken. Neither
+ *  is true, and a vet acting on it would be acting on a number we invented.
+ *  Same rule as the monitoring-gap net: absence of measurement must never be
+ *  displayed as a measurement.
+ */
+function uninstrumented(rd) {
+  const seen = new Set(rd.map((r) => r.metric));
+  const out = new Set();
+  for (const [key, m] of Object.entries(METRICS))
+    if (SOURCE_STATUS[m.source] !== "available" && !seen.has(key)) out.add(key);
+  return out;
+}
+
 function stressLevel(rd) {
   const act = rd.filter((r) => r.metric === "activity_index" && within(r, DAY_MS)).map((r) => r.value);
   const vices = countToday(rd, "vice_event");
@@ -171,15 +195,20 @@ export function summarizeHorse(bio, allReadings) {
   const status = statusFromChecks(checks);
   const top = checks.find((c) => c.severity === "alert") || checks.find((c) => c.severity === "warn");
   const seen = lastSeenMs(rd);
+  const gaps = uninstrumented(rd);
 
   return {
     ...bio,
     status,
     statusNote: top ? top.detail.split(" — ")[0].slice(0, 80) : "Within learned baseline",
-    rest: fmtHM(sumToday(rd, "rest_minutes")),
-    water: countToday(rd, "water_visit") || Math.round(sumToday(rd, "water_ml") / 4000) || 0,
-    outside: fmtHM(sumToday(rd, "outside_minutes")),
-    stress: stressLevel(rd),
+    // null = we do not measure this here, distinct from 0 = measured, none.
+    rest: gaps.has("rest_minutes") ? null : fmtHM(sumToday(rd, "rest_minutes")),
+    water: gaps.has("water_ml") && gaps.has("water_visit") ? null
+      : countToday(rd, "water_visit") || Math.round(sumToday(rd, "water_ml") / 4000) || 0,
+    outside: gaps.has("outside_minutes") ? null : fmtHM(sumToday(rd, "outside_minutes")),
+    stress: gaps.has("activity_index") && gaps.has("vice_event") ? null : stressLevel(rd),
+    // what the UI should render as "not measured" rather than as a value
+    uninstrumented: [...gaps].sort(),
     baselineProgress: Math.min(100, Math.round((distinctDays(rd) / BASELINE_TARGET_DAYS) * 100)),
     // data-freshness (extra fields; the SPA's Horse type ignores unknown keys)
     lastSeen: seen === null ? null : new Date(seen).toISOString(),
@@ -230,12 +259,16 @@ export function buildSeries(roster, allReadings, span = 7) {
   const per = (fn) => days.map((d) => fn(d));
   const onDay = (metric, d) => allReadings.filter((r) => r.metric === metric && dayKey(r.ts) === d);
   const nHorses = roster.length || 1;
+  // Same rule as the horse cards: a line nobody measures is a gap in the
+  // chart, not a flat zero — a zero line reads as a real, alarming trend.
+  const gaps = uninstrumented(allReadings);
+  const orNull = (metric, fn) => (gaps.has(metric) ? days.map(() => null) : per(fn));
 
   return {
     monitored: per((d) => new Set(allReadings.filter((r) => dayKey(r.ts) === d).map((r) => r.horseId)).size),
-    rest:      per((d) => +(onDay("rest_minutes", d).reduce((a, r) => a + r.value, 0) / 60 / nHorses).toFixed(1)),
-    water:     per((d) => Math.round(onDay("water_visit", d).length / nHorses)),
-    outside:   per((d) => +(onDay("outside_minutes", d).reduce((a, r) => a + r.value, 0) / 60 / nHorses).toFixed(1)),
+    rest:      orNull("rest_minutes", (d) => +(onDay("rest_minutes", d).reduce((a, r) => a + r.value, 0) / 60 / nHorses).toFixed(1)),
+    water:     orNull("water_visit", (d) => Math.round(onDay("water_visit", d).length / nHorses)),
+    outside:   orNull("outside_minutes", (d) => +(onDay("outside_minutes", d).reduce((a, r) => a + r.value, 0) / 60 / nHorses).toFixed(1)),
     alerts:    per((d) => onDay("vice_event", d).length + onDay("urination_event", d).length), // placeholder proxy
   };
 }

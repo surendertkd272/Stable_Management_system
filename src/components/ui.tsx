@@ -188,9 +188,13 @@ export const statusColor = (s: Status) =>
   s === "urgent" ? "var(--alert)" : s === "watch" ? "var(--warn)" : "var(--positive)";
 
 /* ---------- predictive risk (heuristic model placeholder) ---------- */
-export function riskScore(h: { status: Status; stress: string; name: string }): number {
+export function riskScore(h: { status: Status; stress: string | null; name: string }): number {
   const base = h.status === "urgent" ? 55 : h.status === "watch" ? 30 : 8;
-  const stress = h.stress === "High" ? 30 : h.stress === "Medium" ? 15 : 4;
+  // Unmeasured stress contributes nothing rather than scoring as "Low": with no
+  // activity sensor we have no evidence either way, and quietly crediting the
+  // horse as calm is how an unmonitored animal ends up looking healthy.
+  const stress =
+    h.stress === null ? 0 : h.stress === "High" ? 30 : h.stress === "Medium" ? 15 : 4;
   const jitter = h.name.charCodeAt(0) % 7; // stable per-horse variation
   return Math.min(99, base + stress + jitter);
 }

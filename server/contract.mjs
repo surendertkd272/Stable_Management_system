@@ -29,9 +29,17 @@ export const METRICS = {
 // Which of the 12 points can we actually source *today* (camera only) vs. need
 // hardware still being procured. Surfaced via /api/coverage so the UI/roadmap
 // can show honest "live | simulated | manual" state per point.
+// Three states, because "we own the sensor" and "we can produce this number"
+// are not the same claim and collapsing them overstates what is ready:
+//   available     — sensor in hand AND we can derive the metric today
+//   model-pending — sensor in hand, but the CV model that turns pixels into
+//                   this metric does not exist yet (needs labelled footage)
+//   pending       — the sensor itself is not procured
+// Anything other than "available" means no data will arrive, so the rollup
+// reports those metrics as "not measured" rather than as zero.
 export const SOURCE_STATUS = {
-  thermal_camera: "available",   // camera in hand — points 2,3,4 (and optical CV for 5,6,8,11,12 pending models)
-  optical:        "available",   // same camera visible stream (needs our CV models + labelled data)
+  thermal_camera: "available",   // camera in hand — points 2,3,4 measured directly off thermometry
+  optical:        "model-pending", // same camera's visible stream, but points 6/11/12 need our CV models
   optical_audio:  "pending",     // microphone RFI not yet placed
   imu:            "pending",     // IMU leg tag RFI not yet placed
   imu_optical:    "pending",     // fused IMU+optical

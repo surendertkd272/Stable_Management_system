@@ -176,16 +176,23 @@ function CoverageCard() {
   if (!rows || rows.length === 0) return null;
 
   // group metrics under their monitoring point
-  const points = new Map<number, { labels: string[]; available: boolean; sources: Set<string> }>();
+  const points = new Map<
+    number,
+    { labels: string[]; available: boolean; modelPending: boolean; sources: Set<string> }
+  >();
   for (const r of rows) {
-    const p = points.get(r.point) ?? { labels: [], available: false, sources: new Set<string>() };
+    const p =
+      points.get(r.point) ??
+      { labels: [], available: false, modelPending: false, sources: new Set<string>() };
     p.labels.push(r.label);
     if (r.status === "available") p.available = true;
+    if (r.status === "model-pending") p.modelPending = true;
     p.sources.add(r.source.replace(/_/g, " "));
     points.set(r.point, p);
   }
   const ordered = [...points.entries()].sort((a, b) => a[0] - b[0]);
   const liveCount = ordered.filter(([, p]) => p.available).length;
+  const modelCount = ordered.filter(([, p]) => !p.available && p.modelPending).length;
 
   return (
     <div className="card" style={{ gridColumn: "1 / -1" }}>
@@ -193,11 +200,14 @@ function CoverageCard() {
         <h3>Monitoring coverage</h3>
         <span className="pill accent">
           {liveCount} of {ordered.length} points sourced
+          {modelCount > 0 && ` · ${modelCount} awaiting model`}
         </span>
       </div>
       <p className="muted" style={{ fontSize: 13, marginTop: -4, marginBottom: 14 }}>
-        Which of the 12 monitoring points have a live data source today. Pending points are
-        waiting on sensor procurement — the software already carries their data.
+        Which of the 12 monitoring points have a live data source today. "Model" means the
+        camera is installed but the vision model for that point still needs labelled footage;
+        "pending" means the sensor itself is not procured yet. The software already carries
+        the data for all of them.
       </p>
       <div className="grid cols-2" style={{ gap: 10 }}>
         {ordered.map(([point, p]) => (
@@ -212,6 +222,10 @@ function CoverageCard() {
               {p.available ? (
                 <>
                   <CheckCircle2 size={13} /> live
+                </>
+              ) : p.modelPending ? (
+                <>
+                  <Clock size={13} /> model
                 </>
               ) : (
                 <>

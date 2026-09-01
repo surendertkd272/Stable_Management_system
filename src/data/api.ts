@@ -112,7 +112,9 @@ export interface CoverageRow {
   metric: string;
   label: string;
   source: string;
-  status: "available" | "pending";
+  // "model-pending" = camera is installed, but the CV model for this point
+  // is not trained yet. Distinct from "pending", where there is no sensor.
+  status: "available" | "model-pending" | "pending";
 }
 export const getCoverage = () => get<CoverageRow[]>("/api/coverage");
 
