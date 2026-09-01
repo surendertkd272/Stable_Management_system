@@ -34,8 +34,6 @@ const store = await createStore();
 // The roster is DATA, not a frozen file: seeded from roster.json on first boot,
 // then owned by the store. This is what makes a horse added in the UI actually
 // get monitored — previously the rollup only ever saw the seed file.
-store.seed("horses", SEED_ROSTER);
-ensureAdmin(store);   // first boot only; prints a generated password once
 const roster = () => store.list("horses");
 
 // Record kinds the SPA can create/update/delete. Each is a plain collection;
@@ -343,7 +341,22 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// A process that cannot bind the port must not touch the shared state file on
+// its way out. Seeding and first-admin creation used to run before listen(), so
+// starting a second instance by mistake would mutate the store the LIVE server
+// is using — creating a second admin and racing its writes. Bind first; only a
+// server that is actually serving is allowed to write.
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE")
+    console.error(`[equicare-server] port ${PORT} is already in use — another instance is `
+      + `running. Not starting, and not touching ${store.backend} state.`);
+  else console.error(`[equicare-server] listen failed:`, err.message);
+  process.exit(1);
+});
+
 server.listen(PORT, "127.0.0.1", () => {
+  store.seed("horses", SEED_ROSTER);
+  ensureAdmin(store);   // first boot only; prints a generated password once
   const s = store.statsSummary();
   console.log(`[equicare-server] http://127.0.0.1:${PORT}  store=${s.backend}  auth=${API_TOKEN ? "on" : "open"}`);
   console.log(`  roster: ${roster().length} horses · ${JSON.stringify(s)}`);
