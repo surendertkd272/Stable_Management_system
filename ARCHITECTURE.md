@@ -201,6 +201,35 @@ Unset ⇒ open. On a rejected flush the edge agent **keeps readings queued** (ve
 - **No visible↔thermal mapping** exposed — detect on the thermal/fusion stream, not by mapping from visible.
 - **ROI moves are config writes** (a few Hz, not 25 Hz) — fine for a resting horse.
 
+## Camera bench testing
+
+When an eval unit arrives, in order:
+
+```bash
+# 1. does it answer at all — login, capabilities, ROI set/read, Modbus cross-check
+python3 sparsh_camera_smoketest.py 192.168.1.102 admin 'PW'
+
+# 2. what are the streams REALLY (codec / resolution / fps — not the datasheet)
+python3 tools/camera_capture.py 192.168.1.102 --pass 'PW' --probe
+
+# 3. stills, plus the appended per-pixel temperature block
+python3 tools/camera_capture.py 192.168.1.102 --pass 'PW' --radiometric
+
+# 4. a capture session: all three streams + a synchronised temperature track
+python3 tools/camera_capture.py 192.168.1.102 --pass 'PW' --session 300 --horse zarina
+
+# 5. drive the live pipeline into the backend
+python3 edge/edge_agent.py --camera 192.168.1.102 --pass 'PW' --horse zarina --live
+```
+
+Step 4 is the one that unblocks the rest of the project: points 5, 6, 8, 11 and 12
+need **trained CV models**, and those need labelled footage. `--session` writes the
+video plus a temperature track and a manifest into one folder — the raw material a
+labelling pass works from.
+
+Uses **ffmpeg** rather than OpenCV (nothing to build on the Jetson) and copies the
+codec rather than re-encoding, so recording costs almost no CPU.
+
 ## Camera protocol
 
 The camera is driven entirely over documented network protocols — ISAPI (HTTP/JSON),
