@@ -54,13 +54,13 @@ def need_ffmpeg():
 
 
 # --------------------------------------------------------------------------- #
-def probe(ip, user, pw):
+def probe(ip, user, pw, http_port=80, rtsp_port=554):
     """Report what each stream actually is — not what the datasheet claims."""
     if not shutil.which("ffprobe"):
         sys.exit("ffprobe not found (ships with ffmpeg)")
     print(f"{'stream':9} {'codec':7} {'resolution':12} {'fps':>6}  status")
     for name, q in STREAMS.items():
-        url = rtsp_url(ip, q, user, pw)
+        url = rtsp_url(ip, q, user, pw, port=rtsp_port)
         try:
             out = subprocess.run(
                 ["ffprobe", "-v", "error", "-rtsp_transport", "tcp",
@@ -84,7 +84,7 @@ def probe(ip, user, pw):
             print(f"{name:9} {'-':7} {'-':12} {'-':>6}  {e}")
 
 
-def record(ip, user, pw, seconds, outdir, streams=None):
+def record(ip, user, pw, seconds, outdir, streams=None, rtsp_port=554):
     """Record each stream with ffmpeg. Copies the codec — no re-encode, so the
     Jetson stays free and the footage is exactly what the camera produced."""
     need_ffmpeg()
@@ -94,7 +94,7 @@ def record(ip, user, pw, seconds, outdir, streams=None):
         dest = outdir / f"{name}.mp4"
         p = subprocess.Popen(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp",
-             "-i", rtsp_url(ip, q, user, pw), "-t", str(seconds),
+             "-i", rtsp_url(ip, q, user, pw, port=rtsp_port), "-t", str(seconds),
              "-c", "copy", "-movflags", "+faststart", "-y", str(dest)],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         procs.append((name, dest, p))
@@ -155,7 +155,7 @@ def snapshot(cam, outdir, radiometric=False):
 
 
 # --------------------------------------------------------------------------- #
-def session(ip, user, pw, seconds, horse, outroot):
+def session(ip, user, pw, seconds, horse, outroot, http_port=80, rtsp_port=554):
     """Record every stream while sampling temperatures, then write a manifest.
 
     This is the capture that matters: video plus a synchronised temperature
@@ -167,7 +167,7 @@ def session(ip, user, pw, seconds, horse, outroot):
     outdir.mkdir(parents=True, exist_ok=True)
     print(f"\nsession -> {outdir}\n")
 
-    cam = IsapiClient(ip, user, pw)
+    cam = IsapiClient(ip, user, pw, port=http_port)
     if not cam.login():
         sys.exit("camera login failed")
 
@@ -177,7 +177,19 @@ def session(ip, user, pw, seconds, horse, outroot):
     except Exception as e:
         print(f"  ! could not read device info: {e}")
 
-    procs = record(ip, user, pw, seconds, outdir)
+    procs = record(ip, user, pw, seconds, outdir, rtsp_port=rtsp_port)
+
+    # No ROI configured means query_temps returns nothing, and we would record
+    # a whole barn session whose temperature track is empty — the one thing the
+    # capture exists for. Check before spending the session, not after.
+    try:
+        if not cam.query_temps():
+            print("  ! NO THERMOMETRY ROIs ARE CONFIGURED ON THIS CAMERA.\n"
+                  "    Video will record, but the temperature track will be EMPTY and the\n"
+                  "    capture will be useless for training. Set ROIs first (edge_agent sets\n"
+                  "    an eye Point and a nostril Area), then re-run.")
+    except Exception as e:
+        print(f"  ! could not read thermometry ({e}); temperature track may be empty")
 
     samples, t0 = [], time.time()
     print(f"  sampling temperatures for {seconds}s…")
@@ -195,19 +207,35 @@ def session(ip, user, pw, seconds, horse, outroot):
     ok = finish(procs)
     snapshot(cam, outdir, radiometric=True)
 
+    # List only the files that actually exist. The manifest used to name every
+    # stream unconditionally, so a session where all three recordings failed
+    # still produced a manifest pointing at three files that were never written
+    # — a labelling run would chase them and find nothing.
+    written = {k: f"{k}.mp4" for k in STREAMS if (outdir / f"{k}.mp4").exists()}
+    missing = [k for k in STREAMS if k not in written]
+    with_temps = sum(1 for s in samples if s.get("rois"))
+
     manifest = {
         "horse": horse, "camera": ip, "started": stamp,
         "duration_s": seconds, "device": info, "capabilities": caps,
-        "streams": {k: f"{k}.mp4" for k in STREAMS},
+        "streams": written,
+        "streams_failed": missing,
+        "temperature_samples_with_data": with_temps,
         "temperature_samples": samples,
         "note": "Temperatures are sampled on the host clock; for frame-accurate "
                 "alignment use the camera's stream/meta endpoint, which carries a "
                 "sensor-layer timestamp and group_id.",
     }
     (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"\n  ✓ manifest.json — {len(samples)} temperature samples")
-    print(f"  session {'complete' if ok else 'completed WITH ERRORS'}: {outdir}")
-    return 0 if ok else 1
+    # Report what we actually got, not how many times we asked. A run that
+    # sampled 20 times and got temperatures 0 times is a failed capture.
+    print(f"\n  {'✓' if with_temps else '✗'} manifest.json — {len(samples)} samples, "
+          f"{with_temps} carrying temperatures")
+    if missing:
+        print(f"  ✗ no video recorded for: {', '.join(missing)}")
+    usable = ok and with_temps and not missing
+    print(f"  session {'complete' if usable else 'completed WITH ERRORS'}: {outdir}")
+    return 0 if usable else 1
 
 
 # --------------------------------------------------------------------------- #
@@ -223,25 +251,32 @@ def main():
     ap.add_argument("--session", type=int, metavar="SECONDS")
     ap.add_argument("--horse", default="unknown")
     ap.add_argument("--out", default="captures")
+    # Ports are options, not constants: the bench runs the mock camera on 8081
+    # and an RTSP server on 8554, and a hardcoded 80/554 makes every one of
+    # these paths untestable without hardware.
+    ap.add_argument("--http-port", type=int, default=80)
+    ap.add_argument("--rtsp-port", type=int, default=554)
     a = ap.parse_args()
 
     if a.probe:
-        return probe(a.ip, a.user, a.pw) or 0
+        return probe(a.ip, a.user, a.pw, a.http_port, a.rtsp_port) or 0
 
     if a.record:
         outdir = Path(a.out) / dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        return 0 if finish(record(a.ip, a.user, a.pw, a.record, outdir)) else 1
+        return 0 if finish(record(a.ip, a.user, a.pw, a.record, outdir,
+                                  rtsp_port=a.rtsp_port)) else 1
 
     if a.snapshot or a.radiometric:
         from sparsh_camera import IsapiClient
-        cam = IsapiClient(a.ip, a.user, a.pw)
+        cam = IsapiClient(a.ip, a.user, a.pw, port=a.http_port)
         if not cam.login():
             sys.exit("camera login failed")
         snapshot(cam, Path(a.out), radiometric=a.radiometric)
         return 0
 
     if a.session:
-        return session(a.ip, a.user, a.pw, a.session, a.horse, a.out)
+        return session(a.ip, a.user, a.pw, a.session, a.horse, a.out,
+                       http_port=a.http_port, rtsp_port=a.rtsp_port)
 
     ap.error("choose --probe, --snapshot, --radiometric, --record N or --session N")
 
