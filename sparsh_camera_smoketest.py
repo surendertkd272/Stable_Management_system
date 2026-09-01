@@ -27,6 +27,7 @@ Usage:
 
 import sys
 import json
+import argparse
 import time
 import socket
 import struct
@@ -60,9 +61,29 @@ DEVICE_REALM = "Server Status"
 EMISSIVITY_100 = 98
 DISTANCE_CM    = 350               # our specified 3.5 m working distance
 
-if len(sys.argv) >= 2: CAMERA_IP = sys.argv[1]
-if len(sys.argv) >= 3: USERNAME  = sys.argv[2]
-if len(sys.argv) >= 4: PASSWORD  = sys.argv[3]
+# Ports are overridable: cameras are not always on the defaults, and the mock
+# camera (tools/mock_camera.py) deliberately runs on high ports so it needs no
+# privileges.  Positional args stay supported for muscle memory.
+_ap = argparse.ArgumentParser(
+    description="Bench smoke test for the Sparsh VD641NT.",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="examples:\n"
+           "  %(prog)s 192.168.1.102 admin 'PW'\n"
+           "  %(prog)s 127.0.0.1 admin pw --http-port 8099 --modbus-port 5502   # vs mock\n")
+_ap.add_argument("ip", nargs="?", default=CAMERA_IP)
+_ap.add_argument("user", nargs="?", default=USERNAME)
+_ap.add_argument("password", nargs="?", default=PASSWORD)
+_ap.add_argument("--http-port", type=int, default=HTTP_PORT)
+_ap.add_argument("--rtsp-port", type=int, default=RTSP_PORT)
+_ap.add_argument("--modbus-port", type=int, default=MODBUS_PORT)
+_ap.add_argument("--https", action="store_true", default=USE_HTTPS)
+_ap.add_argument("--realm", default=DEVICE_REALM,
+                 help="device digest realm used in the login hash")
+_a = _ap.parse_args()
+
+CAMERA_IP, USERNAME, PASSWORD = _a.ip, _a.user, _a.password
+HTTP_PORT, RTSP_PORT, MODBUS_PORT = _a.http_port, _a.rtsp_port, _a.modbus_port
+USE_HTTPS, DEVICE_REALM = _a.https, _a.realm
 
 SCHEME = "https" if USE_HTTPS else "http"
 BASE   = f"{SCHEME}://{CAMERA_IP}:{HTTP_PORT}"

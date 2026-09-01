@@ -187,50 +187,162 @@ def simulate(api_url, backfill_days, live, interval, token=""):
 # --------------------------------------------------------------------------- #
 # real camera mode (points 2,3,4)  — needs sparsh_camera.py + a live unit
 # --------------------------------------------------------------------------- #
-def compute_resp_rate(samples, fs):
-    """Respiratory rate (bpm) from a window of nostril-ROI avg temps via
-    autocorrelation (breath = warm-air oscillation). Pure-python, no numpy."""
+# A breathing signal has to be genuinely periodic before we report a rate.
+# Normalised autocorrelation peak below this = no usable rhythm.
+#
+# Calibrated, not guessed: over 1000 pure-noise windows the strongest false
+# rhythm reached 0.36 (p99 0.29), so anything at or under ~0.36 is within what
+# noise alone produces. Real breathing at SNR >= 2 sits at 0.63+. We sit the
+# gate above the noise ceiling and accept losing the weakest genuine windows —
+# missing a window is harmless (we sample continuously, and a sustained gap is
+# caught by the monitoring-gap rule), whereas a fabricated normal-looking rate
+# is read by a vet as a healthy horse.
+RESP_MIN_PERIODICITY = 0.40
+
+# A peak at least this strong relative to the best one counts as the real
+# fundamental — used to reject period-doubling (see _detrend note below).
+RESP_SUBHARMONIC_RATIO = 0.80
+
+
+def _detrend(samples):
+    """Remove the least-squares linear trend, not just the mean.
+
+    A slow baseline ramp — sun moving onto the stall wall, camera warming up,
+    the horse drifting toward or away from the lens — is not breathing, but to
+    a mean-subtracting autocorrelation it looks like one very strong slow cycle
+    and produces a confident bogus rate. Taking out the ramp first leaves only
+    the oscillation we actually care about.
+    """
     n = len(samples)
-    if n < fs * 15:
-        return None
-    mean = sum(samples) / n
-    x = [s - mean for s in samples]
-    best_lag, best = 0, 0.0
+    mx = (n - 1) / 2.0
+    my = sum(samples) / n
+    sxx = sum((i - mx) ** 2 for i in range(n))
+    slope = 0.0 if sxx == 0 else sum((i - mx) * (samples[i] - my) for i in range(n)) / sxx
+    return [samples[i] - (my + slope * (i - mx)) for i in range(n)]
+
+
+def compute_resp_rate(samples, fs, with_quality=False):
+    """Respiratory rate (bpm) from a window of nostril-ROI average temperatures.
+
+    Breathing shows up as a slow oscillation because exhaled air is warmer than
+    inhaled. Recovered by autocorrelation — pure Python, no numpy, so it runs on
+    a bare Jetson image.
+
+    Returns None when there is no real rhythm to find. That matters clinically:
+    fed pure noise (ROI lost the nostril, horse turned away, sensor dropout) a
+    bare peak-pick will happily return something like 16 bpm — a perfectly
+    normal-looking equine respiratory rate — and a vet would read that as a
+    healthy animal when in fact we measured nothing at all. Silence is safe;
+    an invented vital sign is not.
+
+    With with_quality=True returns (bpm, periodicity) so callers can attach the
+    strength as a confidence on the reading.
+    """
+    n = len(samples)
+    if n < fs * 15:                                # too short to trust
+        return (None, 0.0) if with_quality else None
+
+    x = _detrend(samples)
+    energy = sum(v * v for v in x)                 # autocorrelation at lag 0
+    if energy <= 1e-9:                             # flatline
+        return (None, 0.0) if with_quality else None
+    unit = energy / n
+
+    # Normalised autocorrelation across the plausible equine band. Each lag is
+    # divided by its own overlap length: fewer sample pairs contribute at long
+    # lags, and without this the curve sags and biases us against slow rates.
     lo, hi = int(fs / 0.6), int(fs / 0.1)          # 0.1–0.6 Hz => 6–36 bpm
-    for lag in range(lo, min(hi, n - 1)):
-        c = sum(x[i] * x[i + lag] for i in range(n - lag))
-        if c > best:
-            best, best_lag = c, lag
-    return None if not best_lag else 60.0 * fs / best_lag
+    hi = min(hi, n - 1)
+    if hi <= lo:
+        return (None, 0.0) if with_quality else None
+    acf = {}
+    for lag in range(lo, hi):
+        overlap = n - lag
+        acf[lag] = (sum(x[i] * x[i + lag] for i in range(overlap)) / overlap) / unit
+
+    best_lag = max(acf, key=acf.get)
+    peak = acf[best_lag]
+    if peak < RESP_MIN_PERIODICITY:
+        return (None, max(0.0, peak)) if with_quality else None
+
+    # Reject period doubling. A clean 16 bpm breath also correlates strongly at
+    # twice its period, and that taller-looking peak would be reported as 8 bpm
+    # — halving the rate, which turns tachypnoea into a normal reading. So take
+    # the EARLIEST local maximum that is nearly as strong as the global one:
+    # that is the fundamental, the later peaks are its harmonics.
+    for lag in range(lo + 1, best_lag):
+        if (acf[lag] >= RESP_SUBHARMONIC_RATIO * peak
+                and acf[lag] >= acf[lag - 1] and acf[lag] >= acf[lag + 1]):
+            best_lag = lag
+            break
+
+    periodicity = acf[best_lag]
+    bpm = 60.0 * fs / best_lag
+    return (bpm, periodicity) if with_quality else bpm
 
 
-def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, token=""):
+def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, token="",
+                http_port=80, window_s=60, target_hz=5.0):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from sparsh_camera import IsapiClient  # noqa
 
-    cam = IsapiClient(ip, user, password)
+    cam = IsapiClient(ip, user, password, port=http_port)
     if not cam.login():
         sys.exit("[edge] camera login failed")
     cam.set_basic_param(emissivity_100=98, distance_cm=350)
     cam.set_point(0, 5000, 5000, name="eye")                      # eye/max ROI
     cam.set_area(1, [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)], name="nostril")
-    print("[edge] camera ROIs set; sampling…")
+    print(f"[edge] camera {ip}:{http_port} ROIs set; sampling {window_s}s windows…")
 
     while True:
-        window, fs, t0 = [], 5.0, time.time()
-        while time.time() - t0 < 60:                              # 60s window @ ~5 Hz
-            temps = {t["type"]: t for t in cam.query_temps()}
-            if "Area" in temps and temps["Area"].get("avg_c") is not None:
-                window.append(temps["Area"]["avg_c"])
-            time.sleep(1 / fs)
+        window, t0 = [], time.time()
+        misses = 0
+        while time.time() - t0 < window_s:
+            tick = time.time()
+            try:
+                temps = {x["type"]: x for x in cam.query_temps()}
+                area = temps.get("Area", {}).get("avg_c")
+                if area is not None:
+                    window.append(area)
+            except Exception as e:                                # noqa: BLE001
+                # A blip on barn wifi must not take the agent down mid-demo.
+                # Drop the sample, keep the window, log once per window.
+                misses += 1
+                if misses == 1:
+                    print(f"[edge] camera read failed ({e}); continuing")
+            # Sleep only the remainder: each ISAPI round-trip costs real time,
+            # and sleeping a fixed 1/target_hz on top of it makes the TRUE
+            # sample rate lower than the one we later divide by — which scales
+            # the reported bpm up. A horse breathing 16 would read 19.
+            time.sleep(max(0.0, (1.0 / target_hz) - (time.time() - tick)))
+
+        # Use the rate we actually achieved, not the one we aimed for.
+        elapsed = time.time() - t0
+        fs = (len(window) / elapsed) if elapsed > 0 and window else target_hz
+        if misses:
+            print(f"[edge] {misses} camera read(s) failed this window; "
+                  f"{len(window)} samples at {fs:.2f} Hz")
+
         now = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-        latest = {t["type"]: t for t in cam.query_temps()}
+        try:
+            latest = {x["type"]: x for x in cam.query_temps()}
+        except Exception as e:                                    # noqa: BLE001
+            print(f"[edge] camera unreachable ({e}); skipping this tick")
+            if not live:
+                return
+            continue
         batch = []
         if latest.get("Point", {}).get("point_c") is not None:
             batch.append(reading(horse_id, stall, "body_temp_c", latest["Point"]["point_c"], "°C", now, "thermal_camera"))
-        rr = compute_resp_rate(window, fs)
+        rr, quality = compute_resp_rate(window, fs, with_quality=True)
         if rr:
-            batch.append(reading(horse_id, stall, "respiratory_rate_bpm", rr, "bpm", now, "thermal_camera", conf=0.7))
+            # Report the measured rhythm strength as confidence rather than a
+            # flat guess, so weak windows are visibly weaker downstream.
+            batch.append(reading(horse_id, stall, "respiratory_rate_bpm", rr, "bpm", now,
+                                 "thermal_camera", conf=round(min(0.95, quality), 2)))
+        else:
+            print(f"[edge] no usable breathing rhythm this window "
+                  f"(periodicity {quality:.2f} < {RESP_MIN_PERIODICITY}) — reporting nothing")
         enqueue(batch)
         a, _ = flush(api_url, token)
         print(f"[edge] camera tick -> {len(batch)} readings (resp={rr}), accepted {a}")
@@ -247,6 +359,10 @@ def main():
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--interval", type=int, default=10)
     ap.add_argument("--camera"); ap.add_argument("--user", default="admin"); ap.add_argument("--pass", dest="pw")
+    ap.add_argument("--http-port", type=int, default=80,
+                    help="camera ISAPI port (use 8080 against tools/mock_camera.py)")
+    ap.add_argument("--window", type=int, default=60,
+                    help="seconds of nostril samples per respiration estimate")
     ap.add_argument("--stall", default="A-04",
                     help="the stall this camera watches; the backend maps it to the horse")
     ap.add_argument("--horse", default=None,
@@ -258,7 +374,8 @@ def main():
     if a.simulate:
         simulate(a.api, a.backfill_days, a.live, a.interval, a.token)
     elif a.camera:
-        real_camera(a.api, a.camera, a.user, a.pw, a.stall, a.horse, a.live, a.interval, a.token)
+        real_camera(a.api, a.camera, a.user, a.pw, a.stall, a.horse, a.live, a.interval,
+                    a.token, http_port=a.http_port, window_s=a.window)
     else:
         ap.error("choose --simulate or --camera <ip>")
 

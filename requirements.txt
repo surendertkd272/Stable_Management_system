@@ -1,0 +1,10 @@
+# EquiCare — Python dependencies for the edge / camera tooling.
+#
+# Deliberately minimal: the edge agent, mock camera and PDF tool are stdlib-only.
+# Only the camera driver and its smoke test need anything, and only for HTTP
+# digest-auth handling.
+#
+#   pip install -r requirements.txt
+#   # on a Jetson / Ubuntu you can equally use:  sudo apt install python3-requests
+#
+requests>=2.28

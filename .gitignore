@@ -22,3 +22,6 @@ SDK/**/*.tar.gz
 SDK/**/bin/
 SDK/**/Warehouse/Release/
 SDK/**/obj/
+
+# large test media (sourced clips, not source code)
+testdata/
