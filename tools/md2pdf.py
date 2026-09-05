@@ -58,6 +58,12 @@ code {
   font: 9.4pt "SF Mono", Menlo, Consolas, monospace;
   background: #eef1f4; padding: 0.5pt 3pt; border-radius: 2.5pt;
 }
+pre {
+  background: #f5f7f9; border: 0.6pt solid #e3e7eb; border-radius: 3pt;
+  padding: 8pt 10pt; margin: 10pt 0; overflow-x: auto;
+  page-break-inside: avoid;
+}
+pre code { background: none; padding: 0; font-size: 9pt; line-height: 1.5; }
 hr { border: 0; border-top: 1pt solid #e3e7eb; margin: 16pt 0; }
 ul, ol { margin: 0 0 8pt; padding-left: 18pt; }
 li { margin-bottom: 4pt; }
@@ -103,7 +109,10 @@ def inline(text: str) -> str:
     """Escape HTML, then apply inline markdown. Bold before italic (** vs *)."""
     t = html.escape(text, quote=False)
     t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
-    t = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", t)
+    # Bold before italic, and bold must tolerate italic nested inside it:
+    # `**a *b* c**` used to leave the literal asterisks in a vendor-facing PDF
+    # because [^*]+ could not span the inner emphasis.
+    t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t, flags=re.S)
     t = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<em>\1</em>", t)
     return t
 
@@ -136,6 +145,20 @@ def md_to_html(md: str, title: str) -> str:
         # blank
         if not stripped:
             i += 1
+            continue
+
+        # --- fenced code block -------------------------------------------- #
+        # Without this the fence markers reached the page as literal backticks.
+        if stripped.startswith("```"):
+            close_lists()
+            i += 1
+            body = []
+            while i < n and not lines[i].strip().startswith("```"):
+                body.append(lines[i])
+                i += 1
+            i += 1                                   # consume closing fence
+            out.append("<pre><code>" + html.escape("\n".join(body), quote=False)
+                       + "</code></pre>")
             continue
 
         # --- table -------------------------------------------------------- #
