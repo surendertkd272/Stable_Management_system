@@ -121,7 +121,8 @@ export const getCoverage = () => get<CoverageRow[]>("/api/coverage");
 // Per-horse live detail (summary + latest vitals + 7-day charts).
 export interface HorseDetail {
   vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number }>;
-  charts: Record<string, number[]>;
+  // null entries are days with no reading — never render them as zero.
+  charts: Record<string, (number | null)[]>;
 }
 export const getHorseDetail = (id: string) =>
   get<HorseDetail & Record<string, unknown>>(`/api/horses/${encodeURIComponent(id)}`);

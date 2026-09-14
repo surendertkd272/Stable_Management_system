@@ -259,11 +259,14 @@ test("vitalsForHorse keeps the newest sample per metric", () => {
   assert.equal(v.steps.value, 100);
 });
 
-test("metricSeries averages per day and pads empty days with 0", () => {
+test("metricSeries averages per day and leaves un-measured days null", () => {
   const s = metricSeries([R("body_temp_c", 37.0, 0), R("body_temp_c", 39.0, 0)], "body_temp_c", 7, "avg");
   assert.equal(s.length, 7);
   assert.equal(s[6], 38);                       // today = mean(37,39)
-  assert.equal(s[0], 0);                        // 6 days ago = no data
+  // A day with no reading must not become 0. Padded zeros drew a horse's
+  // 7-day temperature as a plunge to 0 °C on the panel a vet reads.
+  assert.equal(s[0], null);                     // 6 days ago = not measured
+  assert.ok(!s.slice(0, 6).some((v) => v === 0), "must never pad with zero");
 });
 
 test("metricSeries sums when asked", () => {

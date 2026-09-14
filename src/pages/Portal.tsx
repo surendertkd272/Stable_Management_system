@@ -99,15 +99,45 @@ export default function Portal() {
               <p className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
                 {h.breed} · {h.sex} · Stall {h.stall}
               </p>
-              <div className="flex between center" style={{ fontSize: 11, margin: "12px 0 4px" }}>
-                <span className="muted">Predictive risk</span>
-                <span style={{ color: b.color, fontWeight: 700 }}>
-                  {r} · {b.label}
-                </span>
-              </div>
-              <div className="progress" style={{ height: 6 }}>
-                <i style={{ width: `${r}%`, background: b.color }} />
-              </div>
+              {/* An owner must never be shown "Low risk" for a horse we have
+                  not heard from. Unknown is its own state, and on this screen
+                  it is the one they most need to see. */}
+              {h.monitoring === "no-data" || h.monitoring === "offline" ? (
+                <>
+                  <div className="flex between center" style={{ fontSize: 11, margin: "12px 0 4px" }}>
+                    <span className="muted">Predictive risk</span>
+                    <span style={{ color: "var(--text-secondary)", fontWeight: 700 }}>
+                      not assessable
+                    </span>
+                  </div>
+                  <div className="progress" style={{ height: 6 }}>
+                    <i
+                      style={{
+                        width: "100%",
+                        background:
+                          "repeating-linear-gradient(135deg, var(--border) 0 6px, transparent 6px 12px)",
+                      }}
+                    />
+                  </div>
+                  <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                    {h.monitoring === "no-data"
+                      ? "No sensor data received yet — the yard team has been notified."
+                      : "Sensors offline — the yard team has been notified."}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="flex between center" style={{ fontSize: 11, margin: "12px 0 4px" }}>
+                    <span className="muted">Predictive risk</span>
+                    <span style={{ color: b.color, fontWeight: 700 }}>
+                      {r} · {b.label}
+                    </span>
+                  </div>
+                  <div className="progress" style={{ height: 6 }}>
+                    <i style={{ width: `${r}%`, background: b.color }} />
+                  </div>
+                </>
+              )}
               <div className="flex gap-sm" style={{ marginTop: 14 }}>
                 <button className="btn-ghost" style={{ flex: 1 }} onClick={() => nav(`/horses/${h.id}`)}>
                   Profile

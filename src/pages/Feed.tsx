@@ -42,7 +42,8 @@ export default function Feed() {
   // and especially what it refused — is the earliest illness signal we have,
   // so surface the measured intake alongside the plan when sensors report it.
   const [actual, setActual] = useState<{
-    intake: number[]; refusal: number[]; latestIntake?: number; latestRefusal?: number;
+    intake: (number | null)[]; refusal: (number | null)[];
+    latestIntake?: number; latestRefusal?: number;
   } | null>(null);
 
   useEffect(() => {
@@ -52,7 +53,8 @@ export default function Feed() {
       if (stop || !d) return;
       const intake = d.charts?.feed_intake_g ?? [];
       const refusal = d.charts?.feed_refusal_g ?? [];
-      if (!intake.some((v) => v > 0)) { setActual(null); return; }   // no feed sensor yet
+      // No feeder on this install: every day is either unmeasured (null) or zero.
+      if (!intake.some((v) => v !== null && v > 0)) { setActual(null); return; }
       setActual({
         intake, refusal,
         latestIntake: d.vitals?.feed_intake_g?.value,
@@ -126,29 +128,44 @@ export default function Feed() {
             <h3>Measured intake</h3>
             <span className="pill accent">from feeder</span>
           </div>
-          <div className="grid cols-2" style={{ gap: 16 }}>
-            <div>
-              <p className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Eaten today</p>
-              <b style={{ fontSize: 22, color: "var(--ink)", fontFamily: "var(--font-display)" }}>
-                {(last(actual.intake) / 1000).toFixed(1)} kg
-              </b>
-              <Sparkline data={actual.intake} />
-            </div>
-            <div>
-              <p className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Refused today</p>
-              <b
-                style={{
-                  fontSize: 22,
-                  fontFamily: "var(--font-display)",
-                  color: last(actual.refusal) > 500 ? "var(--alert)" : "var(--ink)",
-                }}
-              >
-                {(last(actual.refusal) / 1000).toFixed(1)} kg
-              </b>
-              <Sparkline data={actual.refusal} type="bar" color="var(--alert)" />
-            </div>
-          </div>
-          {last(actual.refusal) > 500 && (
+          {/* Only measured days are plotted or totalled. A missing day counted
+              as 0 kg reads as a horse that refused its whole feed. */}
+          {(() => {
+            const intake = actual.intake.filter((v): v is number => v !== null);
+            const refusal = actual.refusal.filter((v): v is number => v !== null);
+            const eaten = intake.length ? last(intake) : null;
+            const refused = refusal.length ? last(refusal) : null;
+            return (
+              <div className="grid cols-2" style={{ gap: 16 }}>
+                <div>
+                  <p className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Eaten today</p>
+                  <b style={{ fontSize: 22, color: "var(--ink)", fontFamily: "var(--font-display)" }}>
+                    {eaten === null ? "Not measured" : `${(eaten / 1000).toFixed(1)} kg`}
+                  </b>
+                  {intake.length > 1 && <Sparkline data={intake} />}
+                </div>
+                <div>
+                  <p className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Refused today</p>
+                  <b
+                    style={{
+                      fontSize: 22,
+                      fontFamily: "var(--font-display)",
+                      color: refused !== null && refused > 500 ? "var(--alert)" : "var(--ink)",
+                    }}
+                  >
+                    {refused === null ? "Not measured" : `${(refused / 1000).toFixed(1)} kg`}
+                  </b>
+                  {refusal.length > 1 && (
+                    <Sparkline data={refusal} type="bar" color="var(--alert)" />
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+          {(() => {
+            const r = actual.refusal.filter((v): v is number => v !== null);
+            return r.length > 0 && last(r) > 500;
+          })() && (
             <p style={{ fontSize: 13, marginTop: 12, color: "var(--alert)" }}>
               Refusal is above normal for {horse?.name} — a horse going off its feed is often
               the earliest sign of illness. Worth a check.

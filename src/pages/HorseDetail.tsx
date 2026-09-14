@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff } from "lucide-react";
+import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge } from "lucide-react";
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { getHorseDetail, type HorseDetail as HorseVitals } from "../data/api";
@@ -13,6 +13,23 @@ const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
   { icon: "travel", label: "Travel" },
   { icon: "deworm", label: "Deworming" },
 ];
+
+/** Percent change of the latest reading against the mean of the earlier ones.
+ *  Returns null when there is not enough measured history to say anything —
+ *  the trend badges used to be constants (+4%, -6%, +9%) typed into the JSX,
+ *  which an owner reads as a real week-on-week change. */
+function trend(series: (number | null)[] | undefined): number | null {
+  const pts = (series ?? []).filter((n): n is number => n !== null);
+  if (pts.length < 3) return null;
+  const latest = pts[pts.length - 1];
+  const prior = pts.slice(0, -1);
+  const base = prior.reduce((a, b) => a + b, 0) / prior.length;
+  if (!base) return null;
+  return Math.round(((latest - base) / base) * 100);
+}
+
+// Matches BASELINE_TARGET_DAYS in server/rollup.mjs, which computes the %.
+const BASELINE_DAYS = 14;
 
 export default function HorseDetail() {
   const { id } = useParams();
@@ -61,6 +78,9 @@ export default function HorseDetail() {
   const horseAlerts = alerts.filter((a) => a.horse === horse.name);
   const horseDiary = diary.filter((d) => d.horse === horse.name);
   const risk = riskScore(horse);
+  // No readings means no basis for a score. Showing one anyway is how a horse
+  // nobody can see ends up presented as low risk.
+  const blind = horse.monitoring === "no-data" || horse.monitoring === "offline";
   const band = riskBand(risk);
 
   const saveNote = () => {
@@ -72,8 +92,16 @@ export default function HorseDetail() {
     setNoteOpen(false);
   };
   const stressVal = horse.stress === "High" ? 82 : horse.stress === "Medium" ? 52 : 22;
+  // Unknown is not green. Defaulting to the "good" colour paints an un-sensed
+  // horse as calm, which is the mistake this whole pass exists to remove.
   const stressColor =
-    horse.stress === "High" ? "var(--alert)" : horse.stress === "Medium" ? "var(--warn)" : "var(--positive)";
+    horse.stress === null
+      ? "var(--text-secondary)"
+      : horse.stress === "High"
+        ? "var(--alert)"
+        : horse.stress === "Medium"
+          ? "var(--warn)"
+          : "var(--positive)";
 
   return (
     <>
@@ -125,10 +153,16 @@ export default function HorseDetail() {
               {isBlind(horse.monitoring) ? <WifiOff size={17} style={{ flexShrink: 0 }} /> : <Heart size={17} style={{ flexShrink: 0 }} />}
               <span style={{ fontSize: 13, fontWeight: 600 }}>{horse.statusNote}</span>
             </div>
+            {/* "last known values" only makes sense if there were any. A horse
+                that has never reported has nothing stale to show — saying so
+                next to four "Not measured" panels just reads as a glitch. */}
             {isBlind(horse.monitoring) && (
               <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-                Figures below are the last known values and may be out of date
-                {horse.lastSeen ? ` (last reading ${new Date(horse.lastSeen).toLocaleString()})` : ""}.
+                {horse.monitoring === "no-data" || !horse.lastSeen
+                  ? "Nothing has been received from this stall yet — check the stall's devices and the edge agent."
+                  : `Figures below are the last known values and may be out of date (last reading ${new Date(
+                      horse.lastSeen,
+                    ).toLocaleString()}).`}
               </p>
             )}
             <div className="flex gap-sm" style={{ marginTop: 16, flexWrap: "wrap" }}>
@@ -157,7 +191,7 @@ export default function HorseDetail() {
               icon={<Heart size={18} />}
               label="Body temperature"
               value={`${live.vitals.body_temp_c.value.toFixed(1)}°C`}
-              delta={0}
+              delta={trend(live.charts.body_temp_c)}
               spark={live.charts.body_temp_c}
             />
             {live.vitals.respiratory_rate_bpm && (
@@ -165,7 +199,7 @@ export default function HorseDetail() {
                 icon={<Activity size={18} />}
                 label="Respiratory rate"
                 value={`${Math.round(live.vitals.respiratory_rate_bpm.value)} bpm`}
-                delta={0}
+                delta={trend(live.charts.respiratory_rate_bpm)}
                 spark={live.charts.respiratory_rate_bpm}
               />
             )}
@@ -174,7 +208,7 @@ export default function HorseDetail() {
                 icon={<Activity size={18} />}
                 label="Activity index"
                 value={live.vitals.activity_index.value.toFixed(2)}
-                delta={0}
+                delta={trend(live.charts.activity_index)}
                 spark={live.charts.activity_index}
                 type="bar"
               />
@@ -183,24 +217,38 @@ export default function HorseDetail() {
         </>
       )}
 
-      {/* metric cards */}
+      {/* Behaviour cards. These plot THIS horse's series when the backend has
+          it — they used to fall back to the yard-wide series, so the chart
+          under one horse's rest figure was actually every horse's. */}
       <div className="grid cols-4" style={{ marginBottom: 24 }}>
-        <MetricCard icon={<Moon size={18} />} label="Daily rest" value={horse.rest} delta={4} spark={series.rest} />
+        <MetricCard
+          icon={<Moon size={18} />}
+          label="Daily rest"
+          value={horse.rest}
+          delta={trend(live?.charts.rest_hours)}
+          spark={live?.charts.rest_hours ?? series.rest}
+        />
         <MetricCard
           icon={<Droplet size={18} />}
-          label="Water visits"
+          label="Water intake"
           value={horse.water === null ? null : String(horse.water)}
-          delta={-6}
-          spark={series.water}
+          delta={trend(live?.charts.water_ml)}
+          spark={live?.charts.water_ml ?? series.water}
           type="bar"
         />
-        <MetricCard icon={<Sun size={18} />} label="Time outside box" value={horse.outside} delta={9} spark={series.outside} />
         <MetricCard
-          icon={<Activity size={18} />}
-          label="Activity index"
+          icon={<Sun size={18} />}
+          label="Time outside box"
+          value={horse.outside}
+          delta={null}
+          spark={series.outside}
+        />
+        <MetricCard
+          icon={<Gauge size={18} />}
+          label="Stress level"
           value={horse.stress}
-          delta={horse.stress === "Low" ? -3 : 12}
-          spark={series.alerts}
+          delta={null}
+          spark={live?.charts.activity_index ?? []}
           type="bar"
           color={stressColor}
         />
@@ -210,24 +258,54 @@ export default function HorseDetail() {
       <div className="card" style={{ marginBottom: 24 }}>
         <div className="card-head">
           <h3>Predictive risk score</h3>
-          <span className={`pill ${band.cls}`}>{band.label} risk</span>
+          {blind ? (
+            <span className="pill muted">not assessable</span>
+          ) : (
+            <span className={`pill ${band.cls}`}>{band.label} risk</span>
+          )}
         </div>
         <div className="flex gap-md center wrap">
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 44, fontWeight: 700, color: band.color, lineHeight: 1 }}>
-            {risk}
-            <small style={{ fontSize: 18, color: "var(--text-secondary)" }}>/100</small>
+          <div
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: 44,
+              fontWeight: 700,
+              color: blind ? "var(--text-secondary)" : band.color,
+              lineHeight: 1,
+            }}
+          >
+            {blind ? "—" : risk}
+            {!blind && <small style={{ fontSize: 18, color: "var(--text-secondary)" }}>/100</small>}
           </div>
           <div className="grow" style={{ minWidth: 220 }}>
             <div className="progress" style={{ height: 10 }}>
-              <i style={{ width: `${risk}%`, background: band.color }} />
+              <i
+                style={
+                  blind
+                    ? {
+                        width: "100%",
+                        background:
+                          "repeating-linear-gradient(135deg, var(--border) 0 6px, transparent 6px 12px)",
+                      }
+                    : { width: `${risk}%`, background: band.color }
+                }
+              />
             </div>
             <p className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
-              Model estimate from behaviour baseline, stress trend and recent incidents — context, not diagnosis.
+              {blind
+                ? "No sensor data has been received for this horse, so no score can be produced. This is not a low score — it is no score."
+                : horse.stress === null
+                  ? "Model estimate from the signals this install measures — no activity sensor, so stress is not a factor here. Context, not diagnosis."
+                  : "Model estimate from behaviour baseline, stress trend and recent incidents — context, not diagnosis."}
             </p>
           </div>
           <div className="flex gap-sm wrap" style={{ maxWidth: 280 }}>
             {horse.status === "urgent" && <span className="pill alert">Active incident</span>}
-            {horse.stress !== "Low" && <span className="pill warn">{horse.stress} stress</span>}
+            {/* `stress !== "Low"` was true for null too, so a horse with no
+                activity sensor got a yellow warning pill reading just "stress". */}
+            {horse.stress !== null && horse.stress !== "Low" && (
+              <span className="pill warn">{horse.stress} stress</span>
+            )}
             {horseAlerts.slice(0, 2).map((a) => (
               <span className="pill muted" key={a.id}>
                 {a.type}
@@ -281,9 +359,21 @@ export default function HorseDetail() {
           <div className="progress">
             <i style={{ width: `${horse.baselineProgress}%` }} />
           </div>
+          {/* Both figures were constants, so a horse 7% calibrated still read
+              "Started 14 days ago · ~3 days left" — a 14-day baseline three
+              days from done. Derive both from the progress we actually have. */}
           <div className="flex between" style={{ marginTop: 18, fontSize: 12.5 }}>
-            <span className="muted">Started 14 days ago</span>
-            <span className="muted">{horse.baselineProgress >= 100 ? "Calibrated" : "~3 days left"}</span>
+            <span className="muted">
+              {(() => {
+                const days = Math.round((horse.baselineProgress / 100) * BASELINE_DAYS);
+                return days <= 0 ? "Started today" : `${days} of ${BASELINE_DAYS} days collected`;
+              })()}
+            </span>
+            <span className="muted">
+              {horse.baselineProgress >= 100
+                ? "Calibrated"
+                : `~${Math.max(1, BASELINE_DAYS - Math.round((horse.baselineProgress / 100) * BASELINE_DAYS))} days left`}
+            </span>
           </div>
         </div>
 
@@ -401,7 +491,8 @@ function MetricCard({
   icon: React.ReactNode;
   label: string;
   value: string | null;
-  delta: number;
+  /** null = we have no honest basis for a trend; the badge is then omitted. */
+  delta: number | null;
   spark: (number | null)[];
   type?: "line" | "bar";
   color?: string;
@@ -413,7 +504,7 @@ function MetricCard({
     <div className="card stat">
       <div className="top">
         <div className="chip sm">{icon}</div>
-        {measured && <Delta value={delta} />}
+        {measured && delta !== null && <Delta value={delta} />}
       </div>
       <div
         className="value"
@@ -427,13 +518,19 @@ function MetricCard({
       </div>
       <div className="foot">
         <span className="label">{label}</span>
-        {measured ? (
-          <Sparkline data={spark as number[]} type={type} color={color} w={70} h={28} />
-        ) : (
+        {measured && spark.filter((n) => n !== null).length > 1 ? (
+          <Sparkline
+            data={spark.filter((n): n is number => n !== null)}
+            type={type}
+            color={color}
+            w={70}
+            h={28}
+          />
+        ) : !measured ? (
           <span className="muted" style={{ fontSize: 11 }}>
             no sensor
           </span>
-        )}
+        ) : null}
       </div>
     </div>
   );

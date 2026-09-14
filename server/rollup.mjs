@@ -294,7 +294,10 @@ export function metricSeries(rd, metric, days = 7, agg = "avg") {
   const keys = [...Array(days)].map((_, i) => dayKey(Date.now() - (days - 1 - i) * DAY_MS));
   return keys.map((d) => {
     const vals = rd.filter((r) => r.metric === metric && dayKey(r.ts) === d).map((r) => r.value);
-    if (!vals.length) return 0;
+    // null, not 0: a day with no reading is a day we did not measure. Zero here
+    // drew a 7-day temperature chart as [0,0,0,0,0,0,37.6] — a plunge to 0 °C
+    // that never happened, on the panel a vet is most likely to read.
+    if (!vals.length) return null;
     if (agg === "sum") return +vals.reduce((a, b) => a + b, 0).toFixed(1);
     return +(vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2);
   });
