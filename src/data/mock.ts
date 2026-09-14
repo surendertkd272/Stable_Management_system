@@ -230,7 +230,7 @@ export const alerts: Alert[] = [
   {
     id: "a6",
     horse: "Laila",
-    type: "Foaling labour detected",
+    type: "Labour logged by staff",
     severity: "alert",
     time: "02:05 · just now",
     detail: "Logged in labour by yard staff. Foaling is not sensor-monitored — follow the post-foaling checklist in person.",

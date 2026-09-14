@@ -162,6 +162,8 @@ function TopBar() {
   const todayIso = new Date().toISOString().slice(0, 10);
   const overdueHealth = health.filter((t) => !t.done && t.due < todayIso).length;
   const unpaidInvoices = invoices.filter((i) => !i.paid).length;
+  const barnCount = new Set(horses.map((h) => h.stall[0])).size || 1;
+  const reportingCount = horses.filter((h) => (h.monitoring ?? "live") === "live").length;
 
   // "all cameras online" was stated unconditionally. A horse that stopped
   // reporting is the one thing a monitoring header must never paper over.
@@ -175,12 +177,24 @@ function TopBar() {
       h1: "Welcome back, Surender",
       p: `${needAttention} ${needAttention === 1 ? "horse needs" : "horses need"} attention today · ${feedState}`,
     },
-    "/horses": { h1: "Horses", p: `${horses.length} horses monitored across 3 barns` },
-    "/alerts": { h1: "Alerts", p: `${openAlerts} unacknowledged · escalation active` },
+    // Both used to be constants: "3 barns" (this yard's Add-horse button sits
+    // one click away and can introduce a 4th with nothing to update it), and
+    // "monitored" asserted for every horse when most have no sensor at all.
+    // "escalation active" is the same overclaim as the Alerts page pill —
+    // notify.mjs delivers a single flat webhook per alert, not the
+    // manager -> on-call -> vet chain the Settings toggle describes.
+    "/horses": {
+      h1: "Horses",
+      p: `${horses.length} horses across ${barnCount} ${barnCount === 1 ? "barn" : "barns"} · ${reportingCount} reporting`,
+    },
+    "/alerts": { h1: "Alerts", p: `${openAlerts} unacknowledged` },
     "/yard": { h1: "Yard View", p: "Ranked by who needs attention first" },
     "/breeding": { h1: "Breeding", p: `${breedingMares.length} mares in foal · ${inLabour} in active labour` },
     "/reports": { h1: "Reports", p: "Vet-ready 7 & 30-day summaries" },
-    "/diary": { h1: "Care Diary", p: "Every record makes the AI smarter" },
+    // Matches the corrected line on the Care Diary card itself — the rule
+    // engine does not read diary entries, so this used to promise the same
+    // thing in two places that the code does not do.
+    "/diary": { h1: "Care Diary", p: "Context for whoever reviews an alert" },
     "/health": {
       h1: "Health Scheduling",
       p: `${overdueHealth} overdue · vaccinations, deworming, farrier & vet visits`,

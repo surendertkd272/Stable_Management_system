@@ -93,12 +93,17 @@ export default function SettingsPage() {
 
       {/* delivery */}
       <div className="card">
-        <h3 style={{ marginBottom: 8 }}>Alert delivery</h3>
+        <h3 style={{ marginBottom: 4 }}>Alert delivery</h3>
+        <p className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
+          Today every new alert goes out once, by webhook, to whatever endpoint is configured
+          server-side (see the deployment notes). These three toggles are not wired to that yet —
+          switching one here does not change what gets delivered.
+        </p>
         <Row label="WhatsApp alerts" desc="Send incident alerts to manager & owner." on={toggles.whatsapp} flip={() => flip("whatsapp")} />
         <Row label="Daily digest" desc="A morning summary of overnight activity." on={toggles.digest} flip={() => flip("digest")} />
         <Row
           label="Auto-escalation"
-          desc="Unacknowledged alert → manager → on-call → vet."
+          desc="Unacknowledged alert → manager → on-call → vet — not implemented yet."
           on={toggles.escalation}
           flip={() => flip("escalation")}
         />

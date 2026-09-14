@@ -160,7 +160,16 @@ export default function Dashboard() {
       <div className="card span-1">
         <div className="card-head">
           <h3>Needs attention</h3>
-          <span className="pill alert">Live</span>
+          {/* This card is chosen purely by status, and silence itself raises a
+              "watch"/"urgent" status via the monitoring-gap rule — so it was
+              possible (and, in the camera-only demo, the normal case) to show
+              a horse we have never heard from with a "Live" badge sitting
+              directly above a "No sensor data has ever been received" banner. */}
+          {(focus.monitoring ?? "live") === "live" ? (
+            <span className="pill alert">Live</span>
+          ) : (
+            <span className="pill muted">No data</span>
+          )}
         </div>
         <div
           className="photo"

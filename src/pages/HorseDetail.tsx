@@ -40,7 +40,7 @@ export default function HorseDetail() {
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   const [icon, setIcon] = useState<DiaryEntry["icon"]>("vet");
-  const [clock, setClock] = useState("");
+
   const [live, setLive] = useState<HorseVitals | null>(null);
   const horse = horses.find((h) => h.id === id);
 
@@ -55,14 +55,6 @@ export default function HorseDetail() {
       stop = true;
     };
   }, [id]);
-
-  useEffect(() => {
-    if (!cam) return;
-    const tick = () => setClock(new Date().toLocaleTimeString());
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [cam]);
 
   if (!horse) {
     return (
@@ -167,7 +159,7 @@ export default function HorseDetail() {
             )}
             <div className="flex gap-sm" style={{ marginTop: 16, flexWrap: "wrap" }}>
               <button className="btn-primary" onClick={() => setCam(true)}>
-                <Play size={16} /> Live camera
+                <Play size={16} /> Camera reference
               </button>
               <button className="btn-ghost" onClick={() => nav(`/reports?horse=${horse.id}`)}>
                 Generate vet report
@@ -428,17 +420,39 @@ export default function HorseDetail() {
         </p>
       )}
 
-      <Modal open={cam} onClose={() => setCam(false)} title={`Live camera · ${horse.name}`} wide>
+      {/* This modal used to show a blinking LIVE badge and a ticking clock over
+          a static stock photo, for every horse — including the six with no
+          camera pointed at them at all. Nothing in this repo streams video
+          into the browser: the backend has no snapshot/image endpoint, and
+          the RTSP path (tools/camera_capture.py, mock_camera.py) runs on the
+          edge box, not here. A fake LIVE feed is worse than no feed — it is
+          the exact failure mode this whole audit exists to remove, just in
+          video form instead of a number. Show what we actually have: the
+          reference photo, labelled as one, plus the real vitals if the
+          camera has sent any. */}
+      <Modal open={cam} onClose={() => setCam(false)} title={`${horse.name} · Stall ${horse.stall}`} wide>
         <div className="cam" style={{ backgroundImage: `url(${horse.photo})` }}>
-          <span className="live">
-            <i /> LIVE
+          <span className="live" style={{ background: "rgba(0,0,0,0.55)" }}>
+            REFERENCE PHOTO
           </span>
-          <span className="ts">{clock}</span>
         </div>
-        <p className="muted" style={{ fontSize: 12.5, marginTop: 12 }}>
-          Night-vision feed · Stall {horse.stall}. Behaviour is analysed every 5 minutes against {horse.name}'s learned
-          baseline.
-        </p>
+        {isBlind(horse.monitoring) ? (
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 12 }}>
+            No live video is wired into this dashboard yet — the camera streams to the edge box
+            for on-device analysis, not to this browser. This install has also never received a
+            reading from this stall, so there is nothing current to show even as numbers.
+          </p>
+        ) : (
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 12 }}>
+            No live video is wired into this dashboard yet — the camera streams to the edge box
+            for on-device analysis, not to this browser.{" "}
+            {horse.vitals?.bodyTempC != null && horse.vitals?.respRateBpm != null
+              ? `Latest reading: ${horse.vitals.bodyTempC.toFixed(1)} °C, ${Math.round(
+                  horse.vitals.respRateBpm,
+                )} bpm.`
+              : ""}
+          </p>
+        )}
       </Modal>
 
       <Modal

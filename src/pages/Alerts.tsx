@@ -8,7 +8,7 @@ const ICON: Record<string, React.ReactNode> = {
   "Low water intake": <Droplet size={19} />,
   "Highlight captured": <Activity size={19} />,
   "Baseline learning": <Activity size={19} />,
-  "Foaling labour detected": <Sparkles size={19} />,
+  "Labour logged by staff": <Sparkles size={19} />,
   "Respiratory pattern": <Wind size={19} />,
   "Stable vice": <Repeat size={19} />,
   "Low lying-down time": <Moon size={19} />,
@@ -20,6 +20,11 @@ export default function Alerts() {
 
   const shown = tab === "open" ? list.filter((a) => !a.acknowledged) : list;
   const open = list.filter((a) => !a.acknowledged).length;
+  // "All clear" must not mean "no OPEN alert" if some horses have simply
+  // never been heard from — that is not a clean baseline, it is a gap the
+  // monitoring-gap rule already raised as its own alert. Only claim calm when
+  // every one of those has actually been acknowledged too.
+  const silentUnacked = list.some((a) => !a.acknowledged && a.type === "No monitoring data");
 
   return (
     <>
@@ -32,17 +37,24 @@ export default function Alerts() {
             All ({list.length})
           </button>
         </div>
-        <span className="pill warn">
-          <Bell size={13} /> Auto-escalation on
+        {/* This claimed a manager -> on-call -> vet chain that the backend
+            does not run (server/notify.mjs sends one flat webhook per alert,
+            deliberately not that chain — see its own header comment). */}
+        <span className="pill muted">
+          <Bell size={13} /> Delivered via webhook
         </span>
       </div>
 
       {shown.length === 0 && (
         <div className="card" style={{ textAlign: "center", padding: 48 }}>
           <Check size={32} color="var(--positive)" />
-          <p style={{ marginTop: 10, fontWeight: 600, color: "var(--ink)" }}>All clear</p>
+          <p style={{ marginTop: 10, fontWeight: 600, color: "var(--ink)" }}>
+            {silentUnacked ? "No behavioural alerts" : "All clear"}
+          </p>
           <p className="muted" style={{ fontSize: 13 }}>
-            No open alerts — every horse is within baseline.
+            {silentUnacked
+              ? "But check the Horses page — some stalls have never sent a reading, which will not show up here as a behaviour alert."
+              : "No open alerts — every reporting horse is within baseline."}
           </p>
         </div>
       )}
@@ -79,9 +91,13 @@ export default function Alerts() {
         </div>
       ))}
 
+      {/* Third instance of the same overclaim on this one page (the pill and
+          the empty state carried it too) — the backend delivers one flat
+          webhook per alert, not an escalation chain. See notify.mjs. */}
       <p className="muted" style={{ fontSize: 12, marginTop: 18, lineHeight: 1.5 }}>
-        EquiCare provides behavioural context, not diagnosis. Alerts that aren't acknowledged within the set window
-        escalate automatically: manager → on-call → vet.
+        EquiCare provides behavioural context, not diagnosis. Each new alert is delivered once,
+        by webhook, to whatever you have connected — it does not yet chase an unacknowledged
+        alert up a chain on its own.
       </p>
     </>
   );
