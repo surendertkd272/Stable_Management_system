@@ -461,17 +461,17 @@ button {
   gap: var(--gap);
 }
 .cols-3 {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .cols-4 {
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .cols-2 {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--gap);
 }
 .span-2 {
@@ -485,6 +485,12 @@ button {
 }
 
 /* ---------- stat card ---------- */
+/* Size to content instead of stretching. Once the grid drops to two columns a
+   stat card can be paired with a photo card, and it was inflating to ~400px
+   with one number floating at the top. */
+.card.stat {
+  align-self: start;
+}
 .stat .top {
   display: flex;
   align-items: flex-start;
@@ -1151,7 +1157,7 @@ button {
 }
 .field-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1238,17 +1244,26 @@ button {
 }
 
 /* responsive */
-@media (max-width: 1100px) {
+/* Breakpoints are set against the CONTENT width, not the window: the rail
+   costs a fixed 243px, so a 768px tablet was laying two columns out in ~525px
+   and everything inside them wrapped to shreds. Each step below is the width
+   at which the *remaining* space stops fitting the column count. */
+
+/* ~1200 - 3 columns no longer fit beside the rail (needs ~900px of content) */
+@media (max-width: 1200px) {
   .dash-grid,
   .cols-3,
   .cols-4 {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .span-3 {
     grid-column: span 2;
   }
 }
-@media (max-width: 760px) {
+
+/* ~980 - hand the rail's 243px back to the content and use a hamburger.
+   A tablet then lays out two comfortable columns instead of two cramped ones. */
+@media (max-width: 980px) {
   .rail {
     transform: translateX(-100%);
     transition: transform 0.2s;
@@ -1258,24 +1273,39 @@ button {
   }
   .main {
     margin-left: 0;
+    padding: 22px 18px 40px;
+  }
+}
+
+/* ~720 - two columns stop fitting even at full width */
+@media (max-width: 720px) {
+  .main {
     padding: 20px 16px 40px;
   }
   .dash-grid,
+  .cols-2,
   .cols-3,
-  .cols-4,
-  .cols-2 {
-    grid-template-columns: 1fr;
+  .cols-4 {
+    grid-template-columns: minmax(0, 1fr);
   }
   .span-2,
   .span-3 {
     grid-column: span 1;
+  }
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .topbar-actions {
+    width: 100%;
   }
 }
 
 .mobile-bar {
   display: none;
 }
-@media (max-width: 760px) {
+@media (max-width: 980px) {
   .mobile-bar {
     display: flex;
     align-items: center;
