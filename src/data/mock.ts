@@ -160,7 +160,7 @@ export const horses: Horse[] = [
     owner: "Bharat Sports Venture",
     photo: img("photo-1601726429844-acd8b1385972"),
     status: "urgent",
-    statusNote: "Active labour since 02:05 — birth alarm on",
+    statusNote: "Logged in labour at 02:05 by yard staff — check in person",
     rest: "2h 30m",
     water: 4,
     outside: "0h 30m",
@@ -233,7 +233,7 @@ export const alerts: Alert[] = [
     type: "Foaling labour detected",
     severity: "alert",
     time: "02:05 · just now",
-    detail: "Labour behaviour detected — birth alarm active. Post-foaling milestones now being watched.",
+    detail: "Logged in labour by yard staff. Foaling is not sensor-monitored — follow the post-foaling checklist in person.",
     acknowledged: false,
   },
   {
@@ -300,7 +300,7 @@ export const breedingMares: Mare[] = [
     stage: "Day 340 of gestation",
     daysToDue: 0,
     status: "labour",
-    note: "Labour behaviour detected at 02:05 — birth alarm active",
+    note: "Logged in labour at 02:05 by yard staff — no foaling sensor, attend in person",
     stallion: "Sultan",
   },
 ];
@@ -447,7 +447,7 @@ export interface Covering {
 export const coverings: Covering[] = [
   { id: "c1", mare: "Noor", stallion: "Sultan", method: "AI", date: isoIn(-334), result: "In foal", note: "30-day scan confirmed · due in ~6 days" },
   { id: "c2", mare: "Zarina", stallion: "Shaan", method: "Natural", date: isoIn(-281), result: "In foal", note: "Heartbeat scan confirmed at day 30" },
-  { id: "c3", mare: "Laila", stallion: "Sultan", method: "Natural", date: isoIn(-340), result: "In foal", note: "Foaling in progress — birth alarm active" },
+  { id: "c3", mare: "Laila", stallion: "Sultan", method: "Natural", date: isoIn(-340), result: "In foal", note: "Foaling in progress — logged by yard staff" },
   { id: "c4", mare: "Meher", stallion: "—", method: "AI", date: isoIn(2), result: "Open", note: "Behaviour consistent with estrus (AI-flagged) — covering window opening" },
 ];
 
@@ -482,6 +482,8 @@ export const series: Record<string, (number | null)[]> = {
 export interface YardSlot {
   id: string;
   name: string;
+  /** absent on mock data; "no-data"/"offline" render as an un-watched stall */
+  monitoring?: Monitoring;
   stall: string;
   status: Status;
   x: number;
@@ -489,7 +491,7 @@ export interface YardSlot {
 }
 
 export function yardSlots(
-  list: { id: string; name: string; stall: string; status: Status }[]
+  list: { id: string; name: string; stall: string; status: Status; monitoring?: Monitoring }[]
 ): YardSlot[] {
   const cols = 3;
   const xs = [6, 36, 66];
@@ -500,6 +502,7 @@ export function yardSlots(
     name: h.name,
     stall: h.stall,
     status: h.status,
+    monitoring: h.monitoring,
     x: xs[i % cols],
     y: rows > 1 ? Math.round(6 + Math.floor(i / cols) * yStep) : 40,
   }));

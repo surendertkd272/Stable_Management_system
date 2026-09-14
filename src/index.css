@@ -932,6 +932,20 @@ button {
   color: var(--ink-soft);
   box-shadow: var(--shadow-soft);
 }
+/* A stall with no live data: hatched, so it never passes for a monitored box
+   at a glance. Same language as the "not assessable" risk bars. */
+.stall.blind {
+  border-style: dashed;
+  color: var(--text-secondary);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--surface),
+    var(--surface) 5px,
+    color-mix(in srgb, var(--text-secondary) 7%, var(--surface)) 5px,
+    color-mix(in srgb, var(--text-secondary) 7%, var(--surface)) 10px
+  );
+  box-shadow: none;
+}
 .stall .ind {
   width: 8px;
   height: 8px;
@@ -991,6 +1005,14 @@ button {
   color: var(--text-secondary);
   display: block;
   max-width: 460px;
+}
+/* A badge sitting next to the label is still a <span>, so the rule above was
+   making it a full-width block bar. Keep it hugging its own text. */
+.setting-row .info b .pill {
+  display: inline-flex;
+  width: auto;
+  max-width: none;
+  vertical-align: middle;
 }
 .switch {
   width: 46px;

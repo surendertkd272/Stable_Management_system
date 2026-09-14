@@ -21,6 +21,12 @@ type Tab = "foaling" | "mares" | "stallions";
 const fmtDate = (iso: string) =>
   new Date(iso + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 
+// Equine gestation runs ~340 days; the records carry days-to-due, so the day of
+// gestation follows from it rather than being typed in per mare.
+const TERM_DAYS = 340;
+const gestationDay = (m: { daysToDue: number }) =>
+  Math.max(0, TERM_DAYS - m.daysToDue);
+
 export default function Breeding() {
   const [tab, setTab] = useState<Tab>("foaling");
   return (
@@ -45,6 +51,10 @@ export default function Breeding() {
 
 /* ---------------- Foaling watch (existing) ---------------- */
 function Foaling() {
+  const labourMare = breedingMares.find((m) => m.status === "labour");
+  // Nearest to foaling is the one worth showing the protocol for.
+  const focusMare = [...breedingMares].sort((a, b) => a.daysToDue - b.daysToDue)[0];
+
   return (
     <>
       <h3 className="section-title">Foaling watch</h3>
@@ -76,7 +86,7 @@ function Foaling() {
                 <span className="pill accent">
                   <Heart size={12} /> by {m.stallion}
                 </span>
-                {labour && <span className="pill alert">Birth alarm</span>}
+                {labour && <span className="pill muted">Due per records</span>}
               </div>
             </div>
           );
@@ -86,26 +96,28 @@ function Foaling() {
       <div className="grid cols-2" style={{ alignItems: "start" }}>
         <div className="card">
           <div className="card-head">
-            <h3>Post-foaling monitoring · Laila</h3>
-            <span className="pill alert">Live</span>
+            <h3>Post-foaling checklist{labourMare ? ` · ${labourMare.name}` : ""}</h3>
+            <span className="pill muted">Staff protocol</span>
           </div>
           <p className="muted" style={{ fontSize: 13, marginBottom: 16 }}>
-            The riskiest hours are right after birth. The AI watches each milestone and flags anything that stalls.
+            The riskiest hours are right after birth. These are the checks to make and the
+            windows to make them in — foaling has no sensor on this install, so the system
+            does not detect these and cannot flag a missed one. Record what you observe in
+            the care diary.
           </p>
           {[
             { t: "Foal stands", s: "within ~1–2 h", alert: false },
             { t: "Foal nursing", s: "first nurse", alert: false },
-            { t: "Placenta passed", s: "within ~3 h", alert: true },
+            { t: "Placenta passed", s: "within ~3 h — call the vet if not", alert: false },
             { t: "Mare accepts foal", s: "no aggression", alert: false },
             { t: "Mare colic check", s: "post-foaling", alert: false },
           ].map((it, i) => (
             <div className="tl-item" key={i}>
-              <div className={`tl-dot ${it.alert ? "alert" : "pending"}`} />
+              <div className="tl-dot pending" />
               <div className="tl-body">
                 <b>{it.t}</b>
                 <span>
                   {it.s}
-                  {it.alert ? " · watch closely" : ""}
                 </span>
               </div>
             </div>
@@ -114,18 +126,25 @@ function Foaling() {
 
         <div className="card">
           <div className="card-head">
-            <h3>Veterinary milestones · Zarina</h3>
-            <Stethoscope size={18} color="var(--text-secondary)" />
+            <h3>Gestation protocol{focusMare ? ` · ${focusMare.name}` : ""}</h3>
+            <span className="pill muted">Schedule, not records</span>
           </div>
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
+            {focusMare
+              ? `Day ${gestationDay(focusMare)} of gestation. A tick means that point has been
+                 reached, not that the procedure was carried out — vet records are not linked
+                 to this view yet.`
+              : "Standard equine gestation schedule."}
+          </p>
           {[
-            { t: "Twin-check scan", s: "Day 14–16 · done", done: true },
-            { t: "Heartbeat scan", s: "Day 25–30 · done", done: true },
-            { t: "Mid-term check", s: "Day 300 · scheduled", done: false },
-            { t: "Pre-foaling prep", s: "Day 320 · mammary, waxing-up", done: false },
-            { t: "Milk-calcium test", s: "nightly near term", done: false },
+            { t: "Twin-check scan", s: "Day 14–16", day: 16 },
+            { t: "Heartbeat scan", s: "Day 25–30", day: 30 },
+            { t: "Mid-term check", s: "Day 300", day: 300 },
+            { t: "Pre-foaling prep", s: "Day 320 · mammary, waxing-up", day: 320 },
+            { t: "Milk-calcium test", s: "Day 330+ · nightly near term", day: 330 },
           ].map((it, i) => (
             <div className="row" key={i} style={{ marginBottom: 8, padding: "12px 14px" }}>
-              {it.done ? (
+              {focusMare && gestationDay(focusMare) >= it.day ? (
                 <CheckCircle2 size={18} color="var(--positive)" />
               ) : (
                 <Circle size={18} color="var(--text-faint)" />

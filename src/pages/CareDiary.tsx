@@ -46,10 +46,15 @@ export default function CareDiary() {
               <Sparkles size={20} />
             </div>
             <div>
-              <b style={{ fontSize: 15, color: "var(--ink)" }}>Every record makes the AI smarter</b>
+              {/* The rule engine does not read diary entries — they are records,
+                  not model input. Claiming they suppress false alarms describes
+                  behaviour the system does not have. */}
+              <b style={{ fontSize: 15, color: "var(--ink)" }}>Context for whoever reviews an alert</b>
               <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
-                Logging travel, feed changes, farrier and vet visits lets EquiCare explain away a restless night instead
-                of firing a false alarm.
+                Logging travel, feed changes, farrier and vet visits gives the person reading a
+                restless night somewhere to look before escalating. These notes are not yet fed
+                into the alerting rules — they are the record trail, and the labelled history the
+                models will learn from.
               </p>
             </div>
           </div>

@@ -33,6 +33,27 @@ export default function SettingsPage() {
   const [sensitivity, setSensitivity] = useState(60);
   const [lang, setLang] = useState<"en" | "hi">("en");
 
+  // An alert toggle is a safety control. Switching one on for a point that has
+  // no sensor arms something that can never fire, and the user has no way to
+  // know. Readiness comes from /api/coverage, so it tracks what the backend
+  // really supports rather than a second list kept in the UI.
+  const [coverage, setCoverage] = useState<CoverageRow[] | null>(null);
+  useEffect(() => {
+    let stop = false;
+    getCoverage().then((r) => !stop && setCoverage(r));
+    return () => {
+      stop = true;
+    };
+  }, []);
+  const sourceStatus = new Map((coverage ?? []).map((r) => [r.source, r.status]));
+  /** What each alert needs, and whether that source can produce data today. */
+  const readiness = (source: string, need: string) => {
+    if (!coverage) return undefined;                     // unknown (no backend)
+    const st = sourceStatus.get(source);
+    if (st === "available") return undefined;            // ready — no annotation
+    return st === "model-pending" ? "model not trained yet" : `needs ${need}`;
+  };
+
   const flip = (k: keyof typeof toggles) => setToggles((t) => ({ ...t, [k]: !t[k] }));
 
   return (
@@ -85,16 +106,20 @@ export default function SettingsPage() {
 
       {/* alert types */}
       <div className="card">
-        <h3 style={{ marginBottom: 8 }}>Alert types</h3>
-        <Row label="Early colic pattern" desc="Behavioural cues vs baseline." on={toggles.colic} flip={() => flip("colic")} />
-        <Row label="Casting detection" desc="Stuck against wall / unable to rise." on={toggles.casting} flip={() => flip("casting")} />
-        <Row label="Birth alarm" desc="Foaling behaviour detected." on={toggles.birth} flip={() => flip("birth")} />
-        <Row label="Low water intake" desc="Water-area visits below baseline." on={toggles.water} flip={() => flip("water")} />
-        <Row label="Respiratory (audio)" desc="Coughing & abnormal breathing from audio analysis." on={toggles.respiratory} flip={() => flip("respiratory")} />
-        <Row label="Stable vices" desc="Weaving, box-walking, crib-biting, wind-sucking." on={toggles.vice} flip={() => flip("vice")} />
-        <Row label="Sleep deprivation" desc="Chronically low lying-down / REM time." on={toggles.sleep} flip={() => flip("sleep")} />
-        <Row label="Gait & lameness" desc="Movement asymmetry screening (beta)." on={toggles.gait} flip={() => flip("gait")} />
-        <Row label="Highlights" desc="Save shareable stable-life moments." on={toggles.highlights} flip={() => flip("highlights")} />
+        <h3 style={{ marginBottom: 4 }}>Alert types</h3>
+        <p className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
+          Greyed-out alerts have no data source on this install yet and cannot fire. They
+          switch on by themselves once their sensor or model is in place.
+        </p>
+        <Row label="Early colic pattern" desc="Behavioural cues vs baseline." on={toggles.colic} flip={() => flip("colic")} blocked={readiness("imu_optical", "IMU tag")} />
+        <Row label="Casting detection" desc="Stuck against wall / unable to rise." on={toggles.casting} flip={() => flip("casting")} blocked={readiness("optical", "vision model")} />
+        <Row label="Birth alarm" desc="Foaling behaviour from the stall camera." on={toggles.birth} flip={() => flip("birth")} blocked={readiness("optical", "vision model")} />
+        <Row label="Low water intake" desc="Water-area visits below baseline." on={toggles.water} flip={() => flip("water")} blocked={readiness("flow_meter", "flow meter")} />
+        <Row label="Respiratory (audio)" desc="Coughing & abnormal breathing from audio analysis." on={toggles.respiratory} flip={() => flip("respiratory")} blocked={readiness("optical_audio", "microphone")} />
+        <Row label="Stable vices" desc="Weaving, box-walking, crib-biting, wind-sucking." on={toggles.vice} flip={() => flip("vice")} blocked={readiness("optical_audio", "microphone")} />
+        <Row label="Sleep deprivation" desc="Chronically low lying-down / REM time." on={toggles.sleep} flip={() => flip("sleep")} blocked={readiness("imu_optical", "IMU tag")} />
+        <Row label="Gait & lameness" desc="Movement asymmetry screening (beta)." on={toggles.gait} flip={() => flip("gait")} blocked={readiness("imu_optical", "IMU tag")} />
+        <Row label="Highlights" desc="Save shareable stable-life moments." on={toggles.highlights} flip={() => flip("highlights")} blocked={readiness("optical", "vision model")} />
       </div>
 
       {/* sensitivity + privacy */}
@@ -240,14 +265,34 @@ function CoverageCard() {
   );
 }
 
-function Row({ label, desc, on, flip }: { label: string; desc: string; on: boolean; flip: () => void }) {
+function Row({
+  label,
+  desc,
+  on,
+  flip,
+  blocked,
+}: {
+  label: string;
+  desc: string;
+  on: boolean;
+  flip: () => void;
+  /** reason this alert cannot fire yet; the toggle is then inert */
+  blocked?: string;
+}) {
   return (
-    <div className="setting-row">
+    <div className="setting-row" style={blocked ? { opacity: 0.62 } : undefined}>
       <div className="info">
-        <b>{label}</b>
+        <b>
+          {label}
+          {blocked && (
+            <span className="pill muted" style={{ marginLeft: 8, fontSize: 10.5 }}>
+              {blocked}
+            </span>
+          )}
+        </b>
         <span>{desc}</span>
       </div>
-      <Toggle on={on} onClick={flip} />
+      <Toggle on={blocked ? false : on} onClick={blocked ? () => {} : flip} />
     </div>
   );
 }
