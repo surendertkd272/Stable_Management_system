@@ -163,10 +163,17 @@ function TopBar() {
   const overdueHealth = health.filter((t) => !t.done && t.due < todayIso).length;
   const unpaidInvoices = invoices.filter((i) => !i.paid).length;
 
+  // "all cameras online" was stated unconditionally. A horse that stopped
+  // reporting is the one thing a monitoring header must never paper over.
+  const silent = horses.filter((h) => h.monitoring && h.monitoring !== "live").length;
+  const feedState = silent
+    ? `${silent} ${silent === 1 ? "horse is" : "horses are"} not reporting`
+    : "all sensors reporting";
+
   const titles: Record<string, { h1: string; p: string }> = {
     "/": {
       h1: "Welcome back, Surender",
-      p: `${needAttention} ${needAttention === 1 ? "horse needs" : "horses need"} attention today · all cameras online`,
+      p: `${needAttention} ${needAttention === 1 ? "horse needs" : "horses need"} attention today · ${feedState}`,
     },
     "/horses": { h1: "Horses", p: `${horses.length} horses monitored across 3 barns` },
     "/alerts": { h1: "Alerts", p: `${openAlerts} unacknowledged · escalation active` },

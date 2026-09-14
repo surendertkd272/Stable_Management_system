@@ -207,6 +207,15 @@ export function summarizeHorse(bio, allReadings) {
       : countToday(rd, "water_visit") || Math.round(sumToday(rd, "water_ml") / 4000) || 0,
     outside: gaps.has("outside_minutes") ? null : fmtHM(sumToday(rd, "outside_minutes")),
     stress: gaps.has("activity_index") && gaps.has("vice_event") ? null : stressLevel(rd),
+    // The two vitals the camera measures directly. These belong on the summary,
+    // not only in the per-horse detail: they are what this system can actually
+    // tell you today, and a dashboard that headlines rest and water — neither
+    // of which has a sensor yet — leads with its weakest claim.
+    vitals: {
+      bodyTempC: latest(rd, "body_temp_c")?.value ?? null,
+      respRateBpm: latest(rd, "respiratory_rate_bpm")?.value ?? null,
+      respConfidence: latest(rd, "respiratory_rate_bpm")?.confidence ?? null,
+    },
     // what the UI should render as "not measured" rather than as a value
     uninstrumented: [...gaps].sort(),
     baselineProgress: Math.min(100, Math.round((distinctDays(rd) / BASELINE_TARGET_DAYS) * 100)),
@@ -253,6 +262,9 @@ export function buildAlerts(roster, allReadings, isAcked) {
   return alerts.map(({ _ts, ...a }) => a);
 }
 
+const avgOrNull = (rows) =>
+  rows.length ? +(rows.reduce((a, r) => a + r.value, 0) / rows.length).toFixed(2) : null;
+
 /** Global dashboard sparklines (matches `series` in mock.ts). `span` days. */
 export function buildSeries(roster, allReadings, span = 7) {
   const days = [...Array(span)].map((_, i) => dayKey(Date.now() - (span - 1 - i) * DAY_MS));
@@ -270,6 +282,10 @@ export function buildSeries(roster, allReadings, span = 7) {
     water:     orNull("water_visit", (d) => Math.round(onDay("water_visit", d).length / nHorses)),
     outside:   orNull("outside_minutes", (d) => +(onDay("outside_minutes", d).reduce((a, r) => a + r.value, 0) / 60 / nHorses).toFixed(1)),
     alerts:    per((d) => onDay("vice_event", d).length + onDay("urination_event", d).length), // placeholder proxy
+    // Camera-derived vitals as yard-wide daily averages. null on a day with no
+    // readings — a gap in the line, not a zero, for the same reason as above.
+    bodyTemp:  per((d) => avgOrNull(onDay("body_temp_c", d))),
+    respRate:  per((d) => avgOrNull(onDay("respiratory_rate_bpm", d))),
   };
 }
 

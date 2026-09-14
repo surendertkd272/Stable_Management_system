@@ -516,6 +516,37 @@ button {
   align-items: center;
   justify-content: space-between;
   margin-top: 12px;
+  gap: 10px;
+}
+
+/* "not measured" state — visibly a non-reading, not a small number.
+   A metric with no sensor must never look like a measurement of zero. */
+.stat .value.none {
+  font-family: var(--font-body, inherit);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0;
+}
+.card.stat.unmeasured {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent,
+    transparent 7px,
+    color-mix(in srgb, var(--text-secondary) 5%, transparent) 7px,
+    color-mix(in srgb, var(--text-secondary) 5%, transparent) 14px
+  );
+}
+.card.stat.unmeasured .chip {
+  opacity: 0.45;
+}
+.stat .foot .label em {
+  display: block;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  margin-top: 2px;
 }
 
 /* sparkline */
@@ -632,16 +663,38 @@ button {
 }
 .feature .thumb {
   position: absolute;
-  right: -20px;
-  bottom: -20px;
-  width: 150px;
-  height: 150px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background-size: cover;
+  background-position: center;
   display: grid;
   place-items: center;
+  /* the clip still sits behind the copy, dimmed enough to keep it readable */
+  opacity: 0.9;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 42%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 42%);
+}
+.feature .thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 30%, rgba(60, 40, 130, 0.55) 100%);
+}
+.feature .thumb svg {
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.45));
+}
+.feature > div {
+  position: relative;
+  z-index: 1;
 }
 .feature .play {
+  position: relative;
+  z-index: 1;
   width: 46px;
   height: 46px;
   border-radius: 50%;
@@ -841,6 +894,24 @@ button {
 }
 
 /* yard map placeholder */
+/* A card in a 3-up row stretches to the tallest sibling. Without this its
+   content pins to the top and leaves a pool of dead space underneath — which
+   read as "this panel is broken" rather than "this panel is short". */
+.card.fill {
+  display: flex;
+  flex-direction: column;
+}
+.card.fill > .card-head {
+  flex: 0 0 auto;
+}
+.card.fill > .fill-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+}
+
 .yardmap {
   background: var(--surface-muted);
   border-radius: var(--radius-inner);

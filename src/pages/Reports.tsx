@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { FileText, Download, Share2, Moon, Droplet, Activity, Sun, Table } from "lucide-react";
+import {
+  FileText,
+  Download,
+  Share2,
+  Moon,
+  Droplet,
+  Activity,
+  Sun,
+  Table,
+  Thermometer,
+  Wind,
+} from "lucide-react";
 import { useStable, useToast } from "../store";
 import { getSeries, exportReadingsCsv } from "../data/api";
 import { Sparkline } from "../components/ui";
@@ -143,7 +154,29 @@ export default function Reports() {
         </div>
       </div>
 
+      {/* The camera-derived vitals lead: on a camera-only install these are the
+          only clinically useful numbers in the report, and burying them under
+          three "not measured" panels made the report look emptier than it is. */}
       <div className="grid cols-2" style={{ marginBottom: 24 }}>
+        <ReportMetric
+          icon={<Thermometer size={18} />}
+          label="Body temperature"
+          value={horse.vitals?.bodyTempC == null ? null : horse.vitals.bodyTempC.toFixed(1) + " °C"}
+          note="Eye-region thermal · trend vs this horse's baseline, ±2 °C absolute"
+          spark={series.bodyTemp ?? []}
+        />
+        <ReportMetric
+          icon={<Wind size={18} />}
+          label="Respiratory rate"
+          value={horse.vitals?.respRateBpm == null ? null : Math.round(horse.vitals.respRateBpm) + " bpm"}
+          note={
+            horse.vitals?.respConfidence == null
+              ? "Nostril thermal oscillation"
+              : `Nostril thermal · rhythm confidence ${Math.round(horse.vitals.respConfidence * 100)}%`
+          }
+          spark={series.respRate ?? []}
+          color="var(--accent-strong)"
+        />
         <ReportMetric icon={<Moon size={18} />} label="Avg rest / night" value={horse.rest} note="Stable, within baseline" spark={series.rest} />
         <ReportMetric icon={<Droplet size={18} />} label="Avg water visits / day" value={horse.water === null ? null : String(horse.water)} note={range === "30" ? "Slight dip mid-month" : "Consistent"} spark={series.water} type="bar" />
         <ReportMetric icon={<Sun size={18} />} label="Avg time outside box" value={horse.outside} note="Good turnout activity" spark={series.outside} />
@@ -159,8 +192,12 @@ export default function Reports() {
           Over the last {range} days,{" "}
           {horse.rest === null && horse.water === null && horse.outside === null ? (
             <>
-              {horse.name} was monitored by camera only — rest, water and turnout have no sensor
-              on this install and are not reported here.
+              {horse.name} was monitored by thermal camera only. Body temperature and
+              respiratory rate were measured continuously
+              {horse.vitals?.bodyTempC != null && ` (latest ${horse.vitals.bodyTempC.toFixed(1)} °C`}
+              {horse.vitals?.respRateBpm != null && `, ${Math.round(horse.vitals.respRateBpm)} bpm`}
+              {horse.vitals?.bodyTempC != null && ")"}. Rest, water and turnout have no sensor on
+              this install and are not reported here.
             </>
           ) : (
             <>
@@ -205,9 +242,14 @@ function ReportMetric({
             {label}
           </span>
         </div>
-        {/* an all-null series has nothing to plot — a flat zero line would
-            read as a real measured trend of nothing */}
-        {value !== null && <Sparkline data={spark as number[]} type={type} color={color} w={80} h={30} />}
+        {/* Plot only real points, and only when there are at least two. One
+            reading drawn as a line invents a trend out of a single sample. */}
+        {(() => {
+          const pts = spark.filter((n): n is number => n !== null);
+          return value !== null && pts.length > 1 ? (
+            <Sparkline data={pts} type={type} color={color} w={80} h={30} />
+          ) : null;
+        })()}
       </div>
       <div
         style={{

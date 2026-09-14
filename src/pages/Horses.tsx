@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Moon, Droplet, Sun as SunIcon } from "lucide-react";
+import { Moon, Thermometer, Wind } from "lucide-react";
 import { Status } from "../data/mock";
 import { useStable } from "../store";
 import { StatusPill, MonitoringPill, isBlind, riskScore, riskBand } from "../components/ui";
@@ -52,34 +52,56 @@ export default function Horses() {
             </div>
             <div className="metrics">
               <div className="m">
-                <b>{h.rest}</b>
+                <b>{h.vitals?.bodyTempC == null ? "—" : `${h.vitals.bodyTempC.toFixed(1)}°`}</b>
+                <span>
+                  <Thermometer size={11} style={{ verticalAlign: "-1px" }} /> temp
+                </span>
+              </div>
+              <div className="m">
+                <b>{h.vitals?.respRateBpm == null ? "—" : Math.round(h.vitals.respRateBpm)}</b>
+                <span>
+                  <Wind size={11} style={{ verticalAlign: "-1px" }} /> resp
+                </span>
+              </div>
+              <div className="m">
+                <b>{h.rest ?? "—"}</b>
                 <span>
                   <Moon size={11} style={{ verticalAlign: "-1px" }} /> rest
                 </span>
               </div>
-              <div className="m">
-                <b>{h.water}</b>
-                <span>
-                  <Droplet size={11} style={{ verticalAlign: "-1px" }} /> water
-                </span>
-              </div>
-              <div className="m">
-                <b>{h.outside}</b>
-                <span>
-                  <SunIcon size={11} style={{ verticalAlign: "-1px" }} /> outside
-                </span>
-              </div>
             </div>
             <div style={{ marginTop: 12 }}>
-              <div className="flex between" style={{ fontSize: 11, marginBottom: 4 }}>
-                <span className="muted">Predictive risk</span>
-                <span style={{ color: riskBand(riskScore(h)).color, fontWeight: 700 }}>
-                  {riskScore(h)} · {riskBand(riskScore(h)).label}
-                </span>
-              </div>
-              <div className="progress" style={{ height: 6 }}>
-                <i style={{ width: `${riskScore(h)}%`, background: riskBand(riskScore(h)).color }} />
-              </div>
+              {h.monitoring === "no-data" || h.monitoring === "offline" ? (
+                <>
+                  <div className="flex between" style={{ fontSize: 11, marginBottom: 4 }}>
+                    <span className="muted">Predictive risk</span>
+                    <span style={{ color: "var(--text-secondary)", fontWeight: 700 }}>
+                      not assessable
+                    </span>
+                  </div>
+                  <div className="progress" style={{ height: 6 }}>
+                    <i
+                      style={{
+                        width: "100%",
+                        background:
+                          "repeating-linear-gradient(135deg, var(--border) 0 6px, transparent 6px 12px)",
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex between" style={{ fontSize: 11, marginBottom: 4 }}>
+                    <span className="muted">Predictive risk</span>
+                    <span style={{ color: riskBand(riskScore(h)).color, fontWeight: 700 }}>
+                      {riskScore(h)} · {riskBand(riskScore(h)).label}
+                    </span>
+                  </div>
+                  <div className="progress" style={{ height: 6 }}>
+                    <i style={{ width: `${riskScore(h)}%`, background: riskBand(riskScore(h)).color }} />
+                  </div>
+                </>
+              )}
             </div>
           </div>
         ))}

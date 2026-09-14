@@ -227,29 +227,44 @@ export function StatCard({
   spark,
   sparkType = "line",
   sparkColor,
+  missingNote,
 }: {
   icon: ReactNode;
   label: string;
-  value: string;
+  /** null = nothing measures this here. Renders as "Not measured", never 0. */
+  value: string | null;
   unit?: string;
   delta?: number;
-  spark: number[];
+  spark: (number | null)[];
   sparkType?: "line" | "bar";
   sparkColor?: string;
+  /** shown under the label when the metric has no sensor */
+  missingNote?: string;
 }) {
+  const measured = value !== null && value !== undefined;
+  const points = spark.filter((n): n is number => n !== null);
   return (
-    <div className="card stat">
+    <div className={`card stat${measured ? "" : " unmeasured"}`}>
       <div className="top">
         <div className="chip">{icon}</div>
-        {delta !== undefined && <Delta value={delta} />}
+        {measured && delta !== undefined && <Delta value={delta} />}
       </div>
-      <div className="value">
-        {value}
-        {unit && <small>{unit}</small>}
-      </div>
+      {measured ? (
+        <div className="value">
+          {value}
+          {unit && <small>{unit}</small>}
+        </div>
+      ) : (
+        <div className="value none">Not measured</div>
+      )}
       <div className="foot">
-        <span className="label">{label}</span>
-        <Sparkline data={spark} type={sparkType} color={sparkColor} />
+        <span className="label">
+          {label}
+          {!measured && missingNote && <em>{missingNote}</em>}
+        </span>
+        {measured && points.length > 1 && (
+          <Sparkline data={points} type={sparkType} color={sparkColor} />
+        )}
       </div>
     </div>
   );

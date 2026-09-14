@@ -26,6 +26,12 @@ export interface Horse {
   stress: "Low" | "Medium" | "High" | null;
   /** metric keys with no sensor here, from /api/horses */
   uninstrumented?: string[];
+  /** what the thermal camera measures directly; null until a reading arrives */
+  vitals?: {
+    bodyTempC: number | null;
+    respRateBpm: number | null;
+    respConfidence: number | null;
+  };
   baselineProgress: number; // 0-100
   // present when served by the backend; absent on mock data (treated as "live")
   monitoring?: Monitoring;
@@ -52,6 +58,7 @@ export const horses: Horse[] = [
     outside: "1h 05m",
     stress: "High",
     baselineProgress: 100,
+    vitals: { bodyTempC: 37.9, respRateBpm: 16, respConfidence: 0.72 },
   },
   {
     id: "shaan",
@@ -69,6 +76,7 @@ export const horses: Horse[] = [
     outside: "3h 20m",
     stress: "Medium",
     baselineProgress: 100,
+    vitals: { bodyTempC: 37.5, respRateBpm: 12, respConfidence: 0.81 },
   },
   {
     id: "noor",
@@ -86,6 +94,7 @@ export const horses: Horse[] = [
     outside: "2h 40m",
     stress: "Low",
     baselineProgress: 100,
+    vitals: { bodyTempC: 37.7, respRateBpm: 21, respConfidence: 0.77 },
   },
   {
     id: "raja",
@@ -103,6 +112,7 @@ export const horses: Horse[] = [
     outside: "4h 10m",
     stress: "Low",
     baselineProgress: 100,
+    vitals: { bodyTempC: 37.4, respRateBpm: 11, respConfidence: 0.88 },
   },
   {
     id: "meher",
@@ -120,6 +130,7 @@ export const horses: Horse[] = [
     outside: "3h 55m",
     stress: "Low",
     baselineProgress: 74,
+    vitals: { bodyTempC: 37.6, respRateBpm: 12, respConfidence: 0.69 },
   },
   {
     id: "sultan",
@@ -137,6 +148,7 @@ export const horses: Horse[] = [
     outside: "4h 30m",
     stress: "Low",
     baselineProgress: 100,
+    vitals: { bodyTempC: 37.5, respRateBpm: 11, respConfidence: 0.9 },
   },
   {
     id: "laila",
@@ -154,6 +166,7 @@ export const horses: Horse[] = [
     outside: "0h 30m",
     stress: "High",
     baselineProgress: 100,
+    vitals: { bodyTempC: 38.8, respRateBpm: 19, respConfidence: 0.74 },
   },
 ];
 
@@ -454,12 +467,14 @@ export const stallions: Stallion[] = [
 ];
 
 // stat-card sparkline series
-export const series = {
+export const series: Record<string, (number | null)[]> = {
   monitored: [5, 6, 6, 6, 7, 7, 7],
   rest: [6.2, 6.8, 7.1, 6.5, 7.4, 7.0, 6.9],
   water: [6, 7, 5, 8, 7, 9, 7],
   outside: [3.1, 2.8, 3.4, 4.0, 3.6, 4.1, 3.9],
   alerts: [3, 1, 2, 4, 1, 2, 5],
+  bodyTemp: [37.6, 37.5, 37.7, 37.6, 37.8, 37.6, 37.7],
+  respRate: [12, 11, 13, 12, 14, 12, 12],
 };
 
 // Lay horses out on the yard map in an adaptive grid (% positions),
