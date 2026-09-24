@@ -79,6 +79,10 @@ _ap.add_argument("--modbus-port", type=int, default=MODBUS_PORT)
 _ap.add_argument("--https", action="store_true", default=USE_HTTPS)
 _ap.add_argument("--realm", default=DEVICE_REALM,
                  help="device digest realm used in the login hash")
+_ap.add_argument("--eval", action="store_true",
+                 help="eval-unit day: also check the Digest fallback, HTTPS and ROI read-back, "
+                      "in both the edge agent's driver and the server's client, and print a report")
+_ap.add_argument("--https-port", type=int, default=443, help="port for the HTTPS check in --eval")
 _a = _ap.parse_args()
 
 CAMERA_IP, USERNAME, PASSWORD = _a.ip, _a.user, _a.password
@@ -126,7 +130,9 @@ def step_reachability():
 # 2. ISAPI login / session
 # --------------------------------------------------------------------------- #
 class Isapi:
-    def __init__(self):
+    def __init__(self, base=None, quiet=False):
+        self.base = base or BASE
+        self.quiet = quiet
         self.s = requests.Session()
         self.s.verify = False
         self.session_id = None
@@ -141,7 +147,7 @@ class Isapi:
     def discover_realm(self):
         """Some firmware advertise the real digest realm in WWW-Authenticate."""
         try:
-            r = self.s.get(f"{BASE}/ISAPI/System/Capability/DeviceInfo", timeout=5)
+            r = self.s.get(f"{self.base}/ISAPI/System/Capability/DeviceInfo", timeout=5)
             auth = r.headers.get("WWW-Authenticate", "")
             if 'realm="' in auth:
                 realm = auth.split('realm="', 1)[1].split('"', 1)[0]
@@ -160,7 +166,7 @@ class Isapi:
 
         for method in ("PUT", "POST"):
             try:
-                r = self.s.request(method, f"{BASE}/ISAPI/Security/User/Login",
+                r = self.s.request(method, f"{self.base}/ISAPI/Security/User/Login",
                                    data=json.dumps(body),
                                    headers={"Content-Type": "application/json;charset=utf8"},
                                    timeout=5)
@@ -182,7 +188,7 @@ class Isapi:
         # Fallback: plain HTTP Digest (works on some OEM firmware).
         warn("session login failed; falling back to HTTP Digest auth")
         self.digest = HTTPDigestAuth(USERNAME, PASSWORD)
-        r = self.s.get(f"{BASE}/ISAPI/System/Capability/DeviceInfo",
+        r = self.s.get(f"{self.base}/ISAPI/System/Capability/DeviceInfo",
                        auth=self.digest, timeout=5)
         if r.status_code == 200:
             ok("HTTP Digest auth OK")
@@ -192,12 +198,12 @@ class Isapi:
         return False
 
     def get(self, path):
-        r = self.s.get(f"{BASE}{path}", headers=self._headers(), auth=self.digest, timeout=6)
+        r = self.s.get(f"{self.base}{path}", headers=self._headers(), auth=self.digest, timeout=6)
         r.raise_for_status()
         return r.json()
 
     def put(self, path, body):
-        r = self.s.request("PUT", f"{BASE}{path}", data=json.dumps(body),
+        r = self.s.request("PUT", f"{self.base}{path}", data=json.dumps(body),
                            headers=self._headers(), auth=self.digest, timeout=6)
         try:
             j = r.json()
@@ -266,8 +272,58 @@ _COMMON = {"FPara100": EMISSIVITY_100, "AimDistance": DISTANCE_CM, "AlarmFilterT
            "AlarmLinkOutInfo": "", "FtpPicNum": 1, "EMailPicNum": 1, "MailContentType": 1,
            "RecTime": 5, "PreRecordTime": 5, "ActiveTimeSet": _ARM}
 
+def _roi_body(kind, idx, geom, name, enable="Yes"):
+    """A full set-ROI payload for Point/Area, in the device's format."""
+    base = dict(Id=idx, PresetIdx=0, Type=kind, Enable=enable, Name=name, **_COMMON)
+    if kind == "Point":
+        return {"ThermometryList": [dict(base, Point=geom, TempAlarm=_ALARM)]}
+    return {"ThermometryList": [dict(base, Area=geom, MaxTempAlarm=_ALARM, MinTempAlarm=_ALARM, DiffTempAlarm=_ALARM)]}
+
+
+def _saved_geometry(item, kind):
+    """Coordinates from a GET Point/Area item, whichever shape the firmware
+    uses (config: Point{RatX,RatY}; live: PointTemp{RatX,RatY})."""
+    if kind == "Point":
+        g = item.get("Point") or item.get("PointTemp") or {}
+        return {"RatX": g.get("RatX", 5000), "RatY": g.get("RatY", 5000)}
+    return item.get("Area") or None
+
+
+def backup_rois(api):
+    """Point 0 and Area 0 as they are now. Step 6 overwrites those slots, and
+    Point 0 is the calibrated eye ROI — running this diagnostic on a working
+    camera used to silently destroy its calibration."""
+    saved = {}
+    for kind in ("Point", "Area"):
+        try:
+            for it in api.get(f"/ISAPI/Thermometry/{kind}?Dev=0&Idx=255").get("ThermometryList", []):
+                if it.get("Type", kind) == kind and it.get("Id") == 0:
+                    saved[kind] = it
+        except Exception:                                   # noqa: BLE001
+            pass
+    return saved
+
+
+def restore_rois(api, saved):
+    print("\n=== restore ROIs ===")
+    for kind in ("Point", "Area"):
+        it = saved.get(kind)
+        if it is None:
+            sc, j = api.put("/ISAPI/Thermometry/Delete?Dev=0", {"Type": kind, "Id": 0})
+            (ok if j.get("Result") == "OK" else warn)(f"removed test {kind} 0 (there was none before) -> {j.get('Result', sc)}")
+            continue
+        geom = _saved_geometry(it, kind)
+        if geom is None:
+            warn(f"{kind} 0 existed but its geometry is not in the GET response — re-push it from the Hardware page")
+            continue
+        sc, j = api.put(f"/ISAPI/Thermometry/{kind}?Dev=0&Idx=0",
+                        _roi_body(kind, 0, geom, it.get("Name", kind), it.get("Enable", "Yes")))
+        (ok if j.get("Result") == "OK" else warn)(f"restored {kind} 0 ({it.get('Name', '')}) -> {j.get('Result', sc)}")
+
+
 def step_set_rois(api):
     print("\n=== 6. Set ROIs over ISAPI (PUT) ===")
+    info("existing Point 0 / Area 0 are backed up and restored afterwards")
 
     point = {"ThermometryList": [dict(
         Id=0, PresetIdx=0, Type="Point", Enable="Yes", Name="EyeMax",
@@ -381,6 +437,129 @@ def step_rtsp():
     info("full video validation: run  ffprobe -rtsp_transport tcp <url>  or open in VLC")
 
 # --------------------------------------------------------------------------- #
+# --eval: the three things only a real unit can answer
+# --------------------------------------------------------------------------- #
+EVAL = []          # (check, implementation, status, detail, fix)
+
+def _eval(check, impl, status, detail, fix=""):
+    EVAL.append((check, impl, status, detail, fix))
+    {"PASS": ok, "N/A": info, "FAIL": fail}[status](f"{check} [{impl}]: {detail}")
+
+
+def _node_check(https=False):
+    """Run the server's camera client (tools/camera_check.mjs) against the unit."""
+    import subprocess, os
+    here = os.path.dirname(os.path.abspath(__file__))
+    cmd = ["node", os.path.join(here, "tools", "camera_check.mjs"), "--host", CAMERA_IP,
+           "--user", USERNAME, "--pass", PASSWORD,
+           "--port", str(_a.https_port if https else HTTP_PORT)] + (["--https"] if https else [])
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except FileNotFoundError:
+        return {"error": "node is not installed on this machine"}
+    except Exception as e:                                   # noqa: BLE001
+        return {"error": f"checker failed: {e}"}
+
+
+def step_eval(api):
+    print("\n=== eval-unit checks ===")
+    sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.abspath(__file__)), "edge"))
+    from edge_agent import roi_slots                       # the agent's real parsing
+
+    # -- A. HTTP Digest fallback ------------------------------------------- #
+    plain = requests.get(f"{BASE}/ISAPI/System/Capability/DeviceInfo", verify=False, timeout=5)
+    challenge = plain.headers.get("WWW-Authenticate", "")
+    if plain.status_code == 200:
+        _eval("Digest fallback", "edge agent", "N/A", "camera answers without authentication — nothing to fall back from")
+    elif not challenge.lower().startswith("digest"):
+        _eval("Digest fallback", "edge agent", "N/A",
+              f"camera does not offer Digest (HTTP {plain.status_code}); session login is the only path, and it worked above")
+    else:
+        r = requests.get(f"{BASE}/ISAPI/System/Capability/DeviceInfo", auth=HTTPDigestAuth(USERNAME, PASSWORD),
+                         verify=False, timeout=5)
+        _eval("Digest fallback", "edge agent", "PASS" if r.status_code == 200 else "FAIL",
+              f"Digest login -> HTTP {r.status_code}", "sparsh_camera.py IsapiClient.login (Digest branch)")
+
+    # -- C. ROI read-back (write to spare slots 9, never the calibrated 0/1) - #
+    geom_a = {"Total": 4, "EndPointList": [{"RatX": 100, "RatY": 100}, {"RatX": 400, "RatY": 100},
+                                           {"RatX": 400, "RatY": 400}, {"RatX": 100, "RatY": 400}]}
+    api.put("/ISAPI/Thermometry/Point?Dev=0&Idx=9", _roi_body("Point", 9, {"RatX": 250, "RatY": 250}, "eval-point"))
+    api.put("/ISAPI/Thermometry/Area?Dev=0&Idx=9", _roi_body("Area", 9, geom_a, "eval-area"))
+    try:
+        raw = api.get("/ISAPI/Thermometry/Point?Dev=0&Idx=255")
+        info("GET Point?Idx=255 response shape (send this back if read-back fails): "
+             + json.dumps(raw)[:400])
+    except Exception as e:                                  # noqa: BLE001
+        info(f"GET Point?Idx=255 failed: {e}")
+    slots = roi_slots(api)
+    found = ("Point", 9) in slots and ("Area", 9) in slots
+    _eval("ROI read-back", "edge agent", "PASS" if found else "FAIL",
+          f"agent sees slots {sorted(slots)}" + ("" if found else " — the test ROIs it just wrote are missing"),
+          "edge/edge_agent.py roi_slots(): the response shape differs; the agent would overwrite calibrations")
+
+    # -- server client (Node): Digest, read-back, then HTTPS ---------------- #
+    n = _node_check()
+    if "error" in n:
+        for check in ("Digest fallback", "ROI read-back"):
+            _eval(check, "Hardware page", "FAIL", n["error"], "install Node 20+ on this machine and re-run")
+    else:
+        d = n.get("digestLogin", {})
+        if d.get("ok"):
+            _eval("Digest fallback", "Hardware page", "PASS", f"Digest login OK ({d.get('model')})")
+        elif "does not offer" in d.get("error", "") or "did not ask" in d.get("error", ""):
+            _eval("Digest fallback", "Hardware page", "N/A", d["error"])
+        else:
+            _eval("Digest fallback", "Hardware page", "FAIL", d.get("error", "?"),
+                  "server/camera.mjs digestHeader()/login(): compare with the edge agent's result above")
+        rb = n.get("readback", {})
+        seen = rb.get("slots", [])
+        good = rb.get("ok") and "Point:9" in seen and "Area:9" in seen
+        _eval("ROI read-back", "Hardware page", "PASS" if good else "FAIL",
+              f"server sees {seen}" if rb.get("ok") else rb.get("error", "?"),
+              "server/camera.mjs / tools/camera_check.mjs readback parsing")
+
+    for kind in ("Point", "Area"):
+        sc, j = api.put("/ISAPI/Thermometry/Delete?Dev=0", {"Type": kind, "Id": 9})
+        if j.get("Result") != "OK":
+            api.put(f"/ISAPI/Thermometry/{kind}?Dev=0&Idx=9",
+                    _roi_body(kind, 9, {"RatX": 250, "RatY": 250} if kind == "Point" else geom_a, "eval", "No"))
+            warn(f"could not delete test {kind} 9 ({j}); disabled it instead")
+    info("test ROIs in slot 9 removed")
+
+    # -- B. HTTPS ------------------------------------------------------------ #
+    if not tcp_open(CAMERA_IP, _a.https_port):
+        _eval("HTTPS", "edge agent", "N/A", f"nothing listening on {_a.https_port} — HTTPS not enabled on the camera "
+              "(fine on an isolated barn LAN; plain HTTP is used)")
+        _eval("HTTPS", "Hardware page", "N/A", "as above")
+    else:
+        s = Isapi(base=f"https://{CAMERA_IP}:{_a.https_port}")
+        try:
+            logged = s.login()
+            model = s.get("/ISAPI/System/Capability/DeviceInfo").get("Model") if logged else None
+            _eval("HTTPS", "edge agent", "PASS" if logged else "FAIL",
+                  f"TLS + login OK ({model})" if logged else "TLS connected but login failed",
+                  "sparsh_camera.py IsapiClient(https=True)")
+        except Exception as e:                              # noqa: BLE001
+            _eval("HTTPS", "edge agent", "FAIL", f"{type(e).__name__}: {e}", "sparsh_camera.py IsapiClient(https=True)")
+        h = _node_check(https=True)
+        sl = h.get("sessionLogin", {}) if "error" not in h else {"ok": False, "error": h["error"]}
+        _eval("HTTPS", "Hardware page", "PASS" if sl.get("ok") else "FAIL",
+              f"TLS + login OK ({sl.get('model')})" if sl.get("ok") else sl.get("error", "?"),
+              "server/camera.mjs request() TLS options")
+
+
+def eval_report():
+    print("\n=== eval-unit report — paste this block back ===")
+    for check, impl, status, detail, fix in EVAL:
+        print(f"  {status:<4}  {check:<16} {impl:<14} {detail[:110]}")
+        if status == "FAIL" and fix:
+            print(f"        -> change: {fix}")
+    if not any(s == "FAIL" for _, _, s, _, _ in EVAL):
+        print("  All checks passed or not applicable. The Hardware page and edge agent will work with this unit.")
+
+
+# --------------------------------------------------------------------------- #
 def main():
     print(f"Sparsh/Samriddhi thermal camera smoke test -> {BASE}  (user={USERNAME})")
     if not step_reachability():
@@ -394,10 +573,15 @@ def main():
     step_device_info(api)
     step_streams(api)
     step_thermo_basic(api)
+    saved = backup_rois(api)
     step_set_rois(api)
     step_query(api)
     step_modbus()
+    restore_rois(api, saved)
     step_rtsp()
+    if _a.eval:
+        step_eval(api)
+        eval_report()
     _summary()
 
 def _summary():

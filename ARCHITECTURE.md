@@ -146,6 +146,16 @@ can talk to it, and aims its temperature ROIs at the horse.
   addresses, so the connection test cannot be used to make the server probe
   arbitrary hosts. `EQUICARE_CAMERA_ALLOW_PUBLIC=1` lifts it.
 
+**Uncalibrated readings are shown, flagged, and never alerted on.** The edge
+agent tags readings taken through default ROIs (`meta.calibrated: false`, low
+confidence), and the server independently marks readings from a registered
+camera that was never aimed or has moved since (`rois.stale`) — either source
+saying "uncalibrated" wins. Such readings stay visible (greyed, labelled), but
+they never trigger fever/hypothermia/respiratory alerts, never feed the learned
+baseline or charts, and raise one warning instead: *"Camera on stall A-04 not
+aimed"*. It clears itself with the first calibrated reading. This is a data
+validity rule, like the monitoring-gap net — not a clinical threshold.
+
 Why calibration matters, measured: against the mock camera with the head away
 from frame centre, an uncalibrated camera made the edge agent store **31.4 °C —
 a hypothermia reading taken off the coat** — and no respiratory rate. After

@@ -90,8 +90,12 @@ export default function Dashboard() {
     .slice(0, 3);
 
   // What the cameras are actually telling us right now.
-  const temps = horses.map((h) => h.vitals?.bodyTempC).filter((n): n is number => n != null);
-  const resps = horses.map((h) => h.vitals?.respRateBpm).filter((n): n is number => n != null);
+  // Only aimed cameras count: an un-aimed one reads coat or wall, and a single
+  // 31 °C "body temperature" would drag the yard average into hypothermia.
+  const aimed = horses.filter((h) => h.vitals?.calibrated !== false);
+  const unaimed = horses.filter((h) => h.vitals?.calibrated === false).length;
+  const temps = aimed.map((h) => h.vitals?.bodyTempC).filter((n): n is number => n != null);
+  const resps = aimed.map((h) => h.vitals?.respRateBpm).filter((n): n is number => n != null);
   const avgTemp = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
   const avgResp = resps.length ? resps.reduce((a, b) => a + b, 0) / resps.length : null;
 
@@ -143,7 +147,7 @@ export default function Dashboard() {
       />
       <StatCard
         icon={<Thermometer size={20} />}
-        label="Avg body temperature"
+        label={unaimed ? `Avg body temperature · ${unaimed} un-aimed camera${unaimed > 1 ? "s" : ""} excluded` : "Avg body temperature"}
         value={avgTemp === null ? null : avgTemp.toFixed(1)}
         unit="°C"
         spark={series.bodyTemp ?? []}

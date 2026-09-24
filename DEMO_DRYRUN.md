@@ -177,3 +177,31 @@ npm run build && npm start &
 On a real camera, use the thermal image: the eye's inner corner and the nostrils
 are the warmest points on the head. Re-calibrate whenever the camera is moved or
 its lens changed — the page flags that automatically.
+
+---
+
+## Eval-unit day — one command
+
+When the Sparsh units arrive, on the barn network:
+
+```bash
+python3 sparsh_camera_smoketest.py <camera-ip> admin '<password>' --eval
+```
+
+Paste back the block under **"eval-unit report"**. It answers the three things
+only real hardware can, in *both* implementations — the edge agent's Python
+driver and the server's Node client behind the Hardware page:
+
+| Check | What it proves |
+|---|---|
+| Digest fallback | If the firmware refuses session login, both clients can still authenticate. "N/A" is fine when the camera only does session login. |
+| HTTPS | TLS with the camera's self-signed certificate works (checks port 443; `--https-port` to change). "N/A" if HTTPS is off. |
+| ROI read-back | The agent recognises ROIs already on the camera. If this fails, the agent would go back to overwriting calibrations — the report prints the response shape so the parser can be fixed. |
+
+Every FAIL line names the one file to change. The check writes its test ROIs to
+spare slot 9 and removes them, and the smoke test now backs up and restores
+Point 0 / Area 0 — running it on a calibrated camera no longer destroys the
+calibration.
+
+Rehearse it against the mock: `--digest-only --password X` for Digest-only
+firmware, `--https` for TLS, `--require-auth` to verify credentials.

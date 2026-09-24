@@ -55,13 +55,18 @@ export default function Horses() {
             </div>
             <div className="metrics">
               <div className="m">
-                <b>{h.vitals?.bodyTempC == null ? "—" : `${h.vitals.bodyTempC.toFixed(1)}°`}</b>
+                <b title={h.vitals?.calibrated === false ? "Camera not aimed — reading unreliable" : undefined}
+                   style={h.vitals?.calibrated === false ? { color: "var(--text-secondary)" } : undefined}>
+                  {h.vitals?.bodyTempC == null ? "—" : h.vitals.calibrated === false ? "not aimed" : `${h.vitals.bodyTempC.toFixed(1)}°`}
+                </b>
                 <span>
                   <Thermometer size={11} style={{ verticalAlign: "-1px" }} /> temp
                 </span>
               </div>
               <div className="m">
-                <b>{h.vitals?.respRateBpm == null ? "—" : Math.round(h.vitals.respRateBpm)}</b>
+                <b style={h.vitals?.calibrated === false ? { color: "var(--text-secondary)" } : undefined}>
+                  {h.vitals?.respRateBpm == null ? "—" : h.vitals.calibrated === false ? "—" : Math.round(h.vitals.respRateBpm)}
+                </b>
                 <span>
                   <Wind size={11} style={{ verticalAlign: "-1px" }} /> resp
                 </span>

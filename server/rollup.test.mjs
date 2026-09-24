@@ -273,3 +273,47 @@ test("metricSeries sums when asked", () => {
   const s = metricSeries([R("rest_minutes", 30, 0), R("rest_minutes", 45, 0)], "rest_minutes", 7, "sum");
   assert.equal(s[6], 75);
 });
+
+// ---- uncalibrated camera readings ---------------------------------------- //
+// A camera whose ROIs were never aimed reads whatever sits at frame centre.
+// Against the mock that was 31.4 °C off the coat — a hypothermia alarm for a
+// healthy horse. Such readings must be visible but never judged clinically.
+const UNCAL = { source: "thermal_camera", meta: { calibrated: false } };
+
+test("an uncalibrated low reading does not raise a hypothermia alert", () => {
+  const rd = [...healthy(), R("body_temp_c", 31.4, 0, UNCAL)];
+  const types = buildAlerts([BIO], rd, () => false).map((a) => a.type);
+  assert.ok(!types.includes("Low body temperature"), `false alarm raised: ${types}`);
+  assert.ok(types.includes("Camera not aimed"), "the operator must be told the camera needs aiming");
+});
+
+test("an uncalibrated fever reading does not raise a fever alert either", () => {
+  const rd = [...healthy(), R("body_temp_c", 39.5, 0, UNCAL), R("respiratory_rate_bpm", 30, 0, UNCAL)];
+  const types = buildAlerts([BIO], rd, () => false).map((a) => a.type);
+  assert.ok(!types.includes("Elevated body temperature"));
+  assert.ok(!types.includes("High respiratory rate"));
+  assert.equal(summarizeHorse(BIO, rd).status, "watch", "a camera problem is a warning, not an emergency");
+});
+
+test("a calibrated reading still alerts exactly as before", () => {
+  const rd = [...healthy(), R("body_temp_c", 39.5, 0, { source: "thermal_camera", meta: { calibrated: true } })];
+  const types = buildAlerts([BIO], rd, () => false).map((a) => a.type);
+  assert.ok(types.includes("Elevated body temperature"));
+  assert.ok(!types.includes("Camera not aimed"));
+});
+
+test("readings with no calibration tag (simulator, older edge agents) are trusted", () => {
+  const types = buildAlerts([BIO], [...healthy(), R("body_temp_c", 39.5, 0)], () => false).map((a) => a.type);
+  assert.ok(types.includes("Elevated body temperature"));
+});
+
+test("uncalibrated readings are shown but flagged, and kept out of charts and baselines", () => {
+  const rd = [R("body_temp_c", 31.4, 0, UNCAL), R("respiratory_rate_bpm", 14, 0, UNCAL)];
+  const h = summarizeHorse(BIO, rd);
+  assert.equal(h.vitals.bodyTempC, 31.4, "the value stays visible");
+  assert.equal(h.vitals.calibrated, false, "and is flagged");
+  assert.equal(vitalsForHorse(rd).body_temp_c.calibrated, false);
+  assert.equal(h.baselineProgress, 0, "an un-aimed camera is not learning the horse");
+  assert.equal(metricSeries(rd, "body_temp_c", 7).at(-1), null, "coat temperature is not charted as body temperature");
+  assert.equal(buildSeries([BIO], rd).bodyTemp.at(-1), null);
+});

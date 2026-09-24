@@ -108,17 +108,23 @@ export class CameraClient {
       (opaque ? `, opaque="${opaque}"` : "");
   }
 
-  /** Session login (the device's own scheme), falling back to HTTP Digest. */
-  async login() {
+  /** Session login (the device's own scheme), falling back to HTTP Digest.
+   *  forceDigest skips the session attempt — used by the eval-unit check to
+   *  prove the fallback path works against real firmware. */
+  async login({ forceDigest = false } = {}) {
     const probe = await this.request("GET", "/ISAPI/System/Capability/DeviceInfo");
     const www = String(probe.headers["www-authenticate"] || "");
     const realm = /realm="([^"]*)"/.exec(www)?.[1] || "Server Status";
+    if (forceDigest && !/^Digest/i.test(www))
+      return probe.status === 200
+        ? { ok: false, error: "the camera did not ask for authentication, so Digest could not be exercised" }
+        : { ok: false, error: `the camera does not offer HTTP Digest (HTTP ${probe.status}, no Digest challenge)` };
     const body = {
       Realm: CLIENT_REALM,
       Name: md5(`${this.username}:${CLIENT_REALM}`),
       Password: md5(`${md5(`${this.username}:${realm}:${this.password}`)}:${CLIENT_REALM}`),
     };
-    for (const method of ["PUT", "POST"]) {
+    for (const method of forceDigest ? [] : ["PUT", "POST"]) {
       try {
         const r = await this.request(method, "/ISAPI/Security/User/Login", { body });
         if (r.status === 200) {

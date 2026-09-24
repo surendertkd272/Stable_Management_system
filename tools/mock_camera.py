@@ -31,6 +31,10 @@ import struct
 import socket
 import hashlib
 import argparse
+import re
+import ssl
+import tempfile
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -183,6 +187,12 @@ STATE = {"rois": {}, "basic": {
     "FPara100": 97, "AimDistance": 200, "MeasureTempUnit": 0,
 }}
 SESSIONS = set()
+# Auth is opt-in so existing runs are unchanged. With --require-auth the mock
+# verifies credentials the way the device does: the session-login hash, or an
+# RFC 2617 Digest response. --digest-only refuses session login, like firmware
+# that only speaks Digest — which is what exercises our fallback path.
+AUTH = {"require": False, "digest_only": False, "user": "admin", "password": "admin", "realm": "Server Status"}
+NONCES = set()
 
 
 def _c100(v):
@@ -237,11 +247,42 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _authed(self):
-        return self.headers.get("SessionID") in SESSIONS
+        if not AUTH["require"]:
+            return True
+        if self.headers.get("SessionID") in SESSIONS:
+            return True
+        return self._digest_ok()
+
+    def _digest_ok(self):
+        h = self.headers.get("Authorization", "")
+        if not h.startswith("Digest "):
+            return False
+        f = dict(re.findall(r'(\w+)="?([^",]*)"?', h[7:]))
+        if f.get("username") != AUTH["user"] or f.get("nonce") not in NONCES:
+            return False
+        md5 = lambda s: hashlib.md5(s.encode()).hexdigest()
+        ha1 = md5(f"{AUTH['user']}:{AUTH['realm']}:{AUTH['password']}")
+        ha2 = md5(f"{self.command}:{f.get('uri', '')}")
+        want = (md5(f"{ha1}:{f['nonce']}:{f.get('nc')}:{f.get('cnonce')}:{f.get('qop')}:{ha2}")
+                if f.get("qop") else md5(f"{ha1}:{f['nonce']}:{ha2}"))
+        return f.get("response") == want
+
+    def _challenge(self):
+        nonce = hashlib.sha256(f"{time.time()}{random.random()}".encode()).hexdigest()[:32]
+        NONCES.add(nonce)
+        body = json.dumps({"Result": "Failed", "Code": 401}).encode()
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", f'Digest realm="{AUTH["realm"]}", nonce="{nonce}", qop="auth"')
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     # -- routes ------------------------------------------------------------ #
     def do_GET(self):
         p = self.path.split("?")[0]
+        if not self._authed():
+            return self._challenge()
         q = dict(kv.split("=", 1) for kv in self.path.split("?")[1].split("&")) \
             if "?" in self.path and self.path.split("?")[1] else {}
 
@@ -295,11 +336,30 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
 
         if p == "/ISAPI/Security/User/Login":
-            # The real device hashes; for a mock we accept any credentials and
-            # issue a session, since the point is to exercise OUR client.
+            if AUTH["digest_only"]:
+                return self._send(401, {"Result": "Failed", "Code": 401, "Msg": "session login not supported"})
+            if AUTH["require"]:
+                md5 = lambda s: hashlib.md5(s.encode()).hexdigest()
+                cr = body.get("Realm", "")
+                want_pw = md5(f"{md5(AUTH['user'] + ':' + AUTH['realm'] + ':' + AUTH['password'])}:{cr}")
+                if body.get("Name") != md5(f"{AUTH['user']}:{cr}") or body.get("Password") != want_pw:
+                    return self._send(401, {"Result": "Failed", "Code": 401, "Msg": "bad credentials"})
             tok = hashlib.sha256(f"{time.time()}{random.random()}".encode()).hexdigest().upper()
             SESSIONS.add(tok)
             return self._send(200, {"SessionID": tok, "Permission": "Administrator"})
+
+        if not self._authed():
+            return self._challenge()
+
+        if p == "/ISAPI/Thermometry/Delete":
+            items = body if isinstance(body, list) else [body]
+            for it in items:
+                if it.get("Id") == 255:
+                    for k in [k for k in STATE["rois"] if k[0] == it.get("Type")]:
+                        del STATE["rois"][k]
+                else:
+                    STATE["rois"].pop((it.get("Type"), it.get("Id")), None)
+            return self._send(200, {"Result": "OK", "URI": p})
 
         if p == "/ISAPI/Security/User/Logout":
             SESSIONS.discard(self.headers.get("SessionID"))
@@ -382,6 +442,12 @@ if __name__ == "__main__":
     ap.add_argument("--scene", choices=sorted(Scene.PRESETS), default="aligned",
                     help="aligned: targets sit under the edge agent's default ROIs; "
                          "offset: head elsewhere, so only calibrated ROIs read vitals")
+    ap.add_argument("--require-auth", action="store_true",
+                    help="verify credentials like the device (session hash or HTTP Digest)")
+    ap.add_argument("--digest-only", action="store_true",
+                    help="refuse session login — firmware that only speaks Digest (implies --require-auth)")
+    ap.add_argument("--password", default="admin", help="device password when auth is required")
+    ap.add_argument("--https", action="store_true", help="serve ISAPI over TLS with a self-signed certificate")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
 
@@ -389,9 +455,23 @@ if __name__ == "__main__":
     HORSE = Horse(breathing_bpm=a.breathing_bpm, fever=a.fever)
     SCENE = Scene(a.scene)
 
+    AUTH.update(require=a.require_auth or a.digest_only, digest_only=a.digest_only, password=a.password)
     threading.Thread(target=modbus_server, args=(a.modbus_port,), daemon=True).start()
     print(f"[mock-camera] ISAPI  http://{a.host}:{a.http_port}")
     print(f"[mock-camera] Modbus tcp://{a.host}:{a.modbus_port}")
     print(f"[mock-camera] horse: breathing {a.breathing_bpm} bpm"
           f"{', FEVER' if a.fever else ''}, base {HORSE.base_temp:.1f} C, scene={a.scene}")
-    ThreadingHTTPServer((a.host, a.http_port), Handler).serve_forever()
+    if AUTH["require"]:
+        print(f"[mock-camera] auth required ({'digest only' if AUTH['digest_only'] else 'session or digest'})")
+    srv = ThreadingHTTPServer((a.host, a.http_port), Handler)
+    if a.https:
+        # Self-signed, like the real camera — so clients must not verify it.
+        d = tempfile.mkdtemp(prefix="mockcam-tls-")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                        "-subj", "/CN=mock-camera", "-keyout", f"{d}/k.pem", "-out", f"{d}/c.pem"],
+                       check=True, capture_output=True)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(f"{d}/c.pem", f"{d}/k.pem")
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        print(f"[mock-camera] TLS on (self-signed)")
+    srv.serve_forever()

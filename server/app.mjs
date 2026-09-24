@@ -310,6 +310,17 @@ export async function handle(req) {
         // silently never reached any horse — a fever could vanish. Report it.
         else unattributed.push(r.stallId ?? null);
       }
+      // Calibration cross-check. The edge agent tags readings taken through
+      // default ROIs, but it cannot know the camera was moved after it was
+      // aimed — the Hardware page does (rois.stale). Either source saying
+      // "uncalibrated" wins: the cost of wrongly flagging is a warning, the
+      // cost of wrongly trusting is a false clinical alarm.
+      const camByStall = new Map(store.list("cameras").map((c) => [c.stall, c]));
+      for (const r of clean) {
+        if (r.source !== "thermal_camera" || !r.stallId) continue;
+        const cam = camByStall.get(r.stallId);
+        if (cam && (!cam.rois || cam.rois.stale)) r.meta = { ...(r.meta || {}), calibrated: false };
+      }
       const accepted = store.appendReadings(clean);
       const resBody = { accepted, dropped: batch.length - known.length };
       if (unattributed.length) {

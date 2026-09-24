@@ -31,6 +31,8 @@ export interface Horse {
     bodyTempC: number | null;
     respRateBpm: number | null;
     respConfidence: number | null;
+    /** false = taken through un-aimed ROIs; shown, never alerted on */
+    calibrated?: boolean;
   };
   baselineProgress: number; // 0-100
   // present when served by the backend; absent on mock data (treated as "live")

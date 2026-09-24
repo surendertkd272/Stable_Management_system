@@ -68,6 +68,14 @@ function gapText(ms) {
   return mins >= 60 ? `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m` : `${mins}m`;
 }
 
+/** A reading taken through a camera whose ROIs were never aimed (or were aimed
+ *  and then the camera moved). It proves the camera is alive, but the number is
+ *  whatever sat under a frame-centre ROI — coat, stall wall — not the horse's
+ *  eye or nostril. Against the mock that read 31.4 °C: a hypothermia alarm
+ *  taken off the coat. Such readings are kept and shown, flagged, and never
+ *  judged against clinical thresholds or folded into baselines. */
+export const uncalibrated = (r) => r?.meta?.calibrated === false;
+
 /** Evaluate all rule checks for one horse -> list of {type, severity, detail, ts}. */
 function evaluate(bio, rd) {
   const out = [];
@@ -93,7 +101,17 @@ function evaluate(bio, rd) {
   }
 
   const temp = latest(rd, "body_temp_c");
-  if (temp) {
+  const resp = latest(rd, "respiratory_rate_bpm");
+  if (uncalibrated(temp) || uncalibrated(resp)) {
+    const cur = [temp && `${temp.value.toFixed(1)} °C`, resp && `${Math.round(resp.value)} bpm`].filter(Boolean).join(", ");
+    // The part before " — " becomes the horse card's status line, so it must
+    // stand on its own.
+    push("Camera not aimed", "warn",
+      `Camera on stall ${bio.stall || "?"} not aimed — its readings (${cur}) may be of coat or stall wall rather ` +
+      `than the eye and nostril, so they are shown but not used for alerts. Aim it from the Hardware page.`,
+      (temp || resp).ts);
+  }
+  if (temp && !uncalibrated(temp)) {
     if (temp.value >= TEMP_FEVER) push("Elevated body temperature", "alert",
       `Eye-region temperature ${temp.value.toFixed(1)} C — above fever threshold (${TEMP_FEVER} C). Screening-grade; confirm with a contact thermometer.`, temp.ts);
     else if (temp.value <= TEMP_LOW) push("Low body temperature", "alert",
@@ -102,8 +120,7 @@ function evaluate(bio, rd) {
       `Eye-region temperature ${temp.value.toFixed(1)} C — upper end of normal; watching trend.`, temp.ts);
   }
 
-  const resp = latest(rd, "respiratory_rate_bpm");
-  if (resp) {
+  if (resp && !uncalibrated(resp)) {
     if (resp.value >= RESP_ALERT) push("High respiratory rate", "alert",
       `Resting respiratory rate ${Math.round(resp.value)} bpm (nostril thermal) — well above normal.`, resp.ts);
     else if (resp.value >= RESP_WATCH) push("Respiratory pattern", "warn",
@@ -215,10 +232,12 @@ export function summarizeHorse(bio, allReadings) {
       bodyTempC: latest(rd, "body_temp_c")?.value ?? null,
       respRateBpm: latest(rd, "respiratory_rate_bpm")?.value ?? null,
       respConfidence: latest(rd, "respiratory_rate_bpm")?.confidence ?? null,
+      // false when the latest camera reading came through un-aimed ROIs
+      calibrated: !(uncalibrated(latest(rd, "body_temp_c")) || uncalibrated(latest(rd, "respiratory_rate_bpm"))),
     },
     // what the UI should render as "not measured" rather than as a value
     uninstrumented: [...gaps].sort(),
-    baselineProgress: Math.min(100, Math.round((distinctDays(rd) / BASELINE_TARGET_DAYS) * 100)),
+    baselineProgress: Math.min(100, Math.round((distinctDays(rd.filter((r) => !uncalibrated(r))) / BASELINE_TARGET_DAYS) * 100)),
     // data-freshness (extra fields; the SPA's Horse type ignores unknown keys)
     lastSeen: seen === null ? null : new Date(seen).toISOString(),
     monitoring: seen === null ? "no-data"
@@ -233,7 +252,8 @@ export function vitalsForHorse(rd) {
   for (const r of rd) {
     // >= for the same last-write-wins reason as latest()
     if (!out[r.metric] || r.ts >= out[r.metric].ts)
-      out[r.metric] = { value: r.value, unit: r.unit, ts: r.ts, source: r.source, confidence: r.confidence };
+      out[r.metric] = { value: r.value, unit: r.unit, ts: r.ts, source: r.source, confidence: r.confidence,
+                        calibrated: !uncalibrated(r) };
   }
   return out;
 }
@@ -269,7 +289,7 @@ const avgOrNull = (rows) =>
 export function buildSeries(roster, allReadings, span = 7) {
   const days = [...Array(span)].map((_, i) => dayKey(Date.now() - (span - 1 - i) * DAY_MS));
   const per = (fn) => days.map((d) => fn(d));
-  const onDay = (metric, d) => allReadings.filter((r) => r.metric === metric && dayKey(r.ts) === d);
+  const onDay = (metric, d) => allReadings.filter((r) => r.metric === metric && dayKey(r.ts) === d && !uncalibrated(r));
   const nHorses = roster.length || 1;
   // Same rule as the horse cards: a line nobody measures is a gap in the
   // chart, not a flat zero — a zero line reads as a real, alarming trend.
@@ -293,7 +313,7 @@ export function buildSeries(roster, allReadings, span = 7) {
 export function metricSeries(rd, metric, days = 7, agg = "avg") {
   const keys = [...Array(days)].map((_, i) => dayKey(Date.now() - (days - 1 - i) * DAY_MS));
   return keys.map((d) => {
-    const vals = rd.filter((r) => r.metric === metric && dayKey(r.ts) === d).map((r) => r.value);
+    const vals = rd.filter((r) => r.metric === metric && dayKey(r.ts) === d && !uncalibrated(r)).map((r) => r.value);
     // null, not 0: a day with no reading is a day we did not measure. Zero here
     // drew a 7-day temperature chart as [0,0,0,0,0,0,37.6] — a plunge to 0 °C
     // that never happened, on the panel a vet is most likely to read.

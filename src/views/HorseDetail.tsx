@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge } from "lucide-react";
+import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge, Crosshair } from "lucide-react";
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { getHorseDetail, type HorseDetail as HorseVitals } from "../data/api";
@@ -182,10 +182,20 @@ export default function HorseDetail() {
           <h3 style={{ margin: "4px 0 12px" }}>
             Live vitals <span style={{ color: "var(--text-secondary)", fontWeight: 400, fontSize: 13 }}>· thermal camera</span>
           </h3>
+          {live.vitals.body_temp_c.calibrated === false && (
+            <div className="row watch" style={{ marginBottom: 12, padding: "10px 14px" }}>
+              <Crosshair size={16} style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 12.5 }}>
+                This stall&apos;s camera is not aimed at the horse, so these numbers may be of its coat or the stall wall.
+                They are not used for alerts. Aim it from the Hardware page.
+              </span>
+            </div>
+          )}
           <div className="grid cols-4" style={{ marginBottom: 24 }}>
             <MetricCard
               icon={<Heart size={18} />}
-              label="Body temperature"
+              label={live.vitals.body_temp_c.calibrated === false ? "Body temperature · uncalibrated" : "Body temperature"}
+              muted={live.vitals.body_temp_c.calibrated === false}
               value={`${live.vitals.body_temp_c.value.toFixed(1)}°C`}
               delta={trend(live.charts.body_temp_c)}
               spark={live.charts.body_temp_c}
@@ -193,7 +203,8 @@ export default function HorseDetail() {
             {live.vitals.respiratory_rate_bpm && (
               <MetricCard
                 icon={<Activity size={18} />}
-                label="Respiratory rate"
+                label={live.vitals.respiratory_rate_bpm.calibrated === false ? "Respiratory rate · uncalibrated" : "Respiratory rate"}
+                muted={live.vitals.respiratory_rate_bpm.calibrated === false}
                 value={`${Math.round(live.vitals.respiratory_rate_bpm.value)} bpm`}
                 delta={trend(live.charts.respiratory_rate_bpm)}
                 spark={live.charts.respiratory_rate_bpm}
@@ -505,12 +516,15 @@ function MetricCard({
   spark,
   type = "line",
   color,
+  muted = false,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string | null;
   /** null = we have no honest basis for a trend; the badge is then omitted. */
   delta: number | null;
+  /** a reading we can't vouch for (un-aimed camera): grey, not authoritative */
+  muted?: boolean;
   spark: (number | null)[];
   type?: "line" | "bar";
   color?: string;
@@ -529,7 +543,7 @@ function MetricCard({
         style={{
           fontSize: measured ? 30 : 17,
           marginTop: 12,
-          color: measured ? undefined : "var(--text-secondary)",
+          color: measured && !muted ? undefined : "var(--text-secondary)",
         }}
       >
         {measured ? value : "Not measured"}

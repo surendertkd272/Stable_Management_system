@@ -158,6 +158,23 @@ test("unauthenticated callers get nothing", async () => {
   assert.equal((await call("GET", "/api/cameras")).status, 401);
 });
 
+test("ingest flags readings from a registered but un-aimed camera", async () => {
+  // registered in the earlier test with no ROIs pushed
+  const [cam] = (await call("GET", "/api/cameras", { token: tokens.admin })).body;
+  assert.equal(cam.rois, null);
+  const r = await call("POST", "/ingest/readings", { body: { readings: [
+    // the edge agent believes it is calibrated; the registry knows better
+    { stallId: "A-04", metric: "body_temp_c", value: 31.4, unit: "°C", source: "thermal_camera", meta: { calibrated: true } },
+  ] } });
+  assert.equal(r.status, 200);
+  const horse = (await call("GET", "/api/horses/zarina", { token: tokens.admin })).body;
+  assert.equal(horse.vitals.body_temp_c.calibrated, false, "registry says un-aimed; that must win");
+  const types = (await call("GET", "/api/alerts", { token: tokens.admin })).body
+    .filter((a) => a.horse === "Zarina").map((a) => a.type);
+  assert.ok(types.includes("Camera not aimed"), `got ${types}`);
+  assert.ok(!types.includes("Low body temperature"), "31.4 °C off the coat must not raise hypothermia");
+});
+
 test("admin can delete a camera", async () => {
   const [cam] = (await call("GET", "/api/cameras", { token: tokens.admin })).body;
   assert.equal((await call("DELETE", `/api/cameras/${cam.id}`, { token: tokens.admin })).status, 200);

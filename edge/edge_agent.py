@@ -281,9 +281,11 @@ def compute_resp_rate(samples, fs, with_quality=False):
     return (bpm, periodicity) if with_quality else bpm
 
 
-def camera_has_rois(cam):
-    """True when the camera already holds our eye point (Point 0) and nostril
-    area (Area 1) — i.e. someone calibrated it from the Hardware page."""
+def roi_slots(cam):
+    """The (Type, Id) of every enabled ROI the camera reports. Separate from
+    camera_has_rois so the eval-unit check can prove this parsing works on the
+    real firmware's response — if it didn't, the agent would silently go back to
+    overwriting calibrations."""
     have = set()
     for kind in ("Point", "Area"):
         try:
@@ -292,6 +294,13 @@ def camera_has_rois(cam):
                     have.add((it.get("Type", kind), it.get("Id")))
         except Exception:                                       # noqa: BLE001
             pass
+    return have
+
+
+def camera_has_rois(cam):
+    """True when the camera already holds our eye point (Point 0) and nostril
+    area (Area 1) — i.e. someone calibrated it from the Hardware page."""
+    have = roi_slots(cam)
     return ("Point", 0) in have and ("Area", 1) in have
 
 
@@ -307,7 +316,8 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
     # start — silently undoing a calibration made from the Hardware page, and
     # measuring coat or stall wall instead of the eye and nostril. Keep what the
     # camera holds; only fall back to defaults on an uncalibrated camera.
-    if reset_rois or not camera_has_rois(cam):
+    calibrated = not reset_rois and camera_has_rois(cam)
+    if not calibrated:
         cam.set_basic_param(emissivity_100=98, distance_cm=350)
         cam.set_point(0, 5000, 5000, name="eye")                  # eye/max ROI
         cam.set_area(1, [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)], name="nostril")
@@ -356,14 +366,19 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
                 return
             continue
         batch = []
+        # Readings through default ROIs are tagged, and the server keeps them
+        # out of clinical alerts: a frame-centre point reads whatever is there.
+        meta = {"calibrated": calibrated}
         if latest.get("Point", {}).get("point_c") is not None:
-            batch.append(reading(horse_id, stall, "body_temp_c", latest["Point"]["point_c"], "°C", now, "thermal_camera"))
+            batch.append(reading(horse_id, stall, "body_temp_c", latest["Point"]["point_c"], "°C", now,
+                                 "thermal_camera", conf=0.95 if calibrated else 0.3, meta=meta))
         rr, quality = compute_resp_rate(window, fs, with_quality=True)
         if rr:
             # Report the measured rhythm strength as confidence rather than a
             # flat guess, so weak windows are visibly weaker downstream.
             batch.append(reading(horse_id, stall, "respiratory_rate_bpm", rr, "bpm", now,
-                                 "thermal_camera", conf=round(min(0.95, quality), 2)))
+                                 "thermal_camera",
+                                 conf=round(min(0.95, quality), 2) if calibrated else 0.3, meta=meta))
         else:
             print(f"[edge] no usable breathing rhythm this window "
                   f"(periodicity {quality:.2f} < {RESP_MIN_PERIODICITY}) — reporting nothing")
