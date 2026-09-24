@@ -1,5 +1,8 @@
+"use client";
+
 import { ReactNode, useState } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Heart,
@@ -70,12 +73,23 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { alerts } = useStable();
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
 
+  const pathname = usePathname() ?? "/";
+  // `end` = exact match (the dashboard); otherwise a section stays highlighted
+  // on its sub-pages, e.g. /horses/zarina keeps "Horses" active.
+  const isActive = (to: string, end?: boolean) =>
+    end ? pathname === to : pathname === to || pathname.startsWith(to + "/");
+
   const item = (n: NavItem) => (
-    <NavLink key={n.to} to={n.to} end={n.end} className="nav-item" onClick={onClose}>
+    <Link
+      key={n.to}
+      href={n.to}
+      className={`nav-item${isActive(n.to, n.end) ? " active" : ""}`}
+      onClick={onClose}
+    >
       <n.icon size={19} />
       {n.label}
       {n.to === "/alerts" && openAlerts > 0 && <span className="count">{openAlerts}</span>}
-    </NavLink>
+    </Link>
   );
 
   return (
@@ -97,10 +111,14 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
             {sec.items.map(item)}
           </div>
         ))}
-        <NavLink to="/settings" className="nav-item" onClick={onClose}>
+        <Link
+          href="/settings"
+          className={`nav-item${isActive("/settings") ? " active" : ""}`}
+          onClick={onClose}
+        >
           <Settings size={19} />
           Settings
-        </NavLink>
+        </Link>
       </nav>
 
       <div className="rail-foot">
@@ -147,8 +165,9 @@ function UserBlock() {
 const EMPTY = { name: "", breed: "", age: "", sex: "Mare" as Horse["sex"], stall: "", owner: "Bharat Sports Venture" };
 
 function TopBar() {
-  const { pathname } = useLocation();
-  const nav = useNavigate();
+  const pathname = usePathname() ?? "/";
+  const router = useRouter();
+  const nav = (to: string) => router.push(to);
   const { horses, alerts, health, invoices, addHorse } = useStable();
   const notify = useToast();
   const [addOpen, setAddOpen] = useState(false);

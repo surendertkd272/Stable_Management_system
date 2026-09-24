@@ -77,7 +77,7 @@ python3 tools/mock_camera.py --http-port 8081 --modbus-port 5502 \
 ### 3. Backend
 
 ```bash
-node server/index.mjs &     # prints a generated admin password on first boot
+npm run build && npm start &   # UI + API on :8080; prints a generated admin password on first boot
 ```
 
 ### 4. Edge agent

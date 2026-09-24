@@ -15,17 +15,14 @@ schema or API changes needed.
   └─────────────────────────────────────────────┘
 ```
 
-## Run it (3 terminals)
+## Run it
 
 ```bash
-# 1. backend
-cd server && node index.mjs                       # http://127.0.0.1:8080
+# 1. UI + API (one Next.js app)
+npm run dev                                        # http://127.0.0.1:8080
 
 # 2. seed + stream data (no hardware needed)
 python3 edge/edge_agent.py --simulate --backfill-days 14 --live --interval 10
-
-# 3. frontend  (auto-uses the local API in dev; falls back to mock if it's down)
-npm run dev                                        # http://localhost:5173
 ```
 
 With a real camera instead of the simulator:
@@ -33,8 +30,10 @@ With a real camera instead of the simulator:
 python3 edge/edge_agent.py --camera 192.168.1.102 --pass 'YourPass' --live
 ```
 
-Deploy note: set `VITE_API_URL` at build time to point the SPA at the cloud
-backend. Unset ⇒ the SPA runs on bundled mock data (the current Vercel demo).
+Deploy note: production is `npm run build && npm start` on the site's own
+server. On Vercel the API is disabled (503) and the browser runs the bundled
+mock data — the current public demo, with no env vars needed. To point a
+Vercel-hosted UI at a separately hosted backend, set `NEXT_PUBLIC_API_URL`.
 
 ## The 12 monitoring points → data model
 
@@ -67,7 +66,7 @@ are live vs. awaiting hardware.
   no change — coverage flips from `pending` to `available` in `contract.mjs`.
 
 ## Endpoints
-`GET /health` · `GET /api/coverage` · `POST /ingest/readings` ·
+`GET /api/health` · `GET /api/coverage` · `POST /ingest/readings` ·
 `GET /api/horses` · `GET /api/horses/:id` (vitals + charts) ·
 `GET /api/alerts` · `POST /api/alerts/:id/ack` · `GET /api/series`
 

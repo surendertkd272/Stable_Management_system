@@ -1,3 +1,5 @@
+"use client";
+
 // App store. Reads sensor-derived data (horses/alerts/series) from the backend
 // when one is reachable and writes user-authored records through to it; falls
 // back entirely to mock seeds + localStorage when no backend is configured, so

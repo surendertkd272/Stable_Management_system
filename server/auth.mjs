@@ -37,7 +37,11 @@ export function verifyPassword(password, stored) {
 }
 
 // ---- sessions (in-process; a restart signs everyone out, which is fine) ---- //
-const sessions = new Map();   // token -> { userId, role, name, expires }
+// token -> { userId, role, name, expires }. On globalThis so every copy of this
+// module in the process (Next.js bundles route handlers separately, and dev
+// mode reloads them) sees the same sessions — otherwise signing in through
+// /auth/login would issue a token the /api routes had never heard of.
+const sessions = (globalThis.__equicareSessions ??= new Map());
 
 function sweep() {
   const now = Date.now();

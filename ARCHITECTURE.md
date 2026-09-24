@@ -24,26 +24,37 @@ single data pipeline, so adding a sensor is a new *metric*, not a new subsystem.
 | [server/rollup.mjs](server/rollup.mjs) | Raw readings → `Horse`/`Alert`/`series` shapes + the clinical rule engine. |
 | [server/store.mjs](server/store.mjs) | Storage behind one interface; JSON file by default, Postgres when `DATABASE_URL` is set. |
 | [server/schema.sql](server/schema.sql) | Postgres schema (+ optional TimescaleDB hypertable/retention). |
-| [server/index.mjs](server/index.mjs) | HTTP API + auth. |
-| [src/data/api.ts](src/data/api.ts) | SPA API client — **falls back to mock data** when no backend is reachable. |
+| [server/app.mjs](server/app.mjs) | The whole API + auth as one Web-standard `handle(Request) → Response`, served by the Next.js route handlers in `src/app/{api,auth,ingest}`. |
+| [src/data/api.ts](src/data/api.ts) | Browser API client — same-origin by default; **falls back to mock data** when no backend is reachable. |
+| [src/app/](src/app) | Next.js App Router: one route per screen, plus the API route trees. |
 
 ## Run it
 
-```bash
-# 1. backend  (JSON store, auth open — fine for local)
-cd server && node index.mjs                 # http://127.0.0.1:8080
+One Next.js app serves both the screens and the API, on one origin.
 
-# 2. seed 14 days of realistic data for all 12 points, 7 horses
+```bash
+npm install
+npm run dev                                 # http://127.0.0.1:8080  (UI + API)
+#   or, production:  npm run build && npm start
+
+# seed 14 days of realistic data for all 12 points, 7 horses
 python3 edge/edge_agent.py --simulate --backfill-days 14
 python3 edge/edge_agent.py --simulate --live --interval 10   # + keep streaming
-
-# 3. frontend
-cp .env.example .env.local                  # set VITE_API_URL=http://127.0.0.1:8080
-npm run dev
 ```
 
-With `VITE_API_URL` unset the SPA behaves exactly as before (pure mock) — the
-backend is strictly additive.
+First boot prints a generated admin password once (set `ADMIN_USER` /
+`ADMIN_PASSWORD` to choose it). The server binds `127.0.0.1:8080` — the old
+backend's address, so the edge agent and smoke tests work unchanged; set
+`HOST=0.0.0.0` to serve the barn LAN.
+
+**Restarting by hand:** Next.js renames its process to `next-server`, so
+`pkill -f "next start"` does not find it and the new instance fails with "port
+in use" while the old one keeps serving. Stop it by port
+(`kill $(lsof -tiTCP:8080 -sTCP:LISTEN)`) or run it under systemd.
+
+Screens render in the browser: the session token lives in localStorage, so the
+server cannot know who is asking at render time. The server renders the shell;
+data arrives after sign-in.
 
 ### Against a real camera
 ```bash
@@ -54,10 +65,16 @@ python3 edge/edge_agent.py --camera 192.168.1.102 --pass 'PASSWORD' \
 
 ### Production posture
 ```bash
-cd server && npm install pg
-psql "$DATABASE_URL" -f schema.sql
-DATABASE_URL=postgres://…  AUTH_API_TOKEN=…  AUTH_INGEST_TOKEN=…  node index.mjs
+psql "$DATABASE_URL" -f server/schema.sql
+npm run build
+DATABASE_URL=postgres://…  AUTH_INGEST_TOKEN=…  EQUICARE_DATA_DIR=/var/lib/equicare  npm start
 ```
+
+**Run it as one long-lived process on the site server — not on serverless.**
+Readings are cached in memory and sessions live in memory, and the camera
+integration has to reach cameras on the barn LAN. On Vercel the API answers
+`503` and the browser falls back to the mock-data demo; that is the public demo
+today and needs no environment variables.
 Host Postgres in-region (Mumbai / `ap-south-1`) for **DPDP-2023** residency.
 
 ## API
@@ -73,7 +90,7 @@ Host Postgres in-region (Mumbai / `ap-south-1`) for **DPDP-2023** residency.
 | `GET /api/series?days=N` | Dashboard/report sparklines over N days (1–90, default 7). |
 | `GET /api/coverage` | **Which of the 12 points are live vs pending hardware.** |
 | `GET /api/notify/status` | Notification transport + delivery counters. |
-| `GET /health` | Store backend, reading counts, record counts. Always open. |
+| `GET /api/health` | Store backend, reading counts, record counts. Always open. (Moved from `/health`, which is now the Health Scheduling page on the same origin.) |
 
 ### Record collections (CRUD)
 
@@ -111,7 +128,7 @@ enforced server-side — see below.
 
 ## Authentication
 
-Earlier the SPA sent a shared `VITE_API_TOKEN`. Vite **compiles env vars into the
+Earlier the SPA sent a shared `VITE_API_TOKEN`. The bundler **compiled env vars into the
 JS bundle**, so anyone opening devtools on the deployed site had full API access.
 Verified and removed: real per-user sessions now.
 
@@ -136,8 +153,8 @@ First boot creates an admin and prints a generated password **once**; set
 
 **The backend is closed by default.** Because an admin always exists after first
 boot, `/api/*` always requires a caller — there is no accidental open window. The
-standalone prototype is unaffected: with `VITE_API_URL` unset the SPA never calls
-the API at all and runs purely on mock data.
+public demo is unaffected: in demo mode (a Vercel deployment with no
+`NEXT_PUBLIC_API_URL`) the browser never calls the API and runs purely on mock data.
 
 `/ingest/*` is separate — it is open unless `AUTH_INGEST_TOKEN` is set, so an edge
 box can be brought up before credentials are distributed. **Set it before the
@@ -285,7 +302,7 @@ Settings also carries a **Monitoring coverage** card driven by `/api/coverage` �
 ## Tests
 
 ```bash
-cd server && npm test        # 40 tests (rules + records + notify + auth), no deps
+npm test        # 51 server tests + the respiration suite; uses a temp data dir
 ```
 
 They pin the **clinical** behaviour (fever/hypothermia/resp/colic/lameness/water
@@ -298,7 +315,7 @@ conclusions changed.
 - **Postgres path** — schema migrates; 14,114 readings persisted and read back; API served
   from Postgres; **cold-restart cache reload confirmed**; acks survive restart. Both
   backends produce identical API behaviour.
-- **Auth** — 401 without/with wrong token, 200 with; `/health` always open.
+- **Auth** — 401 without/with wrong token, 200 with; `/api/health` always open.
 - **Offline resilience** — on a rejected flush the edge agent kept 2,476 readings queued; none lost.
 - **Same-timestamp collision** — two readings of one metric sharing a timestamp: the later
   value wins. (This was a real bug: with strict `>` a fever arriving in the same

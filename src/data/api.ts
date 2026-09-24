@@ -4,14 +4,14 @@
 // standalone demo keeps working offline / on Vercel with no API configured.
 import type { Horse, Alert } from "./mock";
 
-// In dev, default to the local backend; in prod, only call an API if one is
-// configured via VITE_API_URL (otherwise stay fully on mock data).
-const BASE = (
-  (import.meta.env.VITE_API_URL as string | undefined) ??
-  (import.meta.env.DEV ? "http://127.0.0.1:8080" : "")
-).replace(/\/$/, "");
-
-export const apiConfigured = BASE.length > 0;
+// The backend now ships inside this Next.js app, so by default the browser
+// calls it on the same origin. NEXT_PUBLIC_API_URL points it elsewhere (a
+// separately hosted backend). Demo mode — no API calls at all, bundled mock
+// data only — is on automatically for a Vercel deployment with no external
+// backend (see next.config.ts), which is exactly the public demo today.
+const BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+export const demoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+export const apiConfigured = !demoMode;
 
 /* --- session --------------------------------------------------------------
    The API token used to come from VITE_API_TOKEN, which Vite compiles into the
@@ -85,6 +85,7 @@ export async function me(): Promise<{ user: SessionUser | null; authRequired: bo
     if (res.ok) return { user: body.user as SessionUser, authRequired: true };
     if (res.status === 401 && body.authRequired === false)
       return { user: null, authRequired: false };
+    if (res.status === 503) return { user: null, authRequired: false };
     setToken(null);                       // stale/expired session
     return { user: null, authRequired: body.authRequired ?? true };
   } catch {

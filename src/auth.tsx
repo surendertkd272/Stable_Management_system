@@ -1,3 +1,5 @@
+"use client";
+
 // Authentication gate.
 //
 // Three states, deliberately:

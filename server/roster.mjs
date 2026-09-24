@@ -1,0 +1,75 @@
+// Seed roster: copied into the store on first boot only. After that the
+// roster is data (horses added in the UI are real horses) — this is never
+// read again. A module rather than a JSON file so it bundles reliably.
+export default [
+  {
+    "id": "zarina",
+    "name": "Zarina",
+    "breed": "Marwari",
+    "age": "7 yr",
+    "sex": "Mare",
+    "stall": "A-04",
+    "owner": "Bharat Sports Venture",
+    "photo": "https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?auto=format&fit=crop&w=600&q=70"
+  },
+  {
+    "id": "shaan",
+    "name": "Shaan",
+    "breed": "Thoroughbred",
+    "age": "5 yr",
+    "sex": "Stallion",
+    "stall": "B-01",
+    "owner": "Bharat Sports Venture",
+    "photo": "https://images.unsplash.com/photo-1534773728080-33d31da27ae5?auto=format&fit=crop&w=600&q=70"
+  },
+  {
+    "id": "noor",
+    "name": "Noor",
+    "breed": "Marwari",
+    "age": "9 yr",
+    "sex": "Mare",
+    "stall": "A-07",
+    "owner": "R. Singh",
+    "photo": "https://images.unsplash.com/photo-1598974357801-cbca100e65d3?auto=format&fit=crop&w=600&q=70"
+  },
+  {
+    "id": "raja",
+    "name": "Raja",
+    "breed": "Kathiawari",
+    "age": "11 yr",
+    "sex": "Gelding",
+    "stall": "C-02",
+    "owner": "Equestrian Club",
+    "photo": "https://images.unsplash.com/photo-1534773728080-33d31da27ae5?auto=format&fit=crop&w=600&q=70"
+  },
+  {
+    "id": "meher",
+    "name": "Meher",
+    "breed": "Marwari",
+    "age": "4 yr",
+    "sex": "Mare",
+    "stall": "B-05",
+    "owner": "Bharat Sports Venture",
+    "photo": "https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?auto=format&fit=crop&w=600&q=70"
+  },
+  {
+    "id": "sultan",
+    "name": "Sultan",
+    "breed": "Thoroughbred",
+    "age": "8 yr",
+    "sex": "Gelding",
+    "stall": "C-06",
+    "owner": "Equestrian Club",
+    "photo": "https://images.unsplash.com/photo-1598974357801-cbca100e65d3?auto=format&fit=crop&w=600&q=70"
+  },
+  {
+    "id": "laila",
+    "name": "Laila",
+    "breed": "Marwari",
+    "age": "10 yr",
+    "sex": "Mare",
+    "stall": "A-09",
+    "owner": "R. Singh",
+    "photo": "https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?auto=format&fit=crop&w=600&q=70"
+  }
+];

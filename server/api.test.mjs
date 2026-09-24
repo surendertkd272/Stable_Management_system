@@ -3,21 +3,23 @@
 // write path.  Run: node --test server/
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { rmSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const STATE = join(HERE, "data", "state.json");
+// A throwaway data dir. This test used to "isolate from dev state" by deleting
+// server/data/state.json — the live data file — so running the suite on the
+// site server wiped the stable's records.
+const DATA = mkdtempSync(join(tmpdir(), "equicare-test-"));
 
 let createStore, buildSeries;
 before(async () => {
-  rmSync(STATE, { force: true });               // isolate from dev state
+  process.env.EQUICARE_DATA_DIR = DATA;
   delete process.env.DATABASE_URL;              // force the JSON store
   ({ createStore } = await import("./store.mjs"));
   ({ buildSeries } = await import("./rollup.mjs"));
 });
-after(() => rmSync(STATE, { force: true }));
+after(() => rmSync(DATA, { recursive: true, force: true }));
 
 // --------------------------------------------------------------------------- //
 test("entity create / list / update / remove round-trips", async () => {

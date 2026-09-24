@@ -5,10 +5,15 @@
 // writes are durable. rollup.mjs is pure and takes readings as args, so it is
 // unaffected by the backend choice.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+// Where the JSON store lives. This used to be derived from import.meta.url —
+// but once Next.js bundles the server, that URL points inside .next/, which is
+// deleted on every build: the stable's data would vanish with each deploy.
+// Resolved from the working directory (the app root under `npm start`), or set
+// EQUICARE_DATA_DIR to put it somewhere backed up.
+export const dataDir = () =>
+  process.env.EQUICARE_DATA_DIR || join(process.cwd(), "server", "data");
 const RETENTION_MS = 21 * 24 * 3600 * 1000; // ~3 weeks (covers 14-day baseline)
 const MAX_READINGS = 300_000;
 
@@ -32,13 +37,13 @@ const valid = (r) => r && typeof r.metric === "string" && typeof r.value === "nu
 // JSON-file store (default; zero dependencies)
 // --------------------------------------------------------------------------- //
 function makeJsonStore() {
-  const DATA_DIR = join(HERE, "data");
+  const DATA_DIR = dataDir();
   const STATE_FILE = join(DATA_DIR, "state.json");
   let state = { readings: [], acks: {}, seq: 0, entities: {} };
   let saveTimer = null;
 
   try {
-    state = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    state = JSON.parse(readFileSync(/*turbopackIgnore: true*/ STATE_FILE, "utf8"));
     state.readings ||= []; state.acks ||= {}; state.seq ||= 0; state.entities ||= {};
   } catch { /* fresh */ }
 
@@ -46,8 +51,8 @@ function makeJsonStore() {
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-      writeFileSync(STATE_FILE, JSON.stringify(state));
+      if (!existsSync(/*turbopackIgnore: true*/ DATA_DIR)) mkdirSync(/*turbopackIgnore: true*/ DATA_DIR, { recursive: true });
+      writeFileSync(/*turbopackIgnore: true*/ STATE_FILE, JSON.stringify(state));
     }, 250);
   };
   const prune = () => {

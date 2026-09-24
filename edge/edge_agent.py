@@ -30,7 +30,7 @@ from pathlib import Path
 
 random.seed(7)  # deterministic-ish demo (Date/rand vary only by horse+hour)
 
-# roster mirrors server/roster.json (id, stall)
+# roster mirrors server/roster.mjs (id, stall) — simulator only
 ROSTER = [
     ("zarina", "A-04"), ("shaan", "B-01"), ("noor", "A-07"), ("raja", "C-02"),
     ("meher", "B-05"), ("sultan", "C-06"), ("laila", "A-09"),

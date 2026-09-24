@@ -1,3 +1,5 @@
+"use client";
+
 import { ReactNode } from "react";
 import { TrendingUp, TrendingDown, X, WifiOff, AlertTriangle } from "lucide-react";
 import type { Status, Monitoring } from "../data/mock";

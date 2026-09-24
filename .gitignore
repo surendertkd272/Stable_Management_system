@@ -1,6 +1,10 @@
 node_modules
 dist
 dist-ssr
+.next
+out
+next-env.d.ts
+.vercel
 *.local
 .DS_Store
 .vite
