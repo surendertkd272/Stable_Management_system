@@ -20,9 +20,8 @@ import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
 import {
   summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries,
 } from "./rollup.mjs";
-import { CameraClient, checkHost, modbusReadTemps, rtspOptions } from "./camera.mjs";
-import { SC_IT6420_HB_V2, validateCameraModel } from "./hardware-spec.mjs";
-import { seal, open } from "./secrets.mjs";
+import { SC_IT6420_HB_V2 } from "./hardware-spec.mjs";
+import { deviceApi } from "./devices.mjs";
 
 import SEED_ROSTER from "./roster.mjs";
 
@@ -43,6 +42,8 @@ async function ready() {
     const s = await createStore();
     s.seed("horses", SEED_ROSTER);
     ensureAdmin(s);   // first boot only; prints a generated password once
+    G.devices = deviceApi({ store: s, json, CORS });
+    G.devices.migrate();           // camera-only records from the first hardware version
     const st = s.statsSummary();
     console.log(`[equicare] store=${st.backend} auth=${API_TOKEN ? "token+sessions" : "sessions"} roster=${s.list("horses").length}`);
     return s;
@@ -127,137 +128,6 @@ const slugId = (name, kind) => {
 const bioById = (id) => roster().find((h) => h.id === id);
 
 // --------------------------------------------------------------------------- //
-// Cameras (hardware integration)
-// --------------------------------------------------------------------------- //
-// ROI slots on the camera. The datasheet allows 10 points and 10 areas; we use
-// point 0 for the eye and area 1 for the nostril — the same slots the edge
-// agent reads, so a calibration made here is what the agent measures.
-const EYE_IDX = 0, NOSTRIL_IDX = 1;
-
-/** What the browser may see: never the password, not even encrypted. */
-const publicCamera = (c) => {
-  const { passwordEnc, ...rest } = c;
-  return { ...rest, hasPassword: Boolean(passwordEnc) };
-};
-
-/** Owners see that a camera watches their horse and whether it works — not
- *  where it is on the network or how to log into it. */
-const ownerCamera = (c) => ({
-  id: c.id, name: c.name, stall: c.stall,
-  online: c.lastProbe ? c.lastProbe.ok : null,
-  checkedAt: c.lastProbe?.at ?? null,
-  calibrated: Boolean(c.rois),
-});
-
-function cameraFields(body, existing = {}) {
-  const num = (v, d) => (v === undefined || v === "" ? d : Number(v));
-  const out = {
-    name: String(body.name ?? existing.name ?? "").trim(),
-    stall: String(body.stall ?? existing.stall ?? "").trim(),
-    host: String(body.host ?? existing.host ?? "").trim(),
-    httpPort: num(body.httpPort, existing.httpPort ?? 80),
-    https: body.https !== undefined ? Boolean(body.https) : Boolean(existing.https),
-    rtspPort: num(body.rtspPort, existing.rtspPort ?? 554),
-    modbusPort: num(body.modbusPort, existing.modbusPort ?? 502),
-    username: String(body.username ?? existing.username ?? "admin").trim(),
-    variant: String(body.variant ?? existing.variant ?? "640"),
-    thermalLens: String(body.thermalLens ?? existing.thermalLens ?? "13"),
-    visibleLens: String(body.visibleLens ?? existing.visibleLens ?? "4"),
-    distanceM: num(body.distanceM, existing.distanceM ?? 3.5),
-    emissivity: num(body.emissivity, existing.emissivity ?? 0.98),
-  };
-  const errs = validateCameraModel(out);
-  if (!out.name) errs.push("name is required");
-  if (!out.host) errs.push("host (IP address) is required");
-  for (const k of ["httpPort", "rtspPort", "modbusPort"])
-    if (!(Number.isInteger(out[k]) && out[k] > 0 && out[k] < 65536)) errs.push(`${k} must be a port number`);
-  return { out, errs };
-}
-
-/** Open an authenticated session to a stored camera, or explain why not. */
-async function connectCamera(cam) {
-  const host = await checkHost(cam.host);
-  if (!host.ok) return { error: host.error };
-  const client = new CameraClient({
-    host: cam.host, httpPort: cam.httpPort, https: cam.https,
-    username: cam.username, password: open(cam.passwordEnc) ?? "",
-  });
-  try {
-    const login = await client.login();
-    return login.ok ? { client, login } : { error: login.error };
-  } catch (e) {
-    return { error: `cannot reach ${cam.host}:${cam.httpPort} — ${e.message}` };
-  }
-}
-
-/** Step-by-step connection test, the same checks as sparsh_camera_smoketest.py. */
-async function probeCamera(cam) {
-  const steps = [];
-  const step = async (name, fn) => {
-    const t0 = Date.now();
-    try {
-      const detail = await fn();
-      steps.push({ name, ok: true, detail, ms: Date.now() - t0 });
-      return true;
-    } catch (e) {
-      steps.push({ name, ok: false, detail: e.message, ms: Date.now() - t0 });
-      return false;
-    }
-  };
-  let client, device = null;
-  const reach = await step("Address allowed", async () => {
-    const h = await checkHost(cam.host);
-    if (!h.ok) throw new Error(h.error);
-    return h.addrs.join(", ");
-  });
-  const authed = reach && await step("ISAPI login", async () => {
-    const c = await connectCamera(cam);
-    if (c.error) throw new Error(c.error);
-    client = c.client;
-    return `authenticated (${c.login.method})`;
-  });
-  if (authed) {
-    await step("Device information", async () => {
-      device = await client.deviceInfo();
-      return [device.Model || device.DeviceName, device.DeviceSN && `S/N ${device.DeviceSN}`, device.FWVersion && `FW ${device.FWVersion}`]
-        .filter(Boolean).join(" · ");
-    });
-    await step("Capabilities", async () => {
-      const c = await client.capabilities();
-      const flags = [
-        c.WithCCD === "Yes" ? "visible channel" : "NO visible channel",
-        c.WithMetaRaw === "Yes" ? "per-frame temperature stream" : "no meta stream",
-        c.WithBlackBody === "Yes" ? "blackbody reference" : "no blackbody (±2 °C, screening-grade)",
-      ];
-      return flags.join(" · ");
-    });
-    await step("Thermometry", async () => {
-      const b = await client.basicParam();
-      return `emissivity ${(b.FPara100 ?? 0) / 100} · distance ${(b.AimDistance ?? 0) / 100} m`;
-    });
-    await step("Live temperatures", async () => {
-      const temps = await client.queryTemps();
-      if (!temps.length) return "no ROIs configured yet — calibrate to start measuring";
-      return temps.map((x) => x.type === "Point" ? `point ${x.id}: ${x.pointC?.toFixed(1)} °C`
-        : `${x.type.toLowerCase()} ${x.id}: avg ${x.avgC?.toFixed(1)} °C`).join(" · ");
-    });
-  }
-  if (reach) {
-    await step(`Modbus/TCP :${cam.modbusPort}`, async () => {
-      const m = await modbusReadTemps(cam.host, cam.modbusPort);
-      return `point 1 = ${m.pointC.toFixed(1)} °C (cross-check against ISAPI)`;
-    });
-    await step(`RTSP :${cam.rtspPort}`, async () => rtspOptions(cam.host, cam.rtspPort));
-  }
-  // Online = the camera answered ISAPI. Modbus and RTSP are reported, but a
-  // closed Modbus port alone does not make a working camera "offline".
-  const ok = Boolean(authed) && steps.filter((s) => s.name.startsWith("ISAPI") || s.name === "Device information").every((s) => s.ok);
-  return { at: new Date().toISOString(), ok, steps, device };
-}
-
-const inRange = (v) => Number.isInteger(v) && v >= 0 && v <= 10000;
-
-// --------------------------------------------------------------------------- //
 export async function handle(req) {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -283,18 +153,29 @@ export async function handle(req) {
     // gate on purpose: monitoring must be able to poll it without a session.
     if (path === "/api/health") return json(200, { ok: true, ...store.statsSummary(), sessions: sessionCount(), authRequired: authRequired() });
     if (path === "/api/coverage") return json(200, coverage());
+    const devices = G.devices;
+
+    // ---- edge boxes (their own token) ------------------------------------ //
+    if (path.startsWith("/edge/")) return devices.handleEdge(req, url);
 
     // ---- ingest (edge -> cloud) ------------------------------------------ //
     if (path === "/ingest/readings" && method === "POST") {
-      if (!authed(req, INGEST_TOKEN)) return json(401, { error: "unauthorized" });
+      // Who is sending? An edge box or push device (its own token), or the
+      // legacy shared AUTH_INGEST_TOKEN. Ingest is open only on a bare dev
+      // setup — no shared token AND no device tokens issued yet.
+      const sender = devices.deviceByToken(bearer(req));
+      const legacyOk = INGEST_TOKEN ? bearer(req) === INGEST_TOKEN : !devices.anyDeviceTokens();
+      if (!sender && !legacyOk) return json(401, { error: "unauthorized" });
       let body;
       try {
         body = JSON.parse((await req.text()) || "{}");
       } catch (e) {
         return json(400, { error: "malformed JSON", detail: String(e.message) });
       }
-      const batch = Array.isArray(body) ? body : body.readings || [];
-      const known = batch.filter((r) => r && isKnownMetric(r.metric));
+      const raw = Array.isArray(body) ? body : body.readings || [];
+      const { clean: vetted, rejected } = devices.attribute(raw.filter((r) => r && isKnownMetric(r.metric)), sender);
+      const batch = raw;
+      const known = vetted;
 
       // A camera knows its STALL, not which horse is standing in it, and horses
       // change stalls routinely. Resolve stall -> horse here, against the
@@ -315,14 +196,18 @@ export async function handle(req) {
       // aimed — the Hardware page does (rois.stale). Either source saying
       // "uncalibrated" wins: the cost of wrongly flagging is a warning, the
       // cost of wrongly trusting is a false clinical alarm.
-      const camByStall = new Map(store.list("cameras").map((c) => [c.stall, c]));
+      const camByStall = new Map(store.list("devices").filter((d) => d.kind === "thermal_camera").map((c) => [c.stall, c]));
       for (const r of clean) {
-        if (r.source !== "thermal_camera" || !r.stallId) continue;
+        // A reading from a known device was already judged by THAT device's
+        // calibration; the stall lookup is only for senders that don't say
+        // which camera they are (the command-line edge agent).
+        if (r.deviceId || r.source !== "thermal_camera" || !r.stallId) continue;
         const cam = camByStall.get(r.stallId);
         if (cam && (!cam.rois || cam.rois.stale)) r.meta = { ...(r.meta || {}), calibrated: false };
       }
       const accepted = store.appendReadings(clean);
-      const resBody = { accepted, dropped: batch.length - known.length };
+      const resBody = { accepted, dropped: batch.length - known.length - rejected.length };
+      if (rejected.length) { resBody.rejected = rejected.length; resBody.rejections = rejected.slice(0, 20); }
       if (unattributed.length) {
         resBody.unattributed = unattributed.length;
         resBody.unknownStalls = [...new Set(unattributed)];
@@ -369,12 +254,12 @@ export async function handle(req) {
         return json(403, { error: "admin only" });
       // Camera credentials, network addresses and snapshots are infrastructure.
       // Staff may see the list and live readings; everything else is admin.
-      const camRead = method === "GET" && (path === "/api/cameras" || /^\/api\/cameras\/[^/]+\/temps$/.test(path));
-      if (path.startsWith("/api/cameras") && who.role === "staff" && !camRead)
+      const devRead = method === "GET" && (path === "/api/devices" || /^\/api\/devices\/[^/]+\/(temps|events)$/.test(path));
+      if (path.startsWith("/api/devices") && who.role === "staff" && !devRead)
         return json(403, { error: "admin only" });
       // Owners get the list (status for their own horses' stalls) and nothing
       // else — "GET" alone would have let them pull any camera's snapshot.
-      if (path.startsWith("/api/cameras/") && who.role === "owner")
+      if (path.startsWith("/api/devices/") && who.role === "owner")
         return json(404, { error: "not found" });
     }
 
@@ -413,6 +298,8 @@ export async function handle(req) {
 
     if (path === "/api/alerts" && method === "GET") {
       const alerts = buildAlerts(visibleRoster(), store.allReadings(), store.isAcked);
+      // Hardware that stopped working, for the people who can fix it.
+      if (who?.role !== "owner") alerts.push(...devices.deviceAlerts(store.isAcked));
       dispatch(alerts).catch((e) => console.error("[notify]", e.message));
       return json(200, alerts);
     }
@@ -459,125 +346,11 @@ export async function handle(req) {
       });
     }
 
-    // ---- cameras (hardware integration) ---------------------------------- //
-    if (path === "/api/hardware/spec" && method === "GET")
-      return json(200, SC_IT6420_HB_V2);
-
-    if (path === "/api/cameras" && method === "GET") {
-      const cams = store.list("cameras");
-      if (who?.role === "owner") {
-        const stalls = new Set(visibleRoster().map((h) => h.stall));
-        return json(200, cams.filter((c) => stalls.has(c.stall)).map(ownerCamera));
-      }
-      return json(200, cams.map(publicCamera));
-    }
-
-    if (path === "/api/cameras" && method === "POST") {
-      let body;
-      try { body = JSON.parse((await req.text()) || "{}"); }
-      catch { return json(400, { error: "malformed JSON" }); }
-      const { out, errs } = cameraFields(body);
-      if (errs.length) return json(400, { error: "invalid camera", details: errs });
-      const created = store.create("cameras", {
-        ...out, passwordEnc: seal(body.password), rois: null, lastProbe: null,
-        createdAt: new Date().toISOString(),
-      });
-      return json(201, publicCamera(created));
-    }
-
-    const camMatch = path.match(/^\/api\/cameras\/([^/]+)(?:\/(probe|snapshot|rois|temps))?$/);
-    if (camMatch) {
-      const cam = store.list("cameras").find((c) => c.id === decodeURIComponent(camMatch[1]));
-      if (!cam) return json(404, { error: "unknown camera" });
-      const action = camMatch[2];
-
-      if (!action && method === "PATCH") {
-        let body;
-        try { body = JSON.parse((await req.text()) || "{}"); }
-        catch { return json(400, { error: "malformed JSON" }); }
-        const { out, errs } = cameraFields(body, cam);
-        if (errs.length) return json(400, { error: "invalid camera", details: errs });
-        // Empty or absent password = keep the stored one (the form never
-        // receives it, so it cannot send it back).
-        const patch = { ...out };
-        if (body.password) patch.passwordEnc = seal(body.password);
-        // Moving the camera or changing its optics invalidates the aim.
-        const reaimed = ["host", "stall", "variant", "thermalLens", "distanceM"].some((k) => String(out[k]) !== String(cam[k]));
-        if (reaimed && cam.rois) patch.rois = { ...cam.rois, stale: true };
-        return json(200, publicCamera(store.update("cameras", cam.id, patch)));
-      }
-
-      if (!action && method === "DELETE")
-        return store.remove("cameras", cam.id) ? json(200, { ok: true }) : json(404, { error: "unknown camera" });
-
-      if (action === "probe" && method === "POST") {
-        const result = await probeCamera(cam);
-        store.update("cameras", cam.id, { lastProbe: result });
-        return json(200, result);
-      }
-
-      if (action === "snapshot" && method === "GET") {
-        const dev = url.searchParams.get("dev") === "1" ? 1 : 0;
-        const c = await connectCamera(cam);
-        if (c.error) return json(502, { error: c.error });
-        try {
-          const snap = await c.client.snapshot(dev);
-          return new Response(snap.bytes, {
-            status: 200,
-            headers: { "Content-Type": snap.contentType, "Cache-Control": "no-store", ...CORS },
-          });
-        } catch (e) {
-          return json(502, { error: e.message });
-        }
-      }
-
-      if (action === "rois" && method === "PUT") {
-        let body;
-        try { body = JSON.parse((await req.text()) || "{}"); }
-        catch { return json(400, { error: "malformed JSON" }); }
-        const eye = body.eye, n = body.nostril;
-        if (!eye || !inRange(eye.x) || !inRange(eye.y))
-          return json(400, { error: "eye must be {x, y} in 0–10000" });
-        if (!n || ![n.x0, n.y0, n.x1, n.y1].every(inRange) || n.x1 <= n.x0 || n.y1 <= n.y0)
-          return json(400, { error: "nostril must be {x0, y0, x1, y1} in 0–10000 with x1>x0, y1>y0" });
-        const c = await connectCamera(cam);
-        if (c.error) return json(502, { error: c.error });
-        const opts = { emissivity: cam.emissivity, distanceM: cam.distanceM };
-        try {
-          const basic = await c.client.setBasicParam(opts);
-          const point = await c.client.setPoint(EYE_IDX, eye.x, eye.y, { ...opts, name: "equicare-eye" });
-          const area = await c.client.setArea(NOSTRIL_IDX,
-            [[n.x0, n.y0], [n.x1, n.y0], [n.x1, n.y1], [n.x0, n.y1]], { ...opts, name: "equicare-nostril" });
-          const results = { basic: basic.ok, eye: point.ok, nostril: area.ok };
-          if (!point.ok || !area.ok)
-            return json(502, { error: "the camera rejected the ROI update", results, camera: { eye: point.body, nostril: area.body } });
-          const rois = { eye: { x: eye.x, y: eye.y }, nostril: { x0: n.x0, y0: n.y0, x1: n.x1, y1: n.y1 }, pushedAt: new Date().toISOString() };
-          store.update("cameras", cam.id, { rois });
-          return json(200, { ok: true, results, rois });
-        } catch (e) {
-          return json(502, { error: e.message });
-        }
-      }
-
-      if (action === "temps" && method === "GET") {
-        const c = await connectCamera(cam);
-        if (c.error) return json(502, { error: c.error });
-        try {
-          const temps = await c.client.queryTemps();
-          const eyeT = temps.find((x) => x.type === "Point" && x.id === EYE_IDX);
-          const nosT = temps.find((x) => x.type !== "Point" && x.id === NOSTRIL_IDX);
-          return json(200, {
-            at: new Date().toISOString(),
-            eye: eyeT ? { c: eyeT.pointC } : null,
-            nostril: nosT ? { avgC: nosT.avgC, minC: nosT.minC, maxC: nosT.maxC } : null,
-            all: temps,
-          });
-        } catch (e) {
-          return json(502, { error: e.message });
-        }
-      }
-
-      return json(405, { error: "method not allowed" });
+    // ---- hardware (device registry) ---------------------------------------- //
+    if (path === "/api/hardware/spec" && method === "GET") return json(200, SC_IT6420_HB_V2);
+    if (path === "/api/devices" || path.startsWith("/api/devices/")) {
+      const res = await devices.handleDevices(req, url, who, visibleRoster);
+      if (res) return res;
     }
 
     // ---- generic CRUD over record collections --------------------------- //

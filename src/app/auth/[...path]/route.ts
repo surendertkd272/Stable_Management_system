@@ -1,5 +1,5 @@
 // Thin adapter: the whole backend is one Web-standard handler in server/app.mjs,
-// shared by the /api, /auth and /ingest route trees.
+// shared by the /api, /auth, /ingest and /edge route trees.
 import { handle } from "../../../../server/app.mjs";
 
 // Node, not Edge: the backend uses node:crypto (scrypt), node:fs (JSON store)
