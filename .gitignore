@@ -14,7 +14,10 @@ yarn-error.log*
 
 # EquiCare runtime artifacts
 server/data/
-edge/outbox.jsonl
+edge/outbox*.jsonl
+edge/outbox*.sending
+edge/outbox*.lock
+edge/edge_config.json
 .env.local
 
 # Vendor SDK: keep the documentation and sample source, exclude prebuilt

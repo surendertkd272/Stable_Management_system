@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start -p ${PORT:-8080} -H ${HOST:-127.0.0.1}",
     "typecheck": "tsc --noEmit",
-    "test": "node --test server/*.test.mjs && python3 edge/resp_test.py"
+    "test": "node --test server/*.test.mjs && python3 edge/resp_test.py && python3 edge/modbus_test.py"
   },
   "dependencies": {
     "lucide-react": "^1.48.0",

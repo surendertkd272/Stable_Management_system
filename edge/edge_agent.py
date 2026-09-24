@@ -26,6 +26,11 @@ import random
 import argparse
 import datetime as dt
 import urllib.request
+import urllib.error
+import threading
+import hashlib
+import socket
+import struct
 from pathlib import Path
 
 random.seed(7)  # deterministic-ish demo (Date/rand vary only by horse+hour)
@@ -48,42 +53,95 @@ PROFILES = {
 }
 
 QUEUE = Path(__file__).with_name("outbox.jsonl")
+_LOCK_FH = None
+
+
+def use_outbox(server, token):
+    """Give this agent its own offline buffer, keyed by where it sends and as
+    whom — and refuse to share it with another running process.
+
+    Every agent used to buffer into the same edge/outbox.jsonl. Two agents on
+    one machine (a leftover one, or two configurations) then flushed each
+    other's readings to the wrong server under the wrong token — seen in
+    testing, where a demo agent's readings turned up on a different server."""
+    global QUEUE, SENDING, _LOCK_FH
+    key = hashlib.sha256(f"{server}|{token}".encode()).hexdigest()[:10]
+    QUEUE = Path(__file__).with_name(f"outbox-{key}.jsonl")
+    SENDING = QUEUE.with_suffix(".sending")
+    import fcntl
+    _LOCK_FH = open(QUEUE.with_suffix(".lock"), "w")
+    try:
+        fcntl.flock(_LOCK_FH, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise SystemExit(f"[edge] another edge agent is already running for {server} with this token "
+                         f"(buffer {QUEUE.name}) — not starting a second one.")
 
 
 # --------------------------------------------------------------------------- #
 # transport (offline-buffered)
 # --------------------------------------------------------------------------- #
+_QLOCK = threading.Lock()
+SENDING = QUEUE.with_suffix(".sending")
+FLUSH_CHUNK = 2000
+
+
 def enqueue(readings):
-    with QUEUE.open("a") as f:
+    """Append to the offline buffer. Thread-safe: several device workers write here."""
+    if not readings:
+        return
+    with _QLOCK, QUEUE.open("a") as f:
         for r in readings:
             f.write(json.dumps(r) + "\n")
 
 
+def _post(api_url, token, batch):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(f"{api_url}/ingest/readings",
+                                 data=json.dumps({"readings": batch}).encode(),
+                                 headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read())
+
+
 def flush(api_url, token=""):
-    if not QUEUE.exists():
-        return 0, 0
-    lines = QUEUE.read_text().splitlines()
-    if not lines:
-        return 0, 0
-    batch = [json.loads(x) for x in lines]
-    try:
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        req = urllib.request.Request(
-            f"{api_url}/ingest/readings",
-            data=json.dumps({"readings": batch}).encode(),
-            headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            res = json.loads(resp.read())
-        QUEUE.unlink()  # sent -> clear buffer
+    """Send the buffer, in chunks, without losing anything queued meanwhile.
+
+    It used to read the queue, POST it, then delete the file — so a reading a
+    device worker appended during the POST was deleted unsent, and a 24-hour
+    offline backlog went up as one enormous request. Now the queue is
+    atomically moved aside first (new readings start a fresh file), sent in
+    chunks, and trimmed as each chunk is acknowledged; a failure keeps the rest
+    for next time."""
+    with _QLOCK:
+        if not SENDING.exists():
+            if not QUEUE.exists() or QUEUE.stat().st_size == 0:
+                return 0, 0
+            QUEUE.rename(SENDING)
+    lines = [x for x in SENDING.read_text().splitlines() if x.strip()]
+    accepted = dropped = 0
+    while lines:
+        chunk = lines[:FLUSH_CHUNK]
+        try:
+            res = _post(api_url, token, [json.loads(x) for x in chunk])
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[edge] flush failed ({e}); {len(lines)} readings stay queued")
+            SENDING.write_text("\n".join(lines) + "\n")
+            return accepted, dropped
+        accepted += res.get("accepted", 0)
+        dropped += res.get("dropped", 0)
         if res.get("unattributed"):
             print(f"[edge] WARNING: {res['unattributed']} reading(s) matched no horse — "
                   f"unknown stall(s): {', '.join(str(s) for s in res.get('unknownStalls', []))}")
-        return res.get("accepted", 0), res.get("dropped", 0)
-    except Exception as e:
-        print(f"[edge] flush failed ({e}); {len(batch)} readings stay queued")
-        return 0, 0
+        if res.get("rejected"):
+            print(f"[edge] WARNING: server rejected {res['rejected']} reading(s): "
+                  f"{res.get('rejections', [])[:3]}")
+        lines = lines[FLUSH_CHUNK:]
+        if lines:
+            SENDING.write_text("\n".join(lines) + "\n")
+    SENDING.unlink(missing_ok=True)
+    return accepted, dropped
 
 
 def reading(horse_id, stall, metric, value, unit, ts, source, conf=0.95, meta=None):
@@ -444,10 +502,341 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
             return
 
 
+
+# --------------------------------------------------------------------------- #
+# Server mode — the edge box as the portal configures it
+# --------------------------------------------------------------------------- #
+# `edge_agent.py --server https://site-server --token eqd_…`
+#
+# The Hardware page is the single source of truth. This process fetches the
+# devices assigned to its edge box, polls every camera and Modbus sensor in
+# parallel, reports each one's health, and re-reads its configuration every
+# minute — so adding, re-aiming or removing hardware in the portal takes effect
+# here without anyone logging into the box. It never writes camera ROIs: only
+# the portal does, so there is exactly one writer.
+AGENT_VERSION = "2.0.0"
+CONFIG_CACHE = Path(__file__).with_name("edge_config.json")
+
+MODBUS_TYPES = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2}
+
+
+def modbus_decode(regs, typ, word_order="high-first"):
+    """Same decoding as server/modbus.mjs (pinned by edge/modbus_test.py)."""
+    if MODBUS_TYPES[typ] == 1:
+        v = regs[0] & 0xFFFF
+        return v - 0x10000 if typ == "int16" and v & 0x8000 else v
+    a, b = (regs[1], regs[0]) if word_order == "low-first" else (regs[0], regs[1])
+    raw = struct.pack(">HH", a & 0xFFFF, b & 0xFFFF)
+    return struct.unpack(">f" if typ == "float32" else ">i" if typ == "int32" else ">I", raw)[0]
+
+
+def modbus_read(host, port, unit, fn, address, count, timeout=4.0):
+    req = struct.pack(">HHHBBHH", 1, 0, 6, unit, fn, address, count)
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.sendall(req)
+        head = b""
+        while len(head) < 9:
+            chunk = s.recv(9 - len(head))
+            if not chunk:
+                raise IOError("connection closed by the device")
+            head += chunk
+        if head[7] & 0x80:
+            raise IOError(f"Modbus exception {head[8]} — check the register address and function")
+        data = b""
+        while len(data) < head[8]:
+            chunk = s.recv(head[8] - len(data))
+            if not chunk:
+                break
+            data += chunk
+    regs = struct.unpack(">" + "H" * (len(data) // 2), data)
+    if len(regs) < count:
+        raise IOError(f"asked for {count} registers, got {len(regs)}")
+    return regs
+
+
+class NoRois(RuntimeError):
+    code = "NO_ROIS"
+
+
+class Worker(threading.Thread):
+    """One device. Subclasses implement run_once(); failures back off and retry."""
+
+    def __init__(self, dev, sink):
+        super().__init__(daemon=True, name=f"{dev['kind']}:{dev['name']}")
+        self.dev, self.sink = dev, sink
+        self.stop_evt = threading.Event()
+        self.ok, self.error, self.code, self.last_reading_at = None, None, None, None
+
+    def health(self):
+        # ok=None: no verdict yet (the worker hasn't finished its first cycle).
+        # This used to be reported as an error "starting", so every device on a
+        # freshly started edge box showed red while it was working fine.
+        return {"id": self.dev["id"], "ok": self.ok, "code": self.code if self.ok is False else None,
+                "error": self.error if self.ok is False else None, "lastReadingAt": self.last_reading_at}
+
+    def emit(self, readings):
+        if readings:
+            self.sink(readings)
+            self.last_reading_at = now_iso()
+
+    def run(self):
+        backoff = 5
+        while not self.stop_evt.is_set():
+            try:
+                self.run_once()
+                self.ok, self.error, self.code, backoff = True, None, None, 5
+            except Exception as e:                              # noqa: BLE001
+                self.ok, self.error = False, self.describe(e)[:300]
+                self.code = getattr(e, "code", None) if isinstance(getattr(e, "code", None), str) else None
+                # "no ROIs yet" clears the moment someone calibrates: check often.
+                wait = 15 if self.code == "NO_ROIS" else backoff
+                print(f"[edge] {self.name}: {self.error} — retrying in {wait}s")
+                self.stop_evt.wait(wait)
+                if self.code != "NO_ROIS":
+                    backoff = min(backoff * 2, 120)
+
+    def stop(self):
+        self.stop_evt.set()
+
+    def describe(self, e):
+        """Plain words for the portal. Staff read these, not engineers."""
+        name, msg = type(e).__name__, str(e)
+        host = f"{self.dev.get('host')}:{self.dev.get('httpPort') or self.dev.get('port')}"
+        if "Timeout" in name or "timed out" in msg:
+            return f"no answer from {host} — check the device's power, cable and IP address"
+        if "ConnectionError" in name or "refused" in msg or "Max retries" in msg or isinstance(e, ConnectionRefusedError):
+            return f"cannot reach {host} — the device is off, unplugged, or at a different IP address"
+        return msg or name
+
+
+def now_iso():
+    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+class CameraWorker(Worker):
+    """Eye temperature + respiration from the camera's calibrated ROIs."""
+
+    def __init__(self, dev, sink, window_s=60, target_hz=5.0):
+        super().__init__(dev, sink)
+        self.window_s, self.target_hz = window_s, target_hz
+        self.cam = None
+
+    def connect(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from sparsh_camera import IsapiClient  # noqa
+        d = self.dev
+        if d.get("configError"):
+            raise RuntimeError(d["configError"])
+        cam = IsapiClient(d["host"], d.get("username", "admin"), d.get("password") or "",
+                          port=d.get("httpPort", 80), https=bool(d.get("https")))
+        if not cam.login():
+            raise RuntimeError("camera login failed — check the password in the Hardware page")
+        want = d.get("serial")
+        got = cam.device_info().get("DeviceSN")
+        if want and got and want != got:
+            raise RuntimeError(f"a different camera (S/N {got}) is answering at {d['host']}; expected S/N {want}. "
+                               "Not sampling — confirm the unit in the Hardware page.")
+        self.cam = cam
+
+    def run_once(self):
+        try:
+            self._run_once()
+        except NoRois:
+            raise
+        except Exception:
+            # After any failure start from a fresh login. A camera that rebooted
+            # rejects the old session, and keeping it looped on that error
+            # forever instead of recovering.
+            self.cam = None
+            raise
+
+    def _run_once(self):
+        if self.cam is None:
+            self.connect()
+        # A camera nobody has calibrated has no ROIs, so there is nothing to
+        # read. Say so plainly instead of sampling empty windows while the
+        # portal shows "waiting for the first reading" forever.
+        present = {x["type"] for x in self.cam.query_temps()}
+        if "Point" not in present and "Area" not in present:
+            raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
+        window, t0 = [], time.time()
+        while time.time() - t0 < self.window_s and not self.stop_evt.is_set():
+            tick = time.time()
+            temps = {x["type"]: x for x in self.cam.query_temps()}
+            area = temps.get("Area", {}).get("avg_c")
+            if area is not None:
+                window.append(area)
+            self.stop_evt.wait(max(0.0, (1.0 / self.target_hz) - (time.time() - tick)))
+        if self.stop_evt.is_set():
+            return
+        elapsed = time.time() - t0
+        fs = (len(window) / elapsed) if elapsed > 0 and window else self.target_hz
+        latest = {x["type"]: x for x in self.cam.query_temps()}
+        # The portal knows whether this camera's ROIs were aimed (and not moved
+        # since); readings through un-aimed ROIs are flagged, never alerted on.
+        calibrated = bool(self.dev.get("calibrated"))
+        meta = {"calibrated": calibrated}
+        ts, out = now_iso(), []
+        point = latest.get("Point", {}).get("point_c")
+        if point is not None:
+            out.append(dict(deviceId=self.dev["id"], metric="body_temp_c", value=round(point, 3), unit="°C",
+                            ts=ts, source="thermal_camera", confidence=0.95 if calibrated else 0.3, meta=meta))
+        rr, quality = compute_resp_rate(window, fs, with_quality=True)
+        if rr:
+            out.append(dict(deviceId=self.dev["id"], metric="respiratory_rate_bpm", value=round(rr, 3), unit="bpm",
+                            ts=ts, source="thermal_camera",
+                            confidence=round(min(0.95, quality), 2) if calibrated else 0.3, meta=meta))
+        self.emit(out)
+
+    def stop(self):
+        super().stop()
+        try:
+            if self.cam is not None:
+                self.cam.s.request("PUT", f"{self.cam.base}/ISAPI/Security/User/Logout",
+                                   headers=self.cam._headers(), timeout=3)
+        except Exception:                                       # noqa: BLE001
+            pass
+
+
+class ModbusWorker(Worker):
+    """Any Modbus/TCP sensor, per its register map.
+
+    'gauge' registers report their value; 'counter' registers (a flow meter's
+    running total) report the increase since the last poll. The first poll only
+    sets the baseline, and a counter that goes backwards (meter reset, rollover)
+    re-baselines instead of reporting a negative intake."""
+
+    def __init__(self, dev, sink):
+        super().__init__(dev, sink)
+        self.last = {}
+
+    def run_once(self):
+        d, out, ts = self.dev, [], now_iso()
+        errors = []
+        for reg in d.get("registers", []):
+            try:
+                addr = reg["address"] - 1 if d.get("addressing") == "one-based" else reg["address"]
+                regs = modbus_read(d["host"], d.get("port", 502), d.get("unitId", 1), d.get("function", 3),
+                                   addr, MODBUS_TYPES[reg["type"]])
+                raw = modbus_decode(regs, reg["type"], reg.get("wordOrder", "high-first"))
+                value = raw * reg.get("scale", 1) + reg.get("offset", 0)
+            except Exception as e:                              # noqa: BLE001
+                errors.append(f"{reg.get('name')}: {e}")
+                continue
+            if reg.get("mode") == "counter":
+                prev = self.last.get(reg["name"])
+                self.last[reg["name"]] = value
+                if prev is None or value < prev:
+                    continue
+                value = value - prev
+            out.append(dict(deviceId=d["id"], metric=reg["metric"], value=round(value, 4), unit=reg.get("unit"),
+                            ts=ts, source="modbus", confidence=0.95))
+        self.emit(out)
+        if errors:
+            raise RuntimeError("; ".join(errors)[:300])
+        self.stop_evt.wait(d.get("pollSeconds", 10))
+
+
+class EdgeRuntime:
+    def __init__(self, server, token, window_s=60):
+        self.server, self.token, self.window_s = server.rstrip("/"), token, window_s
+        self.workers = {}          # id -> (worker, connection fingerprint)
+        self.started = time.time()
+        self.stop_evt = threading.Event()
+
+    def _req(self, method, path, body=None, timeout=15):
+        req = urllib.request.Request(f"{self.server}{path}", method=method,
+                                     data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+
+    def fetch_config(self):
+        """From the portal; falls back to the last good copy so a reboot while
+        the server is unreachable still polls the devices (readings buffer)."""
+        try:
+            cfg = self._req("GET", "/edge/config")
+            tmp = CONFIG_CACHE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(cfg))
+            os.chmod(tmp, 0o600)                                # holds camera logins
+            tmp.replace(CONFIG_CACHE)
+            return cfg
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                raise SystemExit("[edge] the server rejected this edge box's token (revoked or mistyped) — stopping.")
+            print(f"[edge] config fetch failed (HTTP {e.code}); keeping the current devices")
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[edge] config fetch failed ({e}); keeping the current devices")
+        if not self.workers and CONFIG_CACHE.exists():
+            print("[edge] using the cached configuration from the last successful fetch")
+            return json.loads(CONFIG_CACHE.read_text())
+        return None
+
+    @staticmethod
+    def _fingerprint(d):
+        keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
+                "function", "addressing", "pollSeconds", "registers", "serial", "configError")
+        return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
+
+    def apply(self, cfg):
+        wanted = {d["id"]: d for d in cfg.get("devices", []) if d["kind"] in ("thermal_camera", "modbus_sensor")}
+        for did in list(self.workers):
+            w, fp = self.workers[did]
+            if did not in wanted or self._fingerprint(wanted[did]) != fp:
+                print(f"[edge] stopping {w.name}" + ("" if did in wanted else " (removed in the portal)"))
+                w.stop()
+                del self.workers[did]
+        for did, d in wanted.items():
+            if did in self.workers:
+                self.workers[did][0].dev = d                   # e.g. calibration changed: no restart
+                continue
+            w = CameraWorker(d, enqueue, self.window_s) if d["kind"] == "thermal_camera" else ModbusWorker(d, enqueue)
+            print(f"[edge] starting {w.name}")
+            w.start()
+            self.workers[did] = (w, self._fingerprint(d))
+
+    def heartbeat(self):
+        body = {"agent": {"version": AGENT_VERSION, "host": socket.gethostname(),
+                          "uptimeS": int(time.time() - self.started)},
+                "devices": [w.health() for w, _ in self.workers.values()]}
+        try:
+            self._req("POST", "/edge/heartbeat", body)
+        except Exception as e:                                  # noqa: BLE001
+            print(f"[edge] heartbeat failed ({e})")
+
+    def run(self, refresh_s=60, flush_s=10, beat_s=30):
+        cfg = self.fetch_config()
+        if cfg is None:
+            raise SystemExit("[edge] no configuration from the server and none cached — cannot start")
+        print(f"[edge] edge box \"{cfg.get('edge', {}).get('name')}\": {len(cfg.get('devices', []))} device(s)")
+        self.apply(cfg)
+        last_refresh = last_beat = last_flush = 0.0
+        try:
+            while not self.stop_evt.is_set():
+                t_now = time.time()
+                if t_now - last_flush >= flush_s:
+                    flush(self.server, self.token)
+                    last_flush = t_now
+                if t_now - last_beat >= beat_s:
+                    self.heartbeat()
+                    last_beat = t_now
+                if t_now - last_refresh >= refresh_s:
+                    new = self.fetch_config()
+                    if new is not None:
+                        self.apply(new)
+                    last_refresh = t_now
+                self.stop_evt.wait(1.0)
+        finally:
+            for w, _ in self.workers.values():
+                w.stop()
+            flush(self.server, self.token)
+
 # --------------------------------------------------------------------------- #
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--api", default=os.environ.get("EQUICARE_API", "http://127.0.0.1:8080"))
+    ap.add_argument("--server", help="server mode: the site server URL; devices come from the Hardware page")
+    ap.add_argument("--refresh", type=int, default=60, help="server mode: seconds between config refreshes")
     ap.add_argument("--simulate", action="store_true")
     ap.add_argument("--backfill-days", type=int, default=14)
     ap.add_argument("--live", action="store_true")
@@ -467,6 +856,12 @@ def main():
                     help="device ingest token (Bearer) if the backend requires one")
     a = ap.parse_args()
 
+    if a.server:
+        if not a.token:
+            ap.error("--server needs --token (the edge box's token from the Hardware page)")
+        use_outbox(a.server, a.token)
+        EdgeRuntime(a.server, a.token, window_s=a.window).run(refresh_s=a.refresh)
+        return
     if a.simulate:
         simulate(a.api, a.backfill_days, a.live, a.interval, a.token)
     elif a.camera:
