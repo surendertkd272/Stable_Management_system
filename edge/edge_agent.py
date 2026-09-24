@@ -255,12 +255,25 @@ def compute_resp_rate(samples, fs, with_quality=False):
     hi = min(hi, n - 1)
     if hi <= lo:
         return (None, 0.0) if with_quality else None
+    # One lag of margin on each side, so a candidate at the edge of the band
+    # can be checked against its neighbours.
     acf = {}
-    for lag in range(lo, hi):
+    for lag in range(max(1, lo - 1), min(hi + 1, n - 1)):
         overlap = n - lag
         acf[lag] = (sum(x[i] * x[i + lag] for i in range(overlap)) / overlap) / unit
 
-    best_lag = max(acf, key=acf.get)
+    # Only a true local maximum counts. A step in the signal — the horse lifting
+    # its head into the box, the camera's periodic shutter recalibration, a
+    # window straddling the moment the ROI was re-aimed — does not oscillate:
+    # its autocorrelation just decays, so the "best" lag was simply the first
+    # one searched, i.e. the top of the band. That fabricated ~37 bpm, above the
+    # 24 bpm alert threshold: a false tachypnoea alarm from a head movement.
+    peaks = [lag for lag in range(lo, hi)
+             if lag - 1 in acf and lag + 1 in acf
+             and acf[lag] > acf[lag - 1] and acf[lag] >= acf[lag + 1]]
+    if not peaks:
+        return (None, 0.0) if with_quality else None
+    best_lag = max(peaks, key=acf.get)
     peak = acf[best_lag]
     if peak < RESP_MIN_PERIODICITY:
         return (None, max(0.0, peak)) if with_quality else None
@@ -297,6 +310,45 @@ def roi_slots(cam):
     return have
 
 
+DEFAULT_EYE = (5000, 5000)
+DEFAULT_NOSTRIL = [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)]
+
+
+def roi_geometry(cam):
+    """Where Point 0 (eye) and Area 1 (nostril) sit, as the camera reports them."""
+    geo = {}
+    for kind in ("Point", "Area"):
+        try:
+            for it in cam.get(f"/ISAPI/Thermometry/{kind}?Dev=0&Idx=255").get("ThermometryList", []):
+                if it.get("Enable", "Yes") == "No":
+                    continue
+                t, i = it.get("Type", kind), it.get("Id")
+                if t == "Point" and i == 0:
+                    g = it.get("Point") or it.get("PointTemp") or {}
+                    if "RatX" in g:
+                        geo["eye"] = (g["RatX"], g["RatY"])
+                elif t == "Area" and i == 1:
+                    pts = (it.get("Area") or {}).get("EndPointList")
+                    if pts:
+                        geo["nostril"] = [(q.get("RatX"), q.get("RatY")) for q in pts]
+        except Exception:                                       # noqa: BLE001
+            pass
+    return geo
+
+
+def aimed_since_start(cam):
+    """True once someone has moved the ROIs off the defaults this agent wrote —
+    i.e. calibrated from the Hardware page while the agent was running.
+
+    Without this the agent decided "uncalibrated" once, at startup, and kept
+    flagging every reading after the camera had been aimed: the "camera not
+    aimed" warning never cleared until someone restarted the agent. If the
+    firmware does not report ROI coordinates this stays False — a lingering
+    warning, never a false alarm."""
+    g = roi_geometry(cam)
+    return (g.get("eye") not in (None, DEFAULT_EYE)) or (g.get("nostril") not in (None, DEFAULT_NOSTRIL))
+
+
 def camera_has_rois(cam):
     """True when the camera already holds our eye point (Point 0) and nostril
     area (Area 1) — i.e. someone calibrated it from the Hardware page."""
@@ -319,8 +371,8 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
     calibrated = not reset_rois and camera_has_rois(cam)
     if not calibrated:
         cam.set_basic_param(emissivity_100=98, distance_cm=350)
-        cam.set_point(0, 5000, 5000, name="eye")                  # eye/max ROI
-        cam.set_area(1, [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)], name="nostril")
+        cam.set_point(0, *DEFAULT_EYE, name="eye")                # eye/max ROI
+        cam.set_area(1, DEFAULT_NOSTRIL, name="nostril")
         print(f"[edge] WARNING: camera {ip} had no calibrated ROIs — using frame-centre defaults. "
               "Readings are only meaningful if the eye and nostril happen to be there; "
               "calibrate from the Hardware page.")
@@ -329,6 +381,9 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
     print(f"[edge] sampling {window_s}s windows…")
 
     while True:
+        if not calibrated and aimed_since_start(cam):
+            calibrated = True
+            print("[edge] the camera has been aimed since start — readings are now trusted")
         window, t0 = [], time.time()
         misses = 0
         while time.time() - t0 < window_s:

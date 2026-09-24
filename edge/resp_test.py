@@ -77,6 +77,37 @@ random.seed(11)
 check("window too short to trust (10s)",
       compute_resp_rate(synth(16, secs=10), FS) is None)
 
+print("\na step is not a breath (head movement, shutter recalibration, re-aiming)")
+# A step's autocorrelation just decays, so the old estimator reported the top
+# of the band (~37 bpm) — above the 24 bpm alert threshold. Seen live when a
+# window straddled the moment the camera was aimed.
+for fs_ in (2.0, 5.0):
+    bogus = []
+    for s in range(200):
+        random.seed(90000 + s)
+        n = int(fs_ * 30)
+        sig = [31.3 + random.gauss(0, 0.05) if i < n // 2 else 36.4 + random.gauss(0, 0.05) for i in range(n)]
+        got = compute_resp_rate(sig, fs_)
+        if got is not None:
+            bogus.append(round(got, 1))
+    check(f"pure step at {fs_:g} Hz: 0/200 fabricated", not bogus, f"{len(bogus)} fabricated, e.g. {bogus[:4]}")
+
+# Step with real breathing after it: either no answer, or the true rate —
+# never the ~37 bpm band edge.
+wrong = []
+for s in range(100):
+    random.seed(95000 + s)
+    n = int(5.0 * 30)
+    sig = []
+    for i in range(n):
+        tt = i / 5.0
+        v = 31.3 if i < n // 2 else 36.4 + 0.4 * math.sin(2 * math.pi * (14 / 60) * tt)
+        sig.append(v + random.gauss(0, 0.05))
+    got = compute_resp_rate(sig, 5.0)
+    if got is not None and abs(got - 14) > 3:
+        wrong.append(round(got, 1))
+check("step then breathing: never a band-edge rate", not wrong, f"{len(wrong)} wrong, e.g. {wrong[:4]}")
+
 print("\ndoes not halve the rate (period-doubling / subharmonic)")
 # A clean breath correlates strongly at twice its period too. Picking that
 # taller peak would report 8 bpm for a horse breathing 16 - turning developing
