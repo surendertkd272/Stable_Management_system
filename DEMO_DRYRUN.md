@@ -150,33 +150,57 @@ the camera really supports rather than what the datasheet claims.
 
 ---
 
-## Calibrating a camera from the Hardware page
+## Connecting hardware from the Hardware page (no hardware needed)
 
-Run the mock with the head away from frame centre, so the edge agent's default
-ROIs miss — the realistic case:
+Two mock cameras (head away from frame centre, so un-aimed ROIs miss — the
+realistic case) and a mock water meter:
 
 ```bash
 python3 tools/mock_camera.py --http-port 8081 --modbus-port 5502 --scene offset --breathing-bpm 14 &
+python3 tools/mock_camera.py --http-port 8082 --modbus-port 5503 --scene offset --breathing-bpm 20 &
+python3 tools/mock_modbus_sensor.py --port 5510 --lpm 3 &
 npm run build && npm start &
 ```
 
-1. **Hardware → Add camera**: IP `127.0.0.1`, HTTP port `8081`, Modbus `5502`,
-   variant 640, lens 25 mm, 3.5 m. The optics panel shows pixels on target as you
-   type.
-2. **Test connection** — every ISAPI step and the Modbus cross-check should pass
-   (RTSP fails unless mediamtx is running; that does not mark the camera offline).
-3. **Calibrate ROIs** — click the eye's hot spot on the thermal image, drag a box
-   over the nostril, **Push ROIs to camera**. The eye should read ~37.6 °C; if it
-   reads cooler than the nostril box, the point is off the eye.
-4. **Watch breathing (20 s)** — the box average should swing by a few tenths of a
-   degree.
-5. Run the edge agent. It now reports *"camera is calibrated — keeping its
-   ROIs"* and records ~14 bpm. Before step 3 it warned, read the coat (~31 °C),
-   and reported no respiratory rate.
+1. **Hardware → Add edge box** ("Barn A edge"). Copy the token and the command
+   shown — they are shown once. Run it:
+   `python3 edge/edge_agent.py --server http://127.0.0.1:8080 --token eqd_…`
+   The edge box turns **Online** within 30 s.
+2. **Add camera** for each mock: IP `127.0.0.1`, HTTP port `8081` / `8082`,
+   Modbus `5502` / `5503`, stall `A-04` / `B-01`, variant 640, lens 25 mm, 3.5 m,
+   *Polled by* Barn A edge. The optics panel shows pixels on target as you type.
+   Within a minute the agent picks them up; each shows **Needs calibration**.
+3. **Test connection** on each — every ISAPI step and the Modbus cross-check
+   pass (RTSP fails unless mediamtx is running; that does not mark the camera
+   offline). The serial number is now pinned.
+4. **Calibrate ROIs** — click the eye's hot spot on the thermal image, drag a box
+   over the nostril, **Push ROIs to camera**. The page reads the ROIs back from
+   the camera to confirm them. The eye should read ~37.6 °C; if it reads cooler
+   than the nostril box, the point is off the eye. **Watch breathing (20 s)**
+   should show a swing of a few tenths of a degree. Within one window the camera
+   is **Online · reporting** at ~37.7 °C and 14 / 20 bpm.
+5. **Add Modbus sensor**: `127.0.0.1:5510`, unit 1, FC3, zero-based; register
+   *Total litres* at address 100, `float32`, high word first, scale 1000,
+   metric *Water intake*, mode **counter**. **Test read** shows raw and scaled
+   values. Readings arrive every poll as the increase in ml.
+6. **Add push device** (e.g. an IMU gateway, stall B-01, metrics *Steps* and
+   *Activity*). The token screen shows a ready `curl` command; a metric outside
+   the allow-list is rejected in the response.
 
-On a real camera, use the thermal image: the eye's inner corner and the nostrils
-are the warmest points on the head. Re-calibrate whenever the camera is moved or
-its lens changed — the page flags that automatically.
+Things worth trying, because they happen on site:
+
+- **Unplug a camera** (kill its mock): it goes to *Error — cannot reach …* and
+  raises a hardware alert. Restart it with no ROIs: *Needs calibration*.
+- **Swap cameras** (restart a mock on the same port with `--serial MOCK0000002`):
+  the test refuses it as a different unit until you accept the replacement.
+- **Move a camera** (edit its distance or stall): its ROIs are marked stale and
+  its readings are held back from alerts until re-aimed.
+- **Disable or remove** a device: the agent stops polling it within a minute.
+- **Stop the server** for a while: the agent buffers readings on disk and
+  flushes them when it comes back.
+
+On a real camera, use the thermal image: the eye's inner corner and the
+nostrils are the warmest points on the head.
 
 ---
 
