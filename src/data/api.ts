@@ -206,41 +206,86 @@ export async function exportReadingsCsv(horseId: string, days = 30): Promise<boo
   }
 }
 
-/* --- cameras (hardware integration) ----------------------------------------
-   Everything here runs through the site server, which is the only thing that
-   can reach cameras on the barn LAN. The browser never sees a camera password —
-   only `hasPassword`. */
+/* --- hardware devices --------------------------------------------------------
+   Every device runs through the site server, which is the only thing that can
+   reach the barn LAN. The browser never sees a camera password or a device
+   token after it is first shown — only `hasPassword` / `hasToken`. */
+export type DeviceKind = "edge_box" | "thermal_camera" | "modbus_sensor" | "push_device";
+export type DeviceState =
+  | "online" | "offline" | "never" | "disabled" | "unassigned" | "edge-offline"
+  | "needs-calibration" | "error" | "stale" | "waiting" | "silent";
+export interface DeviceStatus { state: DeviceState; detail: string }
+export interface DeviceHealth { at: string; ok: boolean | null; error: string | null; code: string | null }
+
 export interface CameraRois {
   eye: { x: number; y: number };
   nostril: { x0: number; y0: number; x1: number; y1: number };
   pushedAt?: string;
+  /** true = read back and matched; null = the camera does not report coordinates */
+  verified?: boolean | null;
   /** set when the camera was moved or its optics changed after calibrating */
   stale?: boolean;
 }
-export interface ProbeStep { name: string; ok: boolean; detail: string; ms: number }
+export interface ProbeStep { name: string; ok: boolean; detail: string; ms: number; code?: string }
 export interface CameraProbe {
   at: string; ok: boolean; steps: ProbeStep[];
   device: Record<string, string> | null;
 }
-export interface Camera {
-  id: string; name: string; stall: string;
+export interface SensorValue { name: string; metric: string; unit?: string; raw?: number; value?: number; ok: boolean; error?: string }
+export interface SensorProbe { at: string; ok: boolean; values: SensorValue[]; error?: string }
+
+export interface ModbusRegister {
+  name: string; address: number;
+  type: "uint16" | "int16" | "uint32" | "int32" | "float32";
+  wordOrder: "high-first" | "low-first";
+  scale: number; offset: number; metric: string; unit: string;
+  /** counter = a running total (litres dispensed); readings are the increase */
+  mode: "gauge" | "counter";
+}
+
+interface DeviceCommon {
+  id: string; kind: DeviceKind; name: string; enabled: boolean; notes: string;
+  status: DeviceStatus; createdAt: string; updatedAt?: string;
+  lastSeen: string | null; health: DeviceHealth | null;
+  hasToken: boolean; tokenHint?: string;
+}
+export interface EdgeBox extends DeviceCommon {
+  kind: "edge_box"; location: string;
+  agent?: { version: string; host: string; uptimeS: number; reportedAt: string };
+}
+export interface ThermalCamera extends DeviceCommon {
+  kind: "thermal_camera"; stall: string; edgeId: string | null;
   host: string; httpPort: number; https: boolean; rtspPort: number; modbusPort: number;
   username: string; hasPassword: boolean;
   variant: "256" | "384" | "640"; thermalLens: string; visibleLens: string;
   distanceM: number; emissivity: number;
-  rois: CameraRois | null; lastProbe: CameraProbe | null; createdAt: string;
+  rois: CameraRois | null; lastProbe: CameraProbe | null;
+  identity: { serial: string; model: string | null; firmware?: string | null; pinnedAt: string } | null;
 }
+export interface ModbusSensor extends DeviceCommon {
+  kind: "modbus_sensor"; stall: string; edgeId: string | null;
+  host: string; port: number; unitId: number; function: 3 | 4;
+  addressing: "zero-based" | "one-based"; pollSeconds: number;
+  registers: ModbusRegister[]; lastProbe: SensorProbe | null;
+}
+export interface PushDevice extends DeviceCommon {
+  kind: "push_device"; stall: string; metrics: string[];
+}
+export type Device = EdgeBox | ThermalCamera | ModbusSensor | PushDevice;
+
 /** What an owner account receives: status only, no address or credentials. */
-export interface OwnerCamera {
-  id: string; name: string; stall: string;
-  online: boolean | null; checkedAt: string | null; calibrated: boolean;
+export interface OwnerDevice {
+  id: string; kind: Exclude<DeviceKind, "edge_box">; name: string; stall: string;
+  status: DeviceState; calibrated: boolean | null;
 }
+export interface DeviceEvent { id: string; deviceId: string; device: string; at: string; actor: string; action: string; detail: string }
 export interface CameraTemps {
   at: string;
   eye: { c: number | null } | null;
   nostril: { avgC: number | null; minC: number | null; maxC: number | null } | null;
 }
-export type CameraInput = Omit<Camera, "id" | "hasPassword" | "rois" | "lastProbe" | "createdAt"> & { password?: string };
+/** Fields an admin sends when adding or editing a device (password only for cameras). */
+export type DeviceInput = { kind: DeviceKind; password?: string } & Record<string, unknown>;
 
 type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string; details?: string[] };
 
@@ -265,28 +310,40 @@ async function call<T>(method: string, path: string, body?: unknown, timeoutMs =
   }
 }
 
-export const listCameras = () => call<Camera[] | OwnerCamera[]>("GET", "/api/cameras");
-export const createCamera = (c: CameraInput) => call<Camera>("POST", "/api/cameras", c);
-export const updateCamera = (id: string, c: Partial<CameraInput>) =>
-  call<Camera>("PATCH", `/api/cameras/${encodeURIComponent(id)}`, c);
-export const deleteCamera = (id: string) => call<{ ok: true }>("DELETE", `/api/cameras/${encodeURIComponent(id)}`);
-export const probeCamera = (id: string) => call<CameraProbe>("POST", `/api/cameras/${encodeURIComponent(id)}/probe`, undefined, 45000);
+const dpath = (id: string, action = "") => `/api/devices/${encodeURIComponent(id)}${action ? `/${action}` : ""}`;
+
+export const listDevices = () => call<Device[]>("GET", "/api/devices");
+/** Owner accounts get the status-only projection. */
+export const listOwnerDevices = () => call<OwnerDevice[]>("GET", "/api/devices");
+/** `token` is returned exactly once, for edge boxes and push devices. */
+export const createDevice = (d: DeviceInput) => call<{ device: Device; token: string | null }>("POST", "/api/devices", d);
+export const updateDevice = (id: string, d: Partial<DeviceInput>) => call<Device>("PATCH", dpath(id), d);
+export const deleteDevice = (id: string, force = false) =>
+  call<{ ok: true }>("DELETE", dpath(id) + (force ? "?force=1" : ""));
+export const rotateToken = (id: string) => call<{ token: string }>("POST", dpath(id, "token"));
+export const deviceEvents = (id: string) => call<DeviceEvent[]>("GET", dpath(id, "events"));
+/** Camera connection test, or a Modbus test read. `acceptIdentity` confirms a replacement camera. */
+export const probeDevice = (id: string, acceptIdentity = false) =>
+  call<CameraProbe | SensorProbe>("POST", dpath(id, "probe") + (acceptIdentity ? "?acceptIdentity=1" : ""), undefined, 45000);
 export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril">) =>
-  call<{ ok: true; rois: CameraRois }>("PUT", `/api/cameras/${encodeURIComponent(id)}/rois`, rois);
-export const readCameraTemps = (id: string) => call<CameraTemps>("GET", `/api/cameras/${encodeURIComponent(id)}/temps`);
+  call<{ ok: true; rois: CameraRois; verify: { verified: boolean | null; detail: string } }>("PUT", dpath(id, "rois"), rois, 30000);
+export const readCameraTemps = (id: string) => call<CameraTemps>("GET", dpath(id, "temps"));
 
 /** Snapshot as an object URL. An <img src> cannot carry the Authorization
  *  header, so the image is fetched and handed to the page as a blob. */
-export async function fetchSnapshot(id: string, dev: 0 | 1): Promise<{ url?: string; error?: string }> {
+export async function fetchSnapshot(id: string, dev: 0 | 1): Promise<{ url?: string; error?: string; status?: number }> {
   if (!apiConfigured) return { error: "demo mode — no server" };
   try {
-    const res = await fetch(`${BASE}/api/cameras/${encodeURIComponent(id)}/snapshot?dev=${dev}`, { headers: authHeaders() });
+    const res = await fetch(`${BASE}${dpath(id, "snapshot")}?dev=${dev}`, { headers: authHeaders() });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      return { error: body.error ?? `HTTP ${res.status}` };
+      return { error: body.error ?? `HTTP ${res.status}`, status: res.status };
     }
     return { url: URL.createObjectURL(await res.blob()) };
   } catch {
     return { error: "cannot reach the server" };
   }
 }
+
+/** The site server's own address, as the edge agent should use it. */
+export const serverOrigin = () => BASE || (typeof window !== "undefined" ? window.location.origin : "http://<site-server>:8080");

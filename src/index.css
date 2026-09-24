@@ -1431,3 +1431,25 @@ button {
 
 /* The calibration and camera forms need room: aiming on a thumbnail is guesswork. */
 .modal.wide:has(.hw-stage, .hw-stage-empty, .hw-optics) { max-width: min(1120px, calc(100vw - 32px)); }
+
+/* Hardware: setup checklist, copyable tokens/commands, register map */
+.hw-guide { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.hw-guide li { display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--ink); }
+.hw-guide li > span {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%;
+  font-size: 11px; font-weight: 600; background: var(--surface-muted); color: var(--text-secondary);
+}
+.hw-guide li.done { color: var(--text-secondary); text-decoration: line-through; }
+.hw-guide li.done svg { color: var(--positive); flex-shrink: 0; }
+.hw-code {
+  display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 10px;
+  background: var(--surface-muted);
+}
+.hw-code code {
+  flex: 1; min-width: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink);
+  user-select: all;
+}
+.hw-reg { padding: 10px 12px; border-radius: 10px; background: var(--surface-muted); margin-bottom: 8px; }
+.hw-reg .field { margin-bottom: 0; }
+.hw-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 16px; }
+.modal.wide:has(.hw-reg, .hw-code) { max-width: min(1000px, calc(100vw - 32px)); }
