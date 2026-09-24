@@ -59,7 +59,125 @@ class Horse:
         return self.base_temp - 1.2 + 0.40 * math.sin(phase) + random.uniform(-0.06, 0.06)
 
 
+# --------------------------------------------------------------------------- #
+class Scene:
+    """Where things are in the frame, in the camera's proportional 0..10000
+    coordinates (the same RatX/RatY the ROI API uses).
+
+    ROI readings depend on ROI POSITION. Put the eye point on the eye and it
+    reads body temperature; miss and it reads coat or barn air. Put the nostril
+    box over the nostril and its average carries the breath; miss and there is
+    no rhythm at all. That is what makes ROI calibration testable without a
+    horse — a mis-aimed ROI fails the way it would on a real one.
+
+    "aligned" puts the targets where the edge agent's default ROIs point, so
+    existing runs behave as before. "offset" moves the head, so the defaults
+    miss and only a calibrated ROI recovers the vitals."""
+
+    PRESETS = {
+        "aligned": dict(head=(5200, 5400, 2600, 3400), eye=(5000, 5000, 300), nostril=(5000, 5800, 700, 450)),
+        "offset":  dict(head=(3000, 5000, 2300, 3200), eye=(3300, 3400, 300), nostril=(2500, 6600, 600, 420)),
+    }
+    AMBIENT = 24.0          # barn air
+    COAT = 31.5             # hair-covered skin reads well below core
+
+    def __init__(self, preset="aligned"):
+        self.__dict__.update(self.PRESETS[preset])
+        self.preset = preset
+
+    @staticmethod
+    def _in_ellipse(x, y, cx, cy, rx, ry):
+        return ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0
+
+    def temp_at(self, x, y):
+        ex, ey, er = self.eye
+        if (x - ex) ** 2 + (y - ey) ** 2 <= er * er:
+            return HORSE.eye_temp()
+        if self._in_ellipse(x, y, *self.nostril):
+            return HORSE.nostril_temp()
+        if self._in_ellipse(x, y, *self.head):
+            return self.COAT + random.uniform(-0.3, 0.3)
+        return self.AMBIENT + random.uniform(-0.4, 0.4)
+
+    def area_stats(self, pts):
+        """min/max/avg over the polygon, sampled on a grid (bbox + point-in-polygon)."""
+        xs = [q[0] for q in pts]; ys = [q[1] for q in pts]
+        vals = []
+        steps = 14
+        for i in range(steps + 1):
+            for j in range(steps + 1):
+                x = min(xs) + (max(xs) - min(xs)) * i / steps
+                y = min(ys) + (max(ys) - min(ys)) * j / steps
+                if _point_in_poly(x, y, pts):
+                    vals.append(self.temp_at(x, y))
+        if not vals:
+            vals = [self.temp_at(sum(xs) / len(xs), sum(ys) / len(ys))]
+        return min(vals), max(vals), sum(vals) / len(vals)
+
+
+def _point_in_poly(x, y, pts):
+    inside = False
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]; x2, y2 = pts[(i + 1) % n]
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / ((y2 - y1) or 1e-9) + x1:
+            inside = not inside
+    return inside
+
+
+# --- snapshot rendering: a real image, so a browser can show it -------------- #
+def _png(width, height, rows):
+    """Minimal RGB PNG encoder (stdlib only). rows: list of bytes, 3*width each."""
+    import zlib
+    raw = b"".join(b"\x00" + r for r in rows)
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def _ironbow(t, lo=22.0, hi=39.0):
+    """The palette thermal cameras ship with: black-purple-red-orange-yellow-white."""
+    v = max(0.0, min(1.0, (t - lo) / (hi - lo)))
+    stops = [(0, (0, 0, 20)), (.25, (90, 0, 140)), (.5, (200, 30, 60)),
+             (.7, (240, 110, 0)), (.87, (255, 210, 40)), (1, (255, 255, 235))]
+    for (a, ca), (b, cb) in zip(stops, stops[1:]):
+        if v <= b:
+            f = (v - a) / (b - a)
+            return bytes(int(ca[k] + (cb[k] - ca[k]) * f) for k in range(3))
+    return bytes(stops[-1][1])
+
+
+def render_snapshot(dev):
+    """dev 0 = thermal (640x512, ironbow), dev 1 = visible (960x540, greyscale).
+    The field is evaluated on a coarse grid and scaled up — fine for aiming."""
+    w, h, cell = (640, 512, 4) if dev == 0 else (960, 540, 6)
+    gw, gh = w // cell, h // cell
+    rows = []
+    for gy in range(gh):
+        y = (gy + 0.5) / gh * 10000
+        line = b""
+        for gx in range(gw):
+            x = (gx + 0.5) / gw * 10000
+            t = SCENE.temp_at(x, y)
+            if dev == 0:
+                px = _ironbow(t)
+            else:  # visible: a brown horse head on a pale stall wall
+                inside_head = Scene._in_ellipse(x, y, *SCENE.head)
+                g = 70 if inside_head else 205
+                if (x - SCENE.eye[0]) ** 2 + (y - SCENE.eye[1]) ** 2 <= SCENE.eye[2] ** 2:
+                    g = 20
+                elif Scene._in_ellipse(x, y, *SCENE.nostril):
+                    g = 45
+                px = bytes((min(255, g + (40 if inside_head else 0)), g, max(0, g - (20 if inside_head else 0))))
+            line += px * cell
+        rows.extend([line] * cell)
+    return _png(w, h, rows)
+
+
 HORSE = Horse()
+SCENE = Scene()
 STATE = {"rois": {}, "basic": {
     "MeasureTempClass": 0, "SurroundTemp": 25, "AimHimidity": 50,
     "FPara100": 97, "AimDistance": 200, "MeasureTempUnit": 0,
@@ -78,15 +196,18 @@ def thermometry_list():
         if not roi.get("enabled", True):
             continue
         if kind == "Point":
-            out.append({"Id": idx, "Type": "Point", "PointTemp": {
-                "Value": _c100(HORSE.eye_temp()),
-                "RatX": roi.get("ratX", 5000), "RatY": roi.get("ratY", 5000)}})
+            x, y = roi.get("ratX", 5000), roi.get("ratY", 5000)
+            out.append({"Id": idx, "Type": "Point", "Name": roi.get("name", ""),
+                        "PointTemp": {"Value": _c100(SCENE.temp_at(x, y)), "RatX": x, "RatY": y}})
         else:
-            # Areas/circles stand in for the nostril ROI: Avg carries the breath.
-            avg = HORSE.nostril_temp()
-            out.append({"Id": idx, "Type": kind,
-                        "MaxTemp": {"Value": _c100(avg + 0.5), "RatX": 5000, "RatY": 5000},
-                        "MinTemp": {"Value": _c100(avg - 0.5), "RatX": 5000, "RatY": 5000},
+            # The reading is whatever is actually inside the box: over the
+            # nostril, Avg carries the breath; anywhere else it does not.
+            pts = roi.get("pts") or [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)]
+            lo, hi, avg = SCENE.area_stats(pts)
+            out.append({"Id": idx, "Type": kind, "Name": roi.get("name", ""),
+                        "Area": {"Total": len(pts), "EndPointList": [{"RatX": a, "RatY": b} for a, b in pts]},
+                        "MaxTemp": {"Value": _c100(hi), "RatX": 5000, "RatY": 5000},
+                        "MinTemp": {"Value": _c100(lo), "RatX": 5000, "RatY": 5000},
                         "AvgTemp": {"Value": _c100(avg)}})
     return {"ThermometryList": out}
 
@@ -155,6 +276,8 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/ISAPI/Snapshot/JPG":
             # minimal JPEG; Type=1 appends a 640x512 int16 temperature block,
             # matching the layout described in the vendor's RAW-format note
+            if q.get("Type") != "1":
+                return self._send(200, render_snapshot(int(q.get("Dev", "0") or 0)), "image/png")
             jpg = b"\xff\xd8" + b"\x00" * 256 + b"\xff\xd9"
             if q.get("Type") == "1":
                 px = 640 * 512
@@ -191,9 +314,12 @@ class Handler(BaseHTTPRequestHandler):
                 for item in body.get("ThermometryList", []):
                     idx = item.get("Id", 0)
                     geom = item.get(kind) or {}
+                    pts = [(q.get("RatX", 0), q.get("RatY", 0)) for q in geom.get("EndPointList", [])]
                     STATE["rois"][(kind, idx)] = {
                         "enabled": item.get("Enable", "Yes") == "Yes",
+                        "name": item.get("Name", ""),
                         "ratX": geom.get("RatX", 5000), "ratY": geom.get("RatY", 5000),
+                        "pts": pts or None,
                         "fpara": item.get("FPara100"), "distance": item.get("AimDistance"),
                     }
                 return self._send(200, {"Result": "OK", "URI": p})
@@ -253,15 +379,19 @@ if __name__ == "__main__":
     ap.add_argument("--rtsp-port", type=int, default=8554)
     ap.add_argument("--breathing-bpm", type=float, default=12.0)
     ap.add_argument("--fever", action="store_true")
+    ap.add_argument("--scene", choices=sorted(Scene.PRESETS), default="aligned",
+                    help="aligned: targets sit under the edge agent's default ROIs; "
+                         "offset: head elsewhere, so only calibrated ROIs read vitals")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
 
     HOST, RTSP_PORT, VERBOSE = a.host, a.rtsp_port, a.verbose
     HORSE = Horse(breathing_bpm=a.breathing_bpm, fever=a.fever)
+    SCENE = Scene(a.scene)
 
     threading.Thread(target=modbus_server, args=(a.modbus_port,), daemon=True).start()
     print(f"[mock-camera] ISAPI  http://{a.host}:{a.http_port}")
     print(f"[mock-camera] Modbus tcp://{a.host}:{a.modbus_port}")
     print(f"[mock-camera] horse: breathing {a.breathing_bpm} bpm"
-          f"{', FEVER' if a.fever else ''}, base {HORSE.base_temp:.1f} C")
+          f"{', FEVER' if a.fever else ''}, base {HORSE.base_temp:.1f} C, scene={a.scene}")
     ThreadingHTTPServer((a.host, a.http_port), Handler).serve_forever()

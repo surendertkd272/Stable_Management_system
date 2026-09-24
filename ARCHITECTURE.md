@@ -111,6 +111,46 @@ reappear on reload.
 that the store owns it. This is what makes a horse added in the UI actually monitored —
 previously the rollup only ever saw the seed file, so a new horse got no alerts at all.
 
+## Hardware integration (Hardware page, admin only)
+
+Registers each stall camera (Sparsh SC-IT6420-HB V2), proves the site server
+can talk to it, and aims its temperature ROIs at the horse.
+
+| | |
+|---|---|
+| [server/hardware-spec.mjs](server/hardware-spec.mjs) | The datasheet (Rev 1.3) as data: variants, lenses, FOV, ROI limits, power. Shared by the server's validation and the browser's optics planner. |
+| [server/camera.mjs](server/camera.mjs) | Node port of the driver's protocol: ISAPI session login (Digest fallback), ROI set/query, snapshots, Modbus/TCP, RTSP OPTIONS — plus the host guard. |
+| [server/secrets.mjs](server/secrets.mjs) | AES-256-GCM for camera passwords, which must be reversible. |
+| [src/views/Hardware.tsx](src/views/Hardware.tsx) | Registry, connection test, calibration tool, optics planner. |
+
+- **Optics planner.** From the datasheet's FOV and resolution: how many thermal
+  pixels land on a 5 cm nostril and a 3 cm eye region at the mounting distance.
+  At 3.5 m the PO's units give 20.6 px (640/25 mm) and 10.3 px (640/13 mm) on the
+  nostril; the 256/3.2 mm variant gives 3.9 px and cannot resolve it.
+- **Connection test** runs the smoke test's checks from the server: address,
+  ISAPI login, device info, capabilities, thermometry, live ROIs, Modbus
+  cross-check, RTSP.
+- **Calibration** is done on the *thermal* snapshot: ROI coordinates are
+  thermal-sensor coordinates, and the vendor has not provided the
+  visible↔thermal mapping. The visible image is shown for orientation only.
+  "Push" writes the eye point (Point 0) and nostril box (Area 1) to the camera,
+  with emissivity and distance; "Watch breathing" samples the box for 20 s.
+- **The edge agent keeps a calibration.** It used to overwrite the camera's ROIs
+  with frame-centre defaults on every start. It now keeps Point 0 / Area 1 if
+  present, and warns loudly when it has to fall back (`--reset-rois` forces it).
+- **Access.** Admin: everything. Staff: list and live readings. Owners: a
+  status-only view of cameras on their own horses' stalls (no address, no
+  credentials, no snapshots) — shown in the Owner Portal. Passwords are never
+  returned to any browser.
+- **Host guard.** The server connects only to private, loopback and link-local
+  addresses, so the connection test cannot be used to make the server probe
+  arbitrary hosts. `EQUICARE_CAMERA_ALLOW_PUBLIC=1` lifts it.
+
+Why calibration matters, measured: against the mock camera with the head away
+from frame centre, an uncalibrated camera made the edge agent store **31.4 °C —
+a hypothermia reading taken off the coat** — and no respiratory rate. After
+aiming from the Hardware page: 37.7 °C and 14.0 bpm against a true 14.
+
 ## Deployment shape — single client, single site
 
 **This is not a SaaS product.** One client, one facility, one on-premise deployment that

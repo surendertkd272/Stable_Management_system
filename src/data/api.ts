@@ -205,3 +205,88 @@ export async function exportReadingsCsv(horseId: string, days = 30): Promise<boo
     return false;
   }
 }
+
+/* --- cameras (hardware integration) ----------------------------------------
+   Everything here runs through the site server, which is the only thing that
+   can reach cameras on the barn LAN. The browser never sees a camera password —
+   only `hasPassword`. */
+export interface CameraRois {
+  eye: { x: number; y: number };
+  nostril: { x0: number; y0: number; x1: number; y1: number };
+  pushedAt?: string;
+  /** set when the camera was moved or its optics changed after calibrating */
+  stale?: boolean;
+}
+export interface ProbeStep { name: string; ok: boolean; detail: string; ms: number }
+export interface CameraProbe {
+  at: string; ok: boolean; steps: ProbeStep[];
+  device: Record<string, string> | null;
+}
+export interface Camera {
+  id: string; name: string; stall: string;
+  host: string; httpPort: number; https: boolean; rtspPort: number; modbusPort: number;
+  username: string; hasPassword: boolean;
+  variant: "256" | "384" | "640"; thermalLens: string; visibleLens: string;
+  distanceM: number; emissivity: number;
+  rois: CameraRois | null; lastProbe: CameraProbe | null; createdAt: string;
+}
+/** What an owner account receives: status only, no address or credentials. */
+export interface OwnerCamera {
+  id: string; name: string; stall: string;
+  online: boolean | null; checkedAt: string | null; calibrated: boolean;
+}
+export interface CameraTemps {
+  at: string;
+  eye: { c: number | null } | null;
+  nostril: { avgC: number | null; minC: number | null; maxC: number | null } | null;
+}
+export type CameraInput = Omit<Camera, "id" | "hasPassword" | "rois" | "lastProbe" | "createdAt"> & { password?: string };
+
+type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string; details?: string[] };
+
+async function call<T>(method: string, path: string, body?: unknown, timeoutMs = 20000): Promise<Result<T>> {
+  if (!apiConfigured) return { ok: false, status: 0, error: "demo mode — no server" };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      signal: ctrl.signal,
+      headers: { ...authHeaders(), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: res.status, error: data.error ?? `HTTP ${res.status}`, details: data.details };
+    return { ok: true, data: data as T };
+  } catch (e) {
+    return { ok: false, status: 0, error: (e as Error).name === "AbortError" ? "timed out" : "cannot reach the server" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export const listCameras = () => call<Camera[] | OwnerCamera[]>("GET", "/api/cameras");
+export const createCamera = (c: CameraInput) => call<Camera>("POST", "/api/cameras", c);
+export const updateCamera = (id: string, c: Partial<CameraInput>) =>
+  call<Camera>("PATCH", `/api/cameras/${encodeURIComponent(id)}`, c);
+export const deleteCamera = (id: string) => call<{ ok: true }>("DELETE", `/api/cameras/${encodeURIComponent(id)}`);
+export const probeCamera = (id: string) => call<CameraProbe>("POST", `/api/cameras/${encodeURIComponent(id)}/probe`, undefined, 45000);
+export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril">) =>
+  call<{ ok: true; rois: CameraRois }>("PUT", `/api/cameras/${encodeURIComponent(id)}/rois`, rois);
+export const readCameraTemps = (id: string) => call<CameraTemps>("GET", `/api/cameras/${encodeURIComponent(id)}/temps`);
+
+/** Snapshot as an object URL. An <img src> cannot carry the Authorization
+ *  header, so the image is fetched and handed to the page as a blob. */
+export async function fetchSnapshot(id: string, dev: 0 | 1): Promise<{ url?: string; error?: string }> {
+  if (!apiConfigured) return { error: "demo mode — no server" };
+  try {
+    const res = await fetch(`${BASE}/api/cameras/${encodeURIComponent(id)}/snapshot?dev=${dev}`, { headers: authHeaders() });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { error: body.error ?? `HTTP ${res.status}` };
+    }
+    return { url: URL.createObjectURL(await res.blob()) };
+  } catch {
+    return { error: "cannot reach the server" };
+  }
+}

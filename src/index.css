@@ -1372,3 +1372,62 @@ button {
 }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- hardware integration ---------- */
+.hw-facts { display: grid; gap: 8px; }
+.hw-facts > div { display: grid; grid-template-columns: minmax(96px, 30%) 1fr; gap: 10px; font-size: 12.5px; }
+.hw-facts span { color: var(--text-secondary); }
+.hw-facts b { color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+.hw-legend {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-secondary); margin: 16px 0 8px;
+}
+.hw-check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.hw-optics { display: grid; gap: 10px; margin-top: 10px; }
+.hw-optics-row { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--ink-soft); }
+.hw-optics-row svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
+.hw-steps { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.hw-steps li {
+  display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: start;
+  font-size: 12.5px; padding: 8px 10px; border-radius: 10px; background: var(--surface-muted);
+}
+.hw-steps li.ok svg { color: var(--positive); }
+.hw-steps li.bad svg { color: var(--alert); }
+.hw-steps li b { display: block; color: var(--ink); font-weight: 600; }
+.hw-steps li span { color: var(--text-secondary); overflow-wrap: anywhere; }
+.hw-steps li em { font-style: normal; font-size: 11px; color: var(--text-secondary); }
+
+/* the calibration stage: coordinates are % of the image, matching the camera's
+   proportional 0–10000 ROI coordinates */
+.hw-stage {
+  position: relative; border-radius: var(--radius-inner); overflow: hidden;
+  cursor: crosshair; touch-action: none; user-select: none; background: #000;
+}
+.hw-stage img, .hw-visible { display: block; width: 100%; height: auto; border-radius: var(--radius-inner); }
+.hw-stage img { pointer-events: none; border-radius: 0; }
+.hw-eye {
+  position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
+  border: 2px solid #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.5), inset 0 0 0 2px rgba(0,0,0,.35);
+  pointer-events: none;
+}
+.hw-eye::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+  border-radius: 50%; background: #fff;
+}
+.hw-box {
+  position: absolute; border: 2px dashed #fff; background: rgba(255,255,255,.12);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.45); pointer-events: none;
+}
+.hw-eye span, .hw-box span {
+  position: absolute; left: 0; top: -20px; white-space: nowrap; font-size: 10.5px; font-weight: 600;
+  color: #fff; background: rgba(0,0,0,.6); padding: 1px 6px; border-radius: 6px;
+}
+.hw-eye span { left: 24px; top: -2px; }
+.hw-stage-empty {
+  display: grid; place-items: center; aspect-ratio: 5 / 4; border-radius: var(--radius-inner);
+  background: var(--surface-muted); color: var(--text-secondary); font-size: 12.5px; text-align: center; padding: 16px;
+}
+.hw-stage-empty.small { aspect-ratio: 16 / 9; }
+
+/* The calibration and camera forms need room: aiming on a thumbnail is guesswork. */
+.modal.wide:has(.hw-stage, .hw-stage-empty, .hw-optics) { max-width: min(1120px, calc(100vw - 32px)); }

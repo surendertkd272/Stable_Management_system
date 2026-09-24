@@ -281,18 +281,42 @@ def compute_resp_rate(samples, fs, with_quality=False):
     return (bpm, periodicity) if with_quality else bpm
 
 
+def camera_has_rois(cam):
+    """True when the camera already holds our eye point (Point 0) and nostril
+    area (Area 1) — i.e. someone calibrated it from the Hardware page."""
+    have = set()
+    for kind in ("Point", "Area"):
+        try:
+            for it in cam.get(f"/ISAPI/Thermometry/{kind}?Dev=0&Idx=255").get("ThermometryList", []):
+                if it.get("Enable", "Yes") != "No":
+                    have.add((it.get("Type", kind), it.get("Id")))
+        except Exception:                                       # noqa: BLE001
+            pass
+    return ("Point", 0) in have and ("Area", 1) in have
+
+
 def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, token="",
-                http_port=80, window_s=60, target_hz=5.0):
+                http_port=80, window_s=60, target_hz=5.0, reset_rois=False):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from sparsh_camera import IsapiClient  # noqa
 
     cam = IsapiClient(ip, user, password, port=http_port)
     if not cam.login():
         sys.exit("[edge] camera login failed")
-    cam.set_basic_param(emissivity_100=98, distance_cm=350)
-    cam.set_point(0, 5000, 5000, name="eye")                      # eye/max ROI
-    cam.set_area(1, [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)], name="nostril")
-    print(f"[edge] camera {ip}:{http_port} ROIs set; sampling {window_s}s windows…")
+    # This used to overwrite the ROIs with fixed frame-centre defaults on every
+    # start — silently undoing a calibration made from the Hardware page, and
+    # measuring coat or stall wall instead of the eye and nostril. Keep what the
+    # camera holds; only fall back to defaults on an uncalibrated camera.
+    if reset_rois or not camera_has_rois(cam):
+        cam.set_basic_param(emissivity_100=98, distance_cm=350)
+        cam.set_point(0, 5000, 5000, name="eye")                  # eye/max ROI
+        cam.set_area(1, [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)], name="nostril")
+        print(f"[edge] WARNING: camera {ip} had no calibrated ROIs — using frame-centre defaults. "
+              "Readings are only meaningful if the eye and nostril happen to be there; "
+              "calibrate from the Hardware page.")
+    else:
+        print(f"[edge] camera {ip}:{http_port} is calibrated — keeping its ROIs")
+    print(f"[edge] sampling {window_s}s windows…")
 
     while True:
         window, t0 = [], time.time()
@@ -361,6 +385,8 @@ def main():
     ap.add_argument("--camera"); ap.add_argument("--user", default="admin"); ap.add_argument("--pass", dest="pw")
     ap.add_argument("--http-port", type=int, default=80,
                     help="camera ISAPI port (use 8080 against tools/mock_camera.py)")
+    ap.add_argument("--reset-rois", action="store_true",
+                    help="overwrite the camera's ROIs with frame-centre defaults")
     ap.add_argument("--window", type=int, default=60,
                     help="seconds of nostril samples per respiration estimate")
     ap.add_argument("--stall", default="A-04",
@@ -375,7 +401,7 @@ def main():
         simulate(a.api, a.backfill_days, a.live, a.interval, a.token)
     elif a.camera:
         real_camera(a.api, a.camera, a.user, a.pw, a.stall, a.horse, a.live, a.interval,
-                    a.token, http_port=a.http_port, window_s=a.window)
+                    a.token, http_port=a.http_port, window_s=a.window, reset_rois=a.reset_rois)
     else:
         ap.error("choose --simulate or --camera <ip>")
 

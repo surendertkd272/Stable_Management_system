@@ -147,3 +147,33 @@ the camera really supports rather than what the datasheet claims.
   as a **trend against the horse's own baseline**, not as a clinical
   thermometer reading. The alert thresholds are screening-grade and still need
   a vet's review.
+
+---
+
+## Calibrating a camera from the Hardware page
+
+Run the mock with the head away from frame centre, so the edge agent's default
+ROIs miss — the realistic case:
+
+```bash
+python3 tools/mock_camera.py --http-port 8081 --modbus-port 5502 --scene offset --breathing-bpm 14 &
+npm run build && npm start &
+```
+
+1. **Hardware → Add camera**: IP `127.0.0.1`, HTTP port `8081`, Modbus `5502`,
+   variant 640, lens 25 mm, 3.5 m. The optics panel shows pixels on target as you
+   type.
+2. **Test connection** — every ISAPI step and the Modbus cross-check should pass
+   (RTSP fails unless mediamtx is running; that does not mark the camera offline).
+3. **Calibrate ROIs** — click the eye's hot spot on the thermal image, drag a box
+   over the nostril, **Push ROIs to camera**. The eye should read ~37.6 °C; if it
+   reads cooler than the nostril box, the point is off the eye.
+4. **Watch breathing (20 s)** — the box average should swing by a few tenths of a
+   degree.
+5. Run the edge agent. It now reports *"camera is calibrated — keeping its
+   ROIs"* and records ~14 bpm. Before step 3 it warned, read the coat (~31 °C),
+   and reported no respiratory rate.
+
+On a real camera, use the thermal image: the eye's inner corner and the nostrils
+are the warmest points on the head. Re-calibrate whenever the camera is moved or
+its lens changed — the page flags that automatically.

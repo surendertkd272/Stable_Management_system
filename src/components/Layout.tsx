@@ -24,6 +24,7 @@ import {
   Wheat,
   Receipt,
   UserCircle,
+  Cpu,
   LucideIcon,
 } from "lucide-react";
 import { useTheme } from "../theme";
@@ -32,7 +33,7 @@ import { useStable, useToast } from "../store";
 import { breedingMares, Horse } from "../data/mock";
 import { Modal } from "./ui";
 
-type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean };
+type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; adminOnly?: boolean };
 
 const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
@@ -66,12 +67,20 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/portal", label: "Owner Portal", icon: UserCircle },
     ],
   },
+  {
+    // Admin only (filtered in Rail): camera addresses, credentials and aim.
+    title: "System",
+    items: [{ to: "/hardware", label: "Hardware", icon: Cpu, adminOnly: true }],
+  },
 ];
 
 function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { theme, set } = useTheme();
   const { alerts } = useStable();
+  const { user, authRequired } = useAuth();
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
+  // Signed-in: role decides. No auth (demo / open local backend): show all.
+  const canSee = (n: NavItem) => !n.adminOnly || !authRequired || user?.role === "admin";
 
   const pathname = usePathname() ?? "/";
   // `end` = exact match (the dashboard); otherwise a section stays highlighted
@@ -105,12 +114,15 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
       </div>
 
       <nav className="nav">
-        {SECTIONS.map((sec) => (
-          <div key={sec.title}>
-            <div className="nav-section">{sec.title}</div>
-            {sec.items.map(item)}
-          </div>
-        ))}
+        {SECTIONS.map((sec) => {
+          const items = sec.items.filter(canSee);
+          return items.length ? (
+            <div key={sec.title}>
+              <div className="nav-section">{sec.title}</div>
+              {items.map(item)}
+            </div>
+          ) : null;
+        })}
         <Link
           href="/settings"
           className={`nav-item${isActive("/settings") ? " active" : ""}`}
@@ -222,6 +234,7 @@ function TopBar() {
     "/billing": { h1: "Billing", p: `${unpaidInvoices} unpaid · invoices, GST & UPI payments` },
     "/portal": { h1: "Owner Portal", p: "Scoped read-only view of each owner's horses" },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
+    "/hardware": { h1: "Hardware", p: "Cameras — connection, optics and ROI calibration" },
   };
 
   const base = "/" + (pathname.split("/")[1] || "");

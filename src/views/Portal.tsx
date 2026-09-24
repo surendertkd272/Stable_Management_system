@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Heart, IndianRupee, Bell, FileText, CalendarClock, Lock } from "lucide-react";
+import { Heart, IndianRupee, Bell, FileText, CalendarClock, Lock, Camera as CameraIcon } from "lucide-react";
+import * as api from "../data/api";
 import { useStable } from "../store";
 import { useAuth } from "../auth";
 import { StatusPill, riskScore, riskBand } from "../components/ui";
@@ -36,6 +37,21 @@ export default function Portal() {
     .filter((t) => !t.done && myNames.has(t.horse))
     .sort((a, b) => a.due.localeCompare(b.due));
   const myAlerts = alerts.filter((a) => myNames.has(a.horse) && !a.acknowledged);
+  // Which cameras watch this owner's horses. An owner account receives a
+  // status-only projection from the server (no address, no credentials);
+  // staff previewing the portal get full records, reduced to the same fields.
+  const [cams, setCams] = useState<{ name: string; stall: string; online: boolean | null; calibrated: boolean }[] | null>(null);
+  useEffect(() => {
+    if (api.demoMode) return;
+    api.listCameras().then((r) => {
+      if (!r.ok) return;
+      setCams(r.data.map((c) =>
+        "online" in c
+          ? { name: c.name, stall: c.stall, online: c.online, calibrated: c.calibrated }
+          : { name: c.name, stall: c.stall, online: c.lastProbe ? c.lastProbe.ok : null, calibrated: Boolean(c.rois && !c.rois.stale) }));
+    });
+  }, []);
+
   const outstanding = myInvoices
     .filter((i) => !i.paid)
     .reduce((s, i) => s + i.amount * (1 + i.gst / 100), 0);
@@ -222,6 +238,38 @@ export default function Portal() {
         This is a preview of the owner-facing view. In production each owner authenticates and is scoped to their own
         data only — no owner can see another's horses, reports or billing.
       </p>
+      {cams && myHorses.length > 0 && (
+        <div className="card" style={{ marginTop: 22 }}>
+          <div className="card-head">
+            <h3>Cameras watching your horses</h3>
+            <CameraIcon size={17} color="var(--text-secondary)" />
+          </div>
+          {myHorses.map((h) => {
+            const cam = cams.find((c) => c.stall === h.stall);
+            return (
+              <div key={h.id} className="setting-row" style={{ alignItems: "center" }}>
+                <div className="info">
+                  <b>
+                    {h.name} · Stall {h.stall}
+                  </b>
+                  <span>
+                    {!cam
+                      ? "No camera installed for this stall — body temperature and breathing are not measured."
+                      : !cam.calibrated
+                        ? `${cam.name} — installed, not yet aimed at the horse, so its readings are not reliable yet.`
+                        : `${cam.name} — measuring body temperature and breathing.`}
+                  </span>
+                </div>
+                {cam && (
+                  <span className={`pill ${cam.online === null ? "muted" : cam.online ? "ok" : "alert"}`}>
+                    {cam.online === null ? "not tested" : cam.online ? "working" : "offline"}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }
