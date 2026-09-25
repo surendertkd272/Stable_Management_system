@@ -1390,7 +1390,7 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
             </div>
             <label className="hw-check" style={{ margin: 0, alignItems: "center" }}>
               <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
-              Live{live && age !== null ? ` · ${age} s ago` : ""}
+              Live{checking ? " · paused for the check" : live && age !== null ? ` · ${age} s ago` : ""}
             </label>
           </div>
           {!thermal ? (
