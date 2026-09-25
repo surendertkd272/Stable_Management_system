@@ -288,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/ISAPI/System/Capability/DeviceInfo":
             return self._send(200, {
-                "DeviceName": "VD641NT", "Model": "VD641NT", "DeviceSN": "MOCK0000001",
+                "DeviceName": "VD641NT", "Model": "VD641NT", "DeviceSN": AUTH.get("serial", "MOCK0000001"),
                 "FWVersion": "V1.00.02", "FWDate": "Build mock", "IRModule": "VD641",
                 "IRName": "M2228C-3", "CCDModule": "IMX290"})
 
@@ -448,6 +448,8 @@ if __name__ == "__main__":
                     help="refuse session login — firmware that only speaks Digest (implies --require-auth)")
     ap.add_argument("--password", default="admin", help="device password when auth is required")
     ap.add_argument("--https", action="store_true", help="serve ISAPI over TLS with a self-signed certificate")
+    ap.add_argument("--serial", default="MOCK0000001",
+                    help="serial number to report — a different one simulates a swapped camera")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
 
@@ -455,7 +457,7 @@ if __name__ == "__main__":
     HORSE = Horse(breathing_bpm=a.breathing_bpm, fever=a.fever)
     SCENE = Scene(a.scene)
 
-    AUTH.update(require=a.require_auth or a.digest_only, digest_only=a.digest_only, password=a.password)
+    AUTH.update(require=a.require_auth or a.digest_only, digest_only=a.digest_only, password=a.password, serial=a.serial)
     threading.Thread(target=modbus_server, args=(a.modbus_port,), daemon=True).start()
     print(f"[mock-camera] ISAPI  http://{a.host}:{a.http_port}")
     print(f"[mock-camera] Modbus tcp://{a.host}:{a.modbus_port}")

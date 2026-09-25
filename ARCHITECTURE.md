@@ -56,11 +56,13 @@ Screens render in the browser: the session token lives in localStorage, so the
 server cannot know who is asking at render time. The server renders the shell;
 data arrives after sign-in.
 
-### Against a real camera
+### Against real hardware
 ```bash
-python3 sparsh_camera_smoketest.py 192.168.1.102 admin 'PASSWORD'   # verify unit
-python3 edge/edge_agent.py --camera 192.168.1.102 --pass 'PASSWORD' \
-        --horse zarina --stall A-04 --live
+python3 sparsh_camera_smoketest.py 192.168.1.102 admin 'PASSWORD'   # verify a unit
+# Production: register an edge box on the Hardware page, then on that box
+python3 edge/edge_agent.py --server http://<site-server>:8080 --token eqd_…
+# Single camera, no registry (bench testing only)
+python3 edge/edge_agent.py --camera 192.168.1.102 --pass 'PASSWORD' --stall A-04 --live
 ```
 
 ### Production posture
@@ -113,15 +115,59 @@ previously the rollup only ever saw the seed file, so a new horse got no alerts 
 
 ## Hardware integration (Hardware page, admin only)
 
-Registers each stall camera (Sparsh SC-IT6420-HB V2), proves the site server
-can talk to it, and aims its temperature ROIs at the horse.
+The Hardware page is the single source of truth for every device the stable
+runs. Four kinds, one registry (`devices` entity):
+
+| Kind | What it is | How its data arrives |
+|---|---|---|
+| `edge_box` | the on-site computer (Jetson) | holds a token; pulls `GET /edge/config`, posts `POST /edge/heartbeat` and `/ingest/readings` |
+| `thermal_camera` | Sparsh SC-IT6420-HB V2 | polled over ISAPI by the edge box it is assigned to |
+| `modbus_sensor` | any Modbus/TCP device (flow meter, load cell, feeder) | polled by its edge box from a **register map** — no code per model |
+| `push_device` | a device or vendor gateway that sends its own readings | its own token, limited to an allow-list of metrics |
+
+**Adding, re-aiming or removing hardware in the portal is what actually
+happens.** The edge agent (`--server … --token …`) re-fetches its device list
+every minute and starts or stops a worker per device; nothing is configured on
+the box by hand. Readings carry a `deviceId` and the **server** decides the stall
+from the registry — an edge box cannot write to a stall it names, only report its
+own assigned devices; a push device cannot send a metric outside its allow-list.
 
 | | |
 |---|---|
+| [server/devices.mjs](server/devices.mjs) | Registry: validation per kind, `/api/devices*`, `/edge/*`, ingest attribution, status, hardware alerts, audit log. |
+| [server/camera-pool.mjs](server/camera-pool.mjs) | One session per camera, serialised, logged out when idle; pins the unit's serial number. |
+| [server/modbus.mjs](server/modbus.mjs) | Modbus/TCP FC3/FC4 reads, 16/32-bit and float decoding, word order, one- vs zero-based addressing. Mirrored in the edge agent (`edge/modbus_test.py` cross-checks both on 2000 vectors). |
 | [server/hardware-spec.mjs](server/hardware-spec.mjs) | The datasheet (Rev 1.3) as data: variants, lenses, FOV, ROI limits, power. Shared by the server's validation and the browser's optics planner. |
 | [server/camera.mjs](server/camera.mjs) | Node port of the driver's protocol: ISAPI session login (Digest fallback), ROI set/query, snapshots, Modbus/TCP, RTSP OPTIONS — plus the host guard. |
 | [server/secrets.mjs](server/secrets.mjs) | AES-256-GCM for camera passwords, which must be reversible. |
-| [src/views/Hardware.tsx](src/views/Hardware.tsx) | Registry, connection test, calibration tool, optics planner. |
+| [src/views/Hardware.tsx](src/views/Hardware.tsx) | Registry UI per kind, token reveal, connection test / test read, calibration tool, history, optics planner. |
+
+Failure modes handled before any hardware arrived (each has a test in
+`server/hardware.test.mjs` / `server/camera-pool.test.mjs` or was run end to end
+against the mocks):
+
+- **Wrong camera at an IP** (DHCP reshuffle, swapped cable): the first
+  successful test pins the serial number; afterwards a different unit is refused
+  (409) until an admin confirms it is a replacement — otherwise one stall's
+  readings would land on another horse.
+- **Camera session limits and reboots**: one pooled session per camera, requests
+  serialised; an expired session re-logs in once and re-verifies identity before
+  retrying. After a reboot that lost its ROIs, the device shows *needs
+  calibration* rather than waiting forever.
+- **Camera moved or re-lensed**: ROIs are marked stale; its readings are held
+  back from alerts until re-aimed. ROI pushes are read back and compared.
+- **Modbus off-by-one** (datasheets using 40001-style numbering): addressing is
+  an explicit choice, and **Test read** shows raw and scaled values so they can be
+  checked against the device's own display. Counters (total litres) report the
+  increase per poll and survive a meter reset.
+- **Duplicate registrations** (same host:port twice would double-count water):
+  refused. **Edge box offline / device error / device silent**: status on the
+  page plus a hardware alert.
+- **Network drop**: the edge agent buffers readings on disk (one outbox per
+  server + token, locked against a second copy of the agent) and flushes in
+  chunks as each is acknowledged.
+- **Tokens** are shown once, stored only as a SHA-256 hash, rotatable; once any
+  device token exists, anonymous ingest is refused.
 
 - **Optics planner.** From the datasheet's FOV and resolution: how many thermal
   pixels land on a 5 cm nostril and a 3 cm eye region at the mounting distance.
@@ -206,9 +252,10 @@ boot, `/api/*` always requires a caller — there is no accidental open window. 
 public demo is unaffected: in demo mode (a Vercel deployment with no
 `NEXT_PUBLIC_API_URL`) the browser never calls the API and runs purely on mock data.
 
-`/ingest/*` is separate — it is open unless `AUTH_INGEST_TOKEN` is set, so an edge
-box can be brought up before credentials are distributed. **Set it before the
-network is anything but a closed lab VLAN.**
+`/ingest/*` is separate. Edge boxes and push devices use **their own tokens**,
+issued on the Hardware page. It is open only on a bare dev setup — no
+`AUTH_INGEST_TOKEN` and no device token issued yet; as soon as either exists,
+anonymous readings are refused.
 
 ### Owner scoping
 

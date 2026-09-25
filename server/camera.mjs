@@ -57,9 +57,20 @@ export async function checkHost(host) {
 // --------------------------------------------------------------------------- //
 // ISAPI
 // --------------------------------------------------------------------------- //
+export class IdentityMismatch extends Error {
+  constructor(expected, actual, host) {
+    super(`a different camera is answering at ${host}: expected S/N ${expected}, found S/N ${actual}. ` +
+      `Was its IP address reassigned? If the unit was replaced on purpose, accept it as the replacement on the Hardware page.`);
+    this.code = "IDENTITY_MISMATCH";
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
 export class CameraClient {
-  constructor({ host, httpPort = 80, https: useHttps = false, username, password, timeoutMs = 6000 }) {
-    Object.assign(this, { host, port: Number(httpPort) || 80, useHttps, username, password, timeoutMs });
+  constructor({ host, httpPort = 80, https: useHttps = false, username, password, timeoutMs = 6000,
+                maxBytes = 16 * 1024 * 1024 }) {
+    Object.assign(this, { host, port: Number(httpPort) || 80, useHttps, username, password, timeoutMs, maxBytes });
     this.sessionId = null;
     this.digest = null;       // { realm, nonce, qop, opaque } when the device wants HTTP Digest
     this.nc = 0;
@@ -83,7 +94,17 @@ export class CameraClient {
         rejectUnauthorized: false, timeout: this.timeoutMs,
       }, (res) => {
         const chunks = [];
-        res.on("data", (c) => chunks.push(c));
+        let size = 0;
+        res.on("data", (c) => {
+          size += c.length;
+          // A misbehaving device (or the wrong device at this address) must
+          // not be able to stream the server out of memory.
+          if (size > this.maxBytes) {
+            req.destroy(new Error(`response exceeded ${Math.round(this.maxBytes / 1048576)} MB — not a camera reply`));
+            return;
+          }
+          chunks.push(c);
+        });
         res.on("end", () => {
           const buf = Buffer.concat(chunks);
           resolve({ status: res.statusCode, headers: res.headers, body: binary ? buf : buf.toString("utf8") });
@@ -129,7 +150,7 @@ export class CameraClient {
         const r = await this.request(method, "/ISAPI/Security/User/Login", { body });
         if (r.status === 200) {
           const sid = JSON.parse(r.body || "{}").SessionID;
-          if (sid) { this.sessionId = sid; return { ok: true, method: "session" }; }
+          if (sid) { this.sessionId = sid; this.loggedIn = true; this.generation = (this.generation || 0) + 1; return { ok: true, method: "session" }; }
         }
       } catch { /* try the next method */ }
     }
@@ -139,22 +160,71 @@ export class CameraClient {
         qop: /qop="?([^",]*)/.exec(www)?.[1], opaque: /opaque="([^"]*)"/.exec(www)?.[1],
       };
       const r = await this.request("GET", "/ISAPI/System/Capability/DeviceInfo");
-      if (r.status === 200) return { ok: true, method: "digest" };
+      if (r.status === 200) { this.loggedIn = true; this.generation = (this.generation || 0) + 1; return { ok: true, method: "digest" }; }
       this.digest = null;
       return { ok: false, error: `camera rejected the credentials (HTTP ${r.status})` };
     }
-    if (probe.status === 200) return { ok: true, method: "none" };   // auth disabled on the device
+    if (probe.status === 200) { this.loggedIn = true; this.generation = (this.generation || 0) + 1; return { ok: true, method: "none" }; }   // auth disabled on the device
     return { ok: false, error: `login refused (HTTP ${probe.status})` };
   }
 
+  /** Send, recovering from the two things that happen on a real LAN:
+   *  - a transient network failure: idempotent requests (GET) retry once;
+   *  - a session the camera expired: log in again once and resend.
+   *  Writes are never retried on a network error — we cannot know if the
+   *  first attempt landed. */
+  async send(method, path, opts = {}) {
+    let r;
+    try {
+      r = await this.request(method, path, opts);
+    } catch (e) {
+      if (method !== "GET") throw e;
+      r = await this.request(method, path, opts);
+    }
+    if (r.status === 401 && this.loggedIn) {
+      this.sessionId = null;
+      this.digest = null;
+      const again = await this.login();
+      if (!again.ok) throw new Error(`session expired and re-login failed: ${again.error}`);
+      // A rejected session is also what happens when a DIFFERENT camera has
+      // taken over this IP. Confirm who we are talking to before resending —
+      // otherwise a write (a ROI push) would land on the wrong unit.
+      await this.verifyIdentity();
+      r = await this.request(method, path, opts);
+    }
+    return r;
+  }
+
+  /** Throw IdentityMismatch if the device isn't the pinned unit (expectSerial). */
+  async verifyIdentity() {
+    if (!this.expectSerial) return;
+    const r = await this.request("GET", "/ISAPI/System/Capability/DeviceInfo");
+    let sn = null;
+    try { sn = JSON.parse(r.body || "{}").DeviceSN ?? null; } catch { /* not JSON */ }
+    if (sn && sn !== this.expectSerial) throw new IdentityMismatch(this.expectSerial, sn, this.host);
+  }
+
   async getJson(path) {
-    const r = await this.request("GET", path);
+    const r = await this.send("GET", path);
     if (r.status !== 200) throw new Error(`${path} -> HTTP ${r.status}`);
-    return JSON.parse(r.body || "{}");
+    try {
+      return JSON.parse(r.body || "{}");
+    } catch {
+      throw new Error(`${path} returned something that is not JSON`);
+    }
+  }
+
+  /** End the session on the camera. Firmware caps concurrent sessions, so a
+   *  client that just walks away eventually locks everyone out. */
+  async logout() {
+    if (!this.sessionId) return;
+    try { await this.request("PUT", "/ISAPI/Security/User/Logout"); } catch { /* best effort */ }
+    this.sessionId = null;
+    this.loggedIn = false;
   }
 
   async putJson(path, body) {
-    const r = await this.request("PUT", path, { body });
+    const r = await this.send("PUT", path, { body });
     let parsed;
     try { parsed = JSON.parse(r.body || "{}"); } catch { parsed = { raw: r.body.slice(0, 200) }; }
     return { http: r.status, ok: r.status === 200 && (parsed.Result ?? "OK") === "OK", body: parsed };
@@ -208,7 +278,7 @@ export class CameraClient {
 
   /** Plain snapshot (Type=0). dev 0 = thermal, 1 = visible. */
   async snapshot(dev = 0) {
-    const r = await this.request("GET", `/ISAPI/Snapshot/JPG?Dev=${dev}&Type=0`, { binary: true });
+    const r = await this.send("GET", `/ISAPI/Snapshot/JPG?Dev=${dev}&Type=0`, { binary: true });
     if (r.status !== 200) throw new Error(`snapshot -> HTTP ${r.status}`);
     return { contentType: String(r.headers["content-type"] || "image/jpeg"), bytes: r.body };
   }

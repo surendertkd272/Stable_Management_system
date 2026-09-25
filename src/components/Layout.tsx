@@ -234,7 +234,7 @@ function TopBar() {
     "/billing": { h1: "Billing", p: `${unpaidInvoices} unpaid · invoices, GST & UPI payments` },
     "/portal": { h1: "Owner Portal", p: "Scoped read-only view of each owner's horses" },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
-    "/hardware": { h1: "Hardware", p: "Cameras — connection, optics and ROI calibration" },
+    "/hardware": { h1: "Hardware", p: "Edge boxes, cameras and sensors — connect, test and calibrate" },
   };
 
   const base = "/" + (pathname.split("/")[1] || "");

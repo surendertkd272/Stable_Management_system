@@ -40,15 +40,19 @@ export default function Portal() {
   // Which cameras watch this owner's horses. An owner account receives a
   // status-only projection from the server (no address, no credentials);
   // staff previewing the portal get full records, reduced to the same fields.
-  const [cams, setCams] = useState<{ name: string; stall: string; online: boolean | null; calibrated: boolean }[] | null>(null);
+  const [cams, setCams] = useState<{ name: string; stall: string; state: api.DeviceState; calibrated: boolean }[] | null>(null);
   useEffect(() => {
     if (api.demoMode) return;
-    api.listCameras().then((r) => {
+    api.listOwnerDevices().then((r) => {
       if (!r.ok) return;
-      setCams(r.data.map((c) =>
-        "online" in c
-          ? { name: c.name, stall: c.stall, online: c.online, calibrated: c.calibrated }
-          : { name: c.name, stall: c.stall, online: c.lastProbe ? c.lastProbe.ok : null, calibrated: Boolean(c.rois && !c.rois.stale) }));
+      const rows = r.data as unknown as (api.OwnerDevice | api.Device)[];
+      setCams(rows
+        .filter((d) => d.kind === "thermal_camera")
+        .map((d) => {
+          if (typeof d.status === "string") return { name: d.name, stall: d.stall, state: d.status, calibrated: Boolean(d.calibrated) };
+          const c = d as api.ThermalCamera;
+          return { name: c.name, stall: c.stall, state: c.status.state, calibrated: Boolean(c.rois && !c.rois.stale) };
+        }));
     });
   }, []);
 
@@ -260,11 +264,7 @@ export default function Portal() {
                         : `${cam.name} — measuring body temperature and breathing.`}
                   </span>
                 </div>
-                {cam && (
-                  <span className={`pill ${cam.online === null ? "muted" : cam.online ? "ok" : "alert"}`}>
-                    {cam.online === null ? "not tested" : cam.online ? "working" : "offline"}
-                  </span>
-                )}
+                {cam && <OwnerCamPill state={cam.state} />}
               </div>
             );
           })}
@@ -272,6 +272,17 @@ export default function Portal() {
       )}
     </>
   );
+}
+
+/** An owner needs "is it working", not the device-state vocabulary. */
+function OwnerCamPill({ state }: { state: api.DeviceState }) {
+  const [cls, label] =
+    state === "online" ? ["ok", "working"]
+    : state === "needs-calibration" ? ["warn", "not aimed yet"]
+    : state === "waiting" || state === "never" || state === "unassigned" ? ["muted", "being installed"]
+    : state === "disabled" ? ["muted", "switched off"]
+    : ["alert", "not working"];
+  return <span className={`pill ${cls}`}>{label}</span>;
 }
 
 function Summary({
