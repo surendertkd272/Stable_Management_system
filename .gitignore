@@ -32,3 +32,6 @@ SDK/**/obj/
 
 # large test media (sourced clips, not source code)
 testdata/
+
+# private vendor chat export (contains contact and GST details)
+pdf/WhatsApp Chat*/

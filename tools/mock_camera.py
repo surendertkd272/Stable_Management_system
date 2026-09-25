@@ -191,7 +191,9 @@ SESSIONS = set()
 # verifies credentials the way the device does: the session-login hash, or an
 # RFC 2617 Digest response. --digest-only refuses session login, like firmware
 # that only speaks Digest — which is what exercises our fallback path.
-AUTH = {"require": False, "digest_only": False, "user": "admin", "password": "admin", "realm": "Server Status"}
+AUTH = {"require": False, "digest_only": False, "user": "admin", "password": "admin", "realm": "Server Status",
+        "algorithm": "MD5"}
+DIGEST_HASHES = {"MD5": hashlib.md5, "SHA-256": hashlib.sha256}
 NONCES = set()
 
 
@@ -260,11 +262,14 @@ class Handler(BaseHTTPRequestHandler):
         f = dict(re.findall(r'(\w+)="?([^",]*)"?', h[7:]))
         if f.get("username") != AUTH["user"] or f.get("nonce") not in NONCES:
             return False
-        md5 = lambda s: hashlib.md5(s.encode()).hexdigest()
-        ha1 = md5(f"{AUTH['user']}:{AUTH['realm']}:{AUTH['password']}")
-        ha2 = md5(f"{self.command}:{f.get('uri', '')}")
-        want = (md5(f"{ha1}:{f['nonce']}:{f.get('nc')}:{f.get('cnonce')}:{f.get('qop')}:{ha2}")
-                if f.get("qop") else md5(f"{ha1}:{f['nonce']}:{ha2}"))
+        # A client answering with the wrong algorithm fails, as on the device.
+        if f.get("algorithm", "MD5").upper() != AUTH["algorithm"]:
+            return False
+        H = lambda s: DIGEST_HASHES[AUTH["algorithm"]](s.encode()).hexdigest()
+        ha1 = H(f"{AUTH['user']}:{AUTH['realm']}:{AUTH['password']}")
+        ha2 = H(f"{self.command}:{f.get('uri', '')}")
+        want = (H(f"{ha1}:{f['nonce']}:{f.get('nc')}:{f.get('cnonce')}:{f.get('qop')}:{ha2}")
+                if f.get("qop") else H(f"{ha1}:{f['nonce']}:{ha2}"))
         return f.get("response") == want
 
     def _challenge(self):
@@ -272,7 +277,8 @@ class Handler(BaseHTTPRequestHandler):
         NONCES.add(nonce)
         body = json.dumps({"Result": "Failed", "Code": 401}).encode()
         self.send_response(401)
-        self.send_header("WWW-Authenticate", f'Digest realm="{AUTH["realm"]}", nonce="{nonce}", qop="auth"')
+        self.send_header("WWW-Authenticate",
+                         f'Digest realm="{AUTH["realm"]}", nonce="{nonce}", qop="auth", algorithm={AUTH["algorithm"]}')
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -448,6 +454,8 @@ if __name__ == "__main__":
                     help="refuse session login — firmware that only speaks Digest (implies --require-auth)")
     ap.add_argument("--password", default="admin", help="device password when auth is required")
     ap.add_argument("--https", action="store_true", help="serve ISAPI over TLS with a self-signed certificate")
+    ap.add_argument("--digest-algorithm", choices=sorted(DIGEST_HASHES), default="MD5",
+                    help="HTTP Digest hash the mock demands (the vendor doc allows MD5 and SHA256)")
     ap.add_argument("--serial", default="MOCK0000001",
                     help="serial number to report — a different one simulates a swapped camera")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -457,7 +465,8 @@ if __name__ == "__main__":
     HORSE = Horse(breathing_bpm=a.breathing_bpm, fever=a.fever)
     SCENE = Scene(a.scene)
 
-    AUTH.update(require=a.require_auth or a.digest_only, digest_only=a.digest_only, password=a.password, serial=a.serial)
+    AUTH.update(require=a.require_auth or a.digest_only, digest_only=a.digest_only, password=a.password, serial=a.serial,
+                algorithm=a.digest_algorithm)
     threading.Thread(target=modbus_server, args=(a.modbus_port,), daemon=True).start()
     print(f"[mock-camera] ISAPI  http://{a.host}:{a.http_port}")
     print(f"[mock-camera] Modbus tcp://{a.host}:{a.modbus_port}")

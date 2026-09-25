@@ -43,6 +43,17 @@ export const SC_IT6420_HB_V2 = {
   physical: { material: "Aluminium", dimensionsMm: [278, 100, 83], maxKg: 1 },
 };
 
+// Sharp range of the fixed-focus thermal lens. Not in the datasheet — the
+// vendor's written answer (WhatsApp, 27 Jul 2026) for units factory-focused at
+// 3.5 m, which is what the PO specifies. A lens focused elsewhere has a
+// different range; lenses the vendor did not state are left unknown rather
+// than guessed.
+export const FOCUS = {
+  setM: 3.5,
+  source: "vendor, 27 Jul 2026, for units factory-focused at 3.5 m",
+  sharpM: { "640/13": [2, 11], "640/25": [3, 4.3] },
+};
+
 // Target sizes on the horse, in cm. Not from the datasheet — anatomy.
 export const TARGETS = {
   nostril: { cm: 5, label: "nostril (respiration)" },
@@ -87,6 +98,16 @@ export function maxDistanceFor(variant, lens, targetCm, minPx) {
   return (v.resolution[0] * targetCm) / (200 * minPx * Math.tan(rad(fov[0] / 2)));
 }
 
+/** Is the horse inside the lens's sharp range? verdict: "sharp" | "blurred" |
+ *  "unknown". A blurred thermal image smears the nostril into its surroundings,
+ *  so breathing and eye temperature read low even with enough pixels. */
+export function focusFor(variant, lens, distanceM) {
+  const range = FOCUS.sharpM[`${variant}/${lens}`];
+  if (!range) return { verdict: "unknown", nearM: null, farM: null, setM: FOCUS.setM };
+  const [nearM, farM] = range;
+  return { verdict: distanceM >= nearM && distanceM <= farM ? "sharp" : "blurred", nearM, farM, setM: FOCUS.setM };
+}
+
 /** Can this variant + lens + distance actually read the horse's vitals? */
 export function assessOptics(variant, lens, distanceM) {
   const footprint = thermalFootprint(variant, lens, distanceM);
@@ -101,7 +122,7 @@ export function assessOptics(variant, lens, distanceM) {
       maxDistanceM: maxDistanceFor(variant, lens, t.cm, need),
     };
   }
-  return { footprint, targets };
+  return { footprint, targets, focus: focusFor(variant, lens, distanceM) };
 }
 
 /** Validate a camera's model fields against the datasheet. Returns error strings. */

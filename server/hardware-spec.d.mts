@@ -32,13 +32,19 @@ export interface TargetAssessment {
   label: string; cm: number; px: number; need: number;
   verdict: "good" | "marginal" | "insufficient"; maxDistanceM: number;
 }
+export interface FocusAssessment {
+  verdict: "sharp" | "blurred" | "unknown";
+  nearM: number | null; farM: number | null; setM: number;
+}
+export const FOCUS: { setM: number; source: string; sharpM: Record<string, [number, number]> };
+export function focusFor(variant: string, lens: string, distanceM: number): FocusAssessment;
 export function variants(): Variant[];
 export function lensesFor(variant: string): string[];
 export function thermalFootprint(variant: string, lens: string, distanceM: number): Footprint | null;
 export function pixelsOnTarget(variant: string, lens: string, distanceM: number, targetCm: number): number;
 export function maxDistanceFor(variant: string, lens: string, targetCm: number, minPx: number): number;
 export function assessOptics(variant: string, lens: string, distanceM: number):
-  { footprint: Footprint; targets: Record<TargetKey, TargetAssessment> } | null;
+  { footprint: Footprint; targets: Record<TargetKey, TargetAssessment>; focus: FocusAssessment } | null;
 export function validateCameraModel(c: {
   variant: string; thermalLens: string; visibleLens: string; emissivity: number; distanceM: number;
 }): string[];
