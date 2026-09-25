@@ -12,6 +12,27 @@ import dns from "node:dns/promises";
 import { createHash, randomBytes } from "node:crypto";
 
 const md5 = (s) => createHash("md5").update(s).digest("hex");   // device-mandated hash
+// HTTP Digest hashes. The vendor's API document (B22, §4.5.2) says the camera
+// supports MD5 and SHA256, so a challenge may name either.
+const DIGEST_HASH = { "MD5": "md5", "SHA-256": "sha256" };
+
+/** Every Digest challenge in a WWW-Authenticate header (a device may offer
+ *  several, one per algorithm), preferring SHA-256. Null if none is usable. */
+export function parseDigestChallenge(www) {
+  const found = [];
+  for (const part of String(www).split(/(?=\bDigest\s)/i)) {
+    if (!/^Digest\s/i.test(part)) continue;
+    const field = (k) => { const m = new RegExp(`\\b${k}=(?:"([^"]*)"|([^,\\s]*))`, "i").exec(part); return m ? m[1] ?? m[2] : undefined; };
+    const alg = (field("algorithm") || "MD5").toUpperCase().replace(/^SHA256$/, "SHA-256");
+    if (!DIGEST_HASH[alg]) continue;          // e.g. -sess variants: not offered by this firmware
+    const qop = field("qop");
+    found.push({
+      realm: field("realm") ?? "", nonce: field("nonce"), opaque: field("opaque"), algorithm: alg,
+      qop: qop && qop.split(/\s*[, ]\s*/).includes("auth") ? "auth" : qop || undefined,
+    });
+  }
+  return found.find((c) => c.algorithm === "SHA-256") || found[0] || null;
+}
 const CLIENT_REALM = "aB3xY7pQ";
 const ALARM_OFF = { UpType: 0, UpLimit: 7000, DownType: 0, DownLimit: 1000 };
 const ARM_24_7 = "ffffff-ffffff-ffffff-ffffff-ffffff-ffffff-ffffff-";
@@ -118,14 +139,15 @@ export class CameraClient {
   }
 
   digestHeader(method, uri) {
-    const { realm, nonce, qop, opaque } = this.digest;
+    const { realm, nonce, qop, opaque, algorithm = "MD5" } = this.digest;
+    const h = (x) => createHash(DIGEST_HASH[algorithm]).update(x).digest("hex");
     const nc = (++this.nc).toString(16).padStart(8, "0");
     const cnonce = randomBytes(8).toString("hex");
-    const ha1 = md5(`${this.username}:${realm}:${this.password}`);
-    const ha2 = md5(`${method}:${uri}`);
-    const response = qop ? md5(`${ha1}:${nonce}:${nc}:${cnonce}:auth:${ha2}`) : md5(`${ha1}:${nonce}:${ha2}`);
+    const ha1 = h(`${this.username}:${realm}:${this.password}`);
+    const ha2 = h(`${method}:${uri}`);
+    const response = qop ? h(`${ha1}:${nonce}:${nc}:${cnonce}:auth:${ha2}`) : h(`${ha1}:${nonce}:${ha2}`);
     return `Digest username="${this.username}", realm="${realm}", nonce="${nonce}", uri="${uri}", ` +
-      `response="${response}"` + (qop ? `, qop=auth, nc=${nc}, cnonce="${cnonce}"` : "") +
+      `algorithm=${algorithm}, response="${response}"` + (qop ? `, qop=auth, nc=${nc}, cnonce="${cnonce}"` : "") +
       (opaque ? `, opaque="${opaque}"` : "");
   }
 
@@ -136,7 +158,7 @@ export class CameraClient {
     const probe = await this.request("GET", "/ISAPI/System/Capability/DeviceInfo");
     const www = String(probe.headers["www-authenticate"] || "");
     const realm = /realm="([^"]*)"/.exec(www)?.[1] || "Server Status";
-    if (forceDigest && !/^Digest/i.test(www))
+    if (forceDigest && !/\bDigest\s/i.test(www))
       return probe.status === 200
         ? { ok: false, error: "the camera did not ask for authentication, so Digest could not be exercised" }
         : { ok: false, error: `the camera does not offer HTTP Digest (HTTP ${probe.status}, no Digest challenge)` };
@@ -154,15 +176,18 @@ export class CameraClient {
         }
       } catch { /* try the next method */ }
     }
-    if (/^Digest/i.test(www)) {
-      this.digest = {
-        realm, nonce: /nonce="([^"]*)"/.exec(www)?.[1],
-        qop: /qop="?([^",]*)/.exec(www)?.[1], opaque: /opaque="([^"]*)"/.exec(www)?.[1],
-      };
+    if (/\bDigest\s/i.test(www)) {
+      const challenge = parseDigestChallenge(www);
+      if (!challenge) return { ok: false, error: `the camera asks for a Digest algorithm we do not support: ${www.slice(0, 120)}` };
+      this.digest = challenge;
+      this.nc = 0;
       const r = await this.request("GET", "/ISAPI/System/Capability/DeviceInfo");
-      if (r.status === 200) { this.loggedIn = true; this.generation = (this.generation || 0) + 1; return { ok: true, method: "digest" }; }
+      if (r.status === 200) {
+        this.loggedIn = true; this.generation = (this.generation || 0) + 1;
+        return { ok: true, method: challenge.algorithm === "MD5" ? "digest" : `digest ${challenge.algorithm}` };
+      }
       this.digest = null;
-      return { ok: false, error: `camera rejected the credentials (HTTP ${r.status})` };
+      return { ok: false, error: `camera rejected the credentials (HTTP ${r.status}, Digest ${challenge.algorithm})` };
     }
     if (probe.status === 200) { this.loggedIn = true; this.generation = (this.generation || 0) + 1; return { ok: true, method: "none" }; }   // auth disabled on the device
     return { ok: false, error: `login refused (HTTP ${probe.status})` };
