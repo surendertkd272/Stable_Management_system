@@ -22,19 +22,20 @@ import {
 } from "lucide-react";
 import * as api from "../data/api";
 import type {
-  CameraProbe, CameraTemps, Device, DeviceEvent, DeviceKind, DeviceState, EdgeBox, ModbusRegister,
+  CameraProbe, CameraTemps, CameraVerification, Device, RoiBox, DeviceEvent, DeviceKind, DeviceState, EdgeBox, ModbusRegister,
   ModbusSensor, PushDevice, SensorProbe, ThermalCamera,
 } from "../data/api";
 import { SC_IT6420_HB_V2 as SPEC, assessOptics, focusFor, lensesFor, variants } from "../../server/hardware-spec.mjs";
 import { METRICS } from "../../server/contract.mjs";
+import { computeRespRate } from "../../server/respiration.mjs";
 import { Modal, Sparkline } from "../components/ui";
 import { useStable, useToast } from "../store";
 import { useAuth } from "../auth";
 
-type Rois = Pick<NonNullable<ThermalCamera["rois"]>, "eye" | "nostril">;
+type Rois = { eye: RoiBox; nostril: RoiBox };
 
 // Where the edge agent points ROIs on an uncalibrated camera — frame centre.
-const DEFAULT_ROIS: Rois = { eye: { x: 5000, y: 5000 }, nostril: { x0: 4200, y0: 5200, x1: 5800, y1: 6400 } };
+const DEFAULT_ROIS: Rois = { eye: { x0: 4850, y0: 4880, x1: 5150, y1: 5120 }, nostril: { x0: 4200, y0: 5200, x1: 5800, y1: 6400 } };
 const METRIC_KEYS = Object.keys(METRICS) as (keyof typeof METRICS)[];
 const REG_TYPES: ModbusRegister["type"][] = ["uint16", "int16", "uint32", "int32", "float32"];
 const REFRESH_MS = 15000;
@@ -315,6 +316,8 @@ function SetupGuide({ devices }: { devices: Device[] }) {
     [polled.length > 0 && polled.every((d) => d.edgeId), "Add cameras / sensors and assign each to an edge box"],
     [polled.length > 0 && polled.every((d) => d.lastProbe?.ok), "Test each connection from here"],
     [cams.length > 0 && cams.every((c) => c.rois && !c.rois.stale), "Calibrate each camera's ROIs"],
+    [cams.length > 0 && cams.every((c) => c.rois && !c.rois.stale && c.verification?.roisAt === c.rois.pushedAt && c.verification?.agrees !== false),
+      "Run the breathing check on each camera"],
   ];
   if (steps.every(([done]) => done)) return null;
   return (
@@ -489,15 +492,21 @@ function CameraFacts({ cam, edge }: { cam: ThermalCamera; edge: string }) {
 
 function RoiBanner({ cam }: { cam: ThermalCamera }) {
   const ok = cam.rois && !cam.rois.stale;
+  const v = ok && cam.verification && cam.verification.roisAt === cam.rois!.pushedAt ? cam.verification : null;
+  const tone = !ok ? "watch" : !v ? "watch" : v.agrees === false ? "urgent" : "calm";
   return (
-    <div className={`row ${ok ? "calm" : "watch"}`} style={{ margin: "14px 0 0", padding: "10px 14px" }}>
+    <div className={`row ${tone}`} style={{ margin: "14px 0 0", padding: "10px 14px" }}>
       <Crosshair size={16} style={{ flexShrink: 0 }} />
       <span style={{ fontSize: 12.5 }}>
         {!cam.rois
           ? "Not calibrated — readings are shown greyed and never raise alerts until the ROIs are aimed at the horse."
           : cam.rois.stale
             ? "Re-calibrate: the camera was moved or its optics changed since the ROIs were aimed. Readings are held back from alerts until then."
-            : `ROIs aimed ${when(cam.rois.pushedAt)}${cam.rois.verified === true ? " — read back from the camera and confirmed" : cam.rois.verified === null ? " — the camera accepted them but does not report coordinates back" : ""}.`}
+            : !v
+              ? `ROIs aimed ${when(cam.rois.pushedAt)}${cam.rois.verified === true ? " and confirmed by the camera" : ""} — breathing not checked yet. Open Calibrate and run the breathing check.`
+              : `Checked ${when(v.at)}: breathing ${v.breathing.bpm} bpm` +
+                (v.handCountBpm === null ? " (not cross-checked by hand)" : `, hand count ${v.handCountBpm} bpm — ${v.agrees ? "agrees" : "DISAGREES, re-aim"}`) +
+                (v.eyeC !== null ? ` · eye ${v.eyeC.toFixed(1)} °C` : "") + "."}
       </span>
     </div>
   );
@@ -1177,89 +1186,179 @@ function RegisterEditor({ registers, addressing, onChange }: {
 
 // --------------------------------------------------------------------------- //
 // ROI calibration
+//
+// Aim roughly, let the check confirm it: the eye is a box read as its hottest
+// pixel (the camera reports where that pixel is, drawn on the image), the view
+// refreshes while you aim, and a 60 s breathing check runs the edge agent's own
+// algorithm (server/respiration.mjs) against a hand count before it is saved.
 // --------------------------------------------------------------------------- //
+const LIVE_MS = 1500;
+const CHECK_S = 60;
+const CHECK_HZ = 5;
+const EYE_BOX_WARN = 2500;      // wider than this: the hottest pixel may not be the eye
+
+type Snap = { url?: string; error?: string; status?: number; at?: number };
+type CheckResult = { bpm: number | null; periodicity: number; seconds: number; samples: number; fs: number; swing: number | null };
+
 function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => void }) {
   const notify = useToast();
-  const [thermal, setThermal] = useState<{ url?: string; error?: string; status?: number } | null>(null);
-  const [visible, setVisible] = useState<{ url?: string; error?: string } | null>(null);
-  const [rois, setRois] = useState<Rois>(cam.rois ? { eye: cam.rois.eye, nostril: cam.rois.nostril } : DEFAULT_ROIS);
+  const [thermal, setThermal] = useState<Snap | null>(null);
+  const [visible, setVisible] = useState<Snap | null>(null);
+  const [rois, setRois] = useState<Rois>(() => (cam.rois ? { eye: toBox(cam.rois.eye, "eye"), nostril: cam.rois.nostril } : DEFAULT_ROIS));
   const [mode, setMode] = useState<"eye" | "nostril">("eye");
+  const [live, setLive] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [pushed, setPushed] = useState<{ at: string; detail: string; verified: boolean | null } | null>(null);
+  const [pushed, setPushed] = useState<{ at: string; detail: string; verified: boolean | null } | null>(
+    () => (cam.rois && !cam.rois.stale ? { at: cam.rois.pushedAt ?? "", detail: "aimed earlier", verified: cam.rois.verified ?? null } : null));
   const [pushError, setPushError] = useState("");
   const [temps, setTemps] = useState<CameraTemps | null>(null);
-  const [watch, setWatch] = useState<number[] | null>(null);
-  const [watching, setWatching] = useState(false);
+  const [series, setSeries] = useState<number[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<CheckResult | null>(null);
+  const [hand, setHand] = useState("");
+  const [saved, setSaved] = useState<CameraVerification | null>(null);
+  const [tick, setTick] = useState(0);
   const alive = useRef(true);
+  const dragging = useRef(false);
+  const busyCam = useRef(false);            // pause the live view while pushing / checking
   useEffect(() => () => {
     alive.current = false;
   }, []);
 
-  const loadSnapshots = useCallback(async () => {
-    setThermal(null);
-    setVisible(null);
-    // One after the other: the camera serves one session, and the server
-    // serialises requests to it anyway.
-    const t = await api.fetchSnapshot(cam.id, 0);
-    if (!alive.current) return;
-    setThermal(t);
-    const v = await api.fetchSnapshot(cam.id, 1);
-    if (alive.current) setVisible(v);
-  }, [cam.id]);
-
-  useEffect(() => {
-    loadSnapshots();
-  }, [loadSnapshots]);
-
-  // release blob URLs
+  // Replace an image, releasing the previous blob only once the new one is in.
+  const swap = (set: (fn: (s: Snap | null) => Snap | null) => void, next: Snap) =>
+    set((prev) => {
+      if (prev?.url && prev.url !== next.url && next.url) URL.revokeObjectURL(prev.url);
+      return next.url ? next : { ...prev, error: next.error, status: next.status };
+    });
   useEffect(() => () => {
     if (thermal?.url) URL.revokeObjectURL(thermal.url);
-  }, [thermal]);
-  useEffect(() => () => {
     if (visible?.url) URL.revokeObjectURL(visible.url);
-  }, [visible]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const readTemps = async () => {
+  const readTemps = useCallback(async () => {
     const r = await api.readCameraTemps(cam.id);
-    if (r.ok) setTemps(r.data);
-    else notify(`Could not read temperatures: ${r.error}`);
-  };
+    if (r.ok && alive.current) setTemps(r.data);
+    return r;
+  }, [cam.id]);
+
+  // First load: thermal, then visible — one camera session, serialised anyway.
+  useEffect(() => {
+    (async () => {
+      const t = await api.fetchSnapshot(cam.id, 0);
+      if (!alive.current) return;
+      swap(setThermal, { ...t, at: Date.now() });
+      const v = await api.fetchSnapshot(cam.id, 1);
+      if (alive.current) swap(setVisible, { ...v, at: Date.now() });
+      if (cam.rois && !cam.rois.stale) readTemps();
+    })();
+  }, [cam.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live thermal view: wait for the horse to settle, aim then.
+  useEffect(() => {
+    if (!live) return;
+    let stop = false;
+    (async () => {
+      while (!stop && alive.current) {
+        await sleep(LIVE_MS);
+        if (stop || !alive.current) break;
+        if (dragging.current || busyCam.current) continue;
+        const t = await api.fetchSnapshot(cam.id, 0);
+        if (stop || !alive.current) break;
+        swap(setThermal, { ...t, at: Date.now() });
+        if (t.status === 409) { setLive(false); break; }     // a different camera: stop and say so
+        if (pushed) await readTemps();                        // hot-spot marker follows the horse
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [live, cam.id, pushed, readTemps]);
+
+  // "updated 3 s ago"
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const push = async () => {
     setBusy(true);
+    busyCam.current = true;
     setPushError("");
     const r = await api.pushRois(cam.id, rois);
+    busyCam.current = false;
     setBusy(false);
     if (!r.ok) {
       setPushError(r.error);
       return notify("The ROIs were not confirmed — see the message");
     }
     setPushed({ at: r.data.rois.pushedAt ?? new Date().toISOString(), detail: r.data.verify.detail, verified: r.data.verify.verified });
-    setWatch(null);
-    notify("ROIs pushed to the camera");
+    setResult(null);
+    setSaved(null);
+    setSeries([]);
+    notify("ROIs pushed to the camera — now run the breathing check");
     readTemps();
   };
 
-  // Breathing shows as a slow oscillation in the nostril box's average. One
-  // reading can't show it; twenty seconds can.
-  const watchBreathing = async () => {
-    setWatching(true);
-    const series: number[] = [];
-    for (let i = 0; i < 20 && alive.current; i++) {
+  // 60 s of the nostril box's average at ~5 Hz, judged by the edge agent's
+  // algorithm with the rate actually achieved (not the one aimed for — a slow
+  // network would otherwise scale the answer).
+  const runCheck = async () => {
+    setChecking(true);
+    busyCam.current = true;
+    setResult(null);
+    setSaved(null);
+    const vals: number[] = [];
+    const t0 = performance.now();
+    let last: CameraTemps | null = null;
+    while (alive.current && performance.now() - t0 < CHECK_S * 1000) {
+      const tickAt = performance.now();
       const r = await api.readCameraTemps(cam.id);
-      if (r.ok && r.data.nostril?.avgC != null) {
-        series.push(r.data.nostril.avgC);
-        setWatch([...series]);
-        setTemps(r.data);
+      if (r.ok) {
+        last = r.data;
+        if (r.data.nostril?.avgC != null) vals.push(r.data.nostril.avgC);
+        if (vals.length % 5 === 0) {
+          setSeries([...vals]);
+          setTemps(r.data);
+        }
       }
-      await sleep(1000);
+      await sleep(Math.max(0, 1000 / CHECK_HZ - (performance.now() - tickAt)));
     }
-    if (alive.current) setWatching(false);
+    busyCam.current = false;
+    if (!alive.current) return;
+    const seconds = (performance.now() - t0) / 1000;
+    const fs = vals.length / seconds;
+    const rr = computeRespRate(vals, fs);
+    setSeries([...vals]);
+    if (last) setTemps(last);
+    setResult({
+      ...rr, seconds, samples: vals.length, fs,
+      swing: vals.length > 3 ? Math.max(...vals) - Math.min(...vals) : null,
+    });
+    setChecking(false);
   };
 
-  const swing = watch && watch.length > 3 ? Math.max(...watch) - Math.min(...watch) : null;
+  const handBpm = hand.trim() === "" ? null : Number(hand);
+  const handOk = handBpm === null || (Number.isFinite(handBpm) && handBpm >= 2 && handBpm <= 80);
+  const agreesPreview = result?.bpm != null && handBpm !== null && handOk
+    ? Math.abs(result.bpm - handBpm) <= Math.max(3, 0.2 * handBpm) : null;
+
+  const save = async () => {
+    if (!result?.bpm) return;
+    const r = await api.saveVerification(cam.id, {
+      breathing: { bpm: result.bpm, periodicity: result.periodicity, seconds: Math.round(result.seconds), samples: result.samples },
+      handCountBpm: handBpm, eyeC: temps?.eye?.c ?? null, nostrilSwingC: result.swing,
+    });
+    if (!r.ok) return notify(`Could not save the check: ${r.error}`);
+    setSaved(r.data);
+    notify(r.data.agrees === false ? "Saved — the rates disagree, re-aim and check again" : "Check saved with this calibration");
+  };
+
   const eyeC = temps?.eye?.c ?? null;
   const nosMax = temps?.nostril?.maxC ?? null;
+  const eyeW = rois.eye.x1 - rois.eye.x0, eyeH = rois.eye.y1 - rois.eye.y0;
+  const age = thermal?.at ? Math.round((Date.now() - thermal.at) / 1000) : null;
+  void tick;
 
   return (
     <Modal
@@ -1272,7 +1371,7 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
           <button className="btn-ghost" onClick={onClose}>
             Close
           </button>
-          <button className="btn-primary" onClick={push} disabled={busy || !thermal?.url}>
+          <button className="btn-primary" onClick={push} disabled={busy || checking || !thermal?.url}>
             {busy ? <Loader2 size={16} className="spin" /> : <Crosshair size={16} />} Push ROIs to camera
           </button>
         </>
@@ -1280,39 +1379,55 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
     >
       <div className="grid cols-2" style={{ gap: 18, alignItems: "start" }}>
         <div>
-          <div className="flex between center" style={{ marginBottom: 8, gap: 8 }}>
+          <div className="flex between center wrap" style={{ marginBottom: 8, gap: 8 }}>
             <div className="tabs">
               <button className={mode === "eye" ? "on" : ""} onClick={() => setMode("eye")}>
-                Place eye point
+                1 · Eye box
               </button>
               <button className={mode === "nostril" ? "on" : ""} onClick={() => setMode("nostril")}>
-                Draw nostril box
+                2 · Nostril box
               </button>
             </div>
-            <button className="sub" style={{ color: "var(--accent)", fontWeight: 600 }} onClick={loadSnapshots}>
-              Refresh
-            </button>
+            <label className="hw-check" style={{ margin: 0, alignItems: "center" }}>
+              <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+              Live{live && age !== null ? ` · ${age} s ago` : ""}
+            </label>
           </div>
           {!thermal ? (
             <div className="hw-stage-empty">
               <Loader2 className="spin" size={22} />
             </div>
-          ) : thermal.error ? (
+          ) : !thermal.url ? (
             <div className="hw-stage-empty">
               {thermal.status === 409
                 ? `A different camera is answering at this address: ${thermal.error} Close this and run “Test connection” to review it.`
                 : `Thermal snapshot failed: ${thermal.error}`}
             </div>
           ) : (
-            <RoiStage src={thermal.url!} rois={rois} mode={mode} onChange={setRois} />
+            <>
+              <RoiStage
+                src={thermal.url}
+                rois={rois}
+                mode={mode}
+                onChange={setRois}
+                onDrag={(d) => (dragging.current = d)}
+                hotspot={pushed && temps?.eye?.mode === "box-max" ? temps.eye.at : null}
+              />
+              {thermal.error && <p className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Live view paused: {thermal.error}</p>}
+            </>
           )}
           <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
             {mode === "eye"
-              ? "Click the inner corner of the eye — usually the warmest spot on the head."
-              : "Drag a box over the nostril. Breathing is read from the box's average, so keep it tight."}{" "}
-            Coordinates: eye ({rois.eye.x}, {rois.eye.y}), nostril ({rois.nostril.x0}, {rois.nostril.y0})–({rois.nostril.x1},{" "}
-            {rois.nostril.y1}) of 10000.
+              ? "Drag a small box around the eye. The camera reads the hottest pixel inside it — the inner corner of the eye — so it does not have to be exact."
+              : "Drag a tight box over the nostril. Breathing is read from the box's average, so keep coat and background out of it."}{" "}
+            Tip: wait until the horse stands still in the live view before drawing.
           </p>
+          {eyeW > EYE_BOX_WARN || eyeH > EYE_BOX_WARN ? (
+            <div className="row watch" style={{ marginTop: 8, padding: "8px 12px" }}>
+              <Info size={15} style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 12 }}>The eye box is large — its hottest pixel might be a heat lamp or another animal. Keep it around the eye.</span>
+            </div>
+          ) : null}
         </div>
 
         <div>
@@ -1323,78 +1438,117 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
             <div className="hw-stage-empty small">
               <Loader2 className="spin" size={18} />
             </div>
-          ) : visible.error ? (
+          ) : !visible.url ? (
             <div className="hw-stage-empty small">Visible snapshot failed: {visible.error}</div>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={visible.url} alt="Visible camera view" className="hw-visible" />
           )}
           <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
-            For orientation only. ROIs are set in thermal-sensor coordinates, and the vendor has not provided the
-            visible↔thermal mapping — so aim on the thermal image.
+            For orientation only — aim on the thermal image (the vendor provides no visible↔thermal mapping).
           </p>
 
-          <p className="hw-legend">Check the aim</p>
+          <p className="hw-legend">3 · Check the aim</p>
           {pushError && (
             <div className="row urgent" style={{ padding: "10px 14px", marginBottom: 10 }}>
               <XCircle size={16} style={{ flexShrink: 0 }} />
               <span style={{ fontSize: 12.5 }}>{pushError}</span>
             </div>
           )}
-          {pushed && (
-            <div className={`row ${pushed.verified === true ? "calm" : "watch"}`} style={{ padding: "10px 14px", marginBottom: 10 }}>
-              {pushed.verified === true ? <CheckCircle2 size={16} style={{ flexShrink: 0 }} /> : <Info size={16} style={{ flexShrink: 0 }} />}
-              <span style={{ fontSize: 12.5 }}>Pushed {when(pushed.at)} — {pushed.detail}.</span>
-            </div>
-          )}
-          {!pushed && !temps && <p className="muted" style={{ fontSize: 12.5 }}>Push the ROIs, then read what they measure.</p>}
-          {temps && (
-            <div className="hw-facts">
-              <div>
-                <span>Eye point</span>
-                <b>{eyeC != null ? `${eyeC.toFixed(1)} °C` : "no reading"}</b>
-              </div>
-              <div>
-                <span>Nostril box</span>
-                <b>
-                  {temps.nostril?.avgC != null
-                    ? `avg ${temps.nostril.avgC.toFixed(1)} · min ${temps.nostril.minC?.toFixed(1)} · max ${temps.nostril.maxC?.toFixed(1)} °C`
-                    : "no reading"}
-                </b>
-              </div>
-            </div>
-          )}
-          {eyeC != null && nosMax != null && eyeC < nosMax - 0.3 && (
-            <div className="row watch" style={{ marginTop: 10, padding: "10px 14px" }}>
-              <Info size={16} style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: 12.5 }}>
-                The eye point reads cooler than the warmest part of the nostril box. The eye&apos;s inner corner is normally
-                the warmest spot on the head, so the point is probably off the eye.
-              </span>
-            </div>
-          )}
-          {pushed && (
-            <div className="flex gap-sm wrap" style={{ marginTop: 10 }}>
-              <button className="btn-ghost" onClick={readTemps}>
-                Read again
-              </button>
-              <button className="btn-ghost accent" onClick={watchBreathing} disabled={watching}>
-                {watching ? <Loader2 size={15} className="spin" /> : <ScanLine size={15} />}
-                {watching ? `Watching… ${watch?.length ?? 0}/20 s` : "Watch breathing (20 s)"}
-              </button>
-            </div>
-          )}
-          {watch && watch.length > 1 && (
-            <div style={{ marginTop: 12 }}>
-              <Sparkline data={watch} w={260} h={48} />
-              {swing != null && !watching && (
-                <p style={{ fontSize: 12.5, marginTop: 6, color: swing >= 0.3 ? "var(--positive)" : "var(--warn)" }}>
-                  {swing >= 0.3
-                    ? `The box average swings ${swing.toFixed(2)} °C — consistent with breathing. (A swing alone can't rule out head movement; the edge agent's rhythm check confirms it once it runs.)`
-                    : `Flat (${swing.toFixed(2)} °C swing) — no breathing signal in 20 s. The box is probably off the nostril, or the horse had its head turned.`}
-                </p>
+          {!pushed ? (
+            <p className="muted" style={{ fontSize: 12.5 }}>Draw both boxes, then <b>Push ROIs to camera</b>.</p>
+          ) : (
+            <>
+              {pushed.detail !== "aimed earlier" && (
+                <div className={`row ${pushed.verified === true ? "calm" : "watch"}`} style={{ padding: "8px 12px", marginBottom: 10 }}>
+                  <span style={{ fontSize: 12 }}>Pushed {when(pushed.at)} — {pushed.detail}.</span>
+                </div>
               )}
-            </div>
+              {temps && (
+                <div className="hw-facts">
+                  <div>
+                    <span>Eye</span>
+                    <b>
+                      {eyeC != null ? `${eyeC.toFixed(1)} °C` : "no reading"}
+                      {temps.eye?.mode === "box-max" ? " · hottest pixel in the box (dot on the image)" : temps.eye ? " · single point (older calibration)" : ""}
+                    </b>
+                  </div>
+                  <div>
+                    <span>Nostril box</span>
+                    <b>
+                      {temps.nostril?.avgC != null
+                        ? `avg ${temps.nostril.avgC.toFixed(1)} · max ${temps.nostril.maxC?.toFixed(1)} °C`
+                        : "no reading"}
+                    </b>
+                  </div>
+                </div>
+              )}
+              {eyeC != null && nosMax != null && eyeC < nosMax - 0.3 && (
+                <Hint>The eye reads cooler than the warmest part of the nostril box. The inner corner of the eye is normally the warmest spot on the head — the eye box has probably missed it.</Hint>
+              )}
+              {eyeC != null && eyeC < 33 && (
+                <Hint>{eyeC.toFixed(1)} °C is coat or background temperature, not an eye — move the eye box onto the eye.</Hint>
+              )}
+
+              <div style={{ marginTop: 12 }}>
+                <button className="btn-ghost accent" onClick={runCheck} disabled={checking || busy}>
+                  {checking ? <Loader2 size={15} className="spin" /> : <ScanLine size={15} />}
+                  {checking ? `Checking breathing… ${Math.min(CHECK_S, Math.round(series.length / CHECK_HZ))}/${CHECK_S} s` : result ? "Run the check again" : `Breathing check (${CHECK_S} s)`}
+                </button>
+                {!result && !checking && (
+                  <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    While it runs, count the horse&apos;s breaths by watching its flanks rise — the count over {CHECK_S} s is
+                    breaths per minute.
+                  </p>
+                )}
+              </div>
+              {series.length > 1 && (
+                <div style={{ marginTop: 10 }}>
+                  <Sparkline data={series} w={260} h={48} />
+                </div>
+              )}
+              {result && (
+                <div style={{ marginTop: 10 }}>
+                  <div className={`row ${result.bpm != null ? "calm" : "urgent"}`} style={{ padding: "10px 14px" }}>
+                    {result.bpm != null ? <CheckCircle2 size={16} style={{ flexShrink: 0 }} /> : <XCircle size={16} style={{ flexShrink: 0 }} />}
+                    <span style={{ fontSize: 12.5 }}>
+                      {result.bpm != null
+                        ? <>Breathing found: <b>{result.bpm.toFixed(1)} bpm</b> (rhythm strength {result.periodicity.toFixed(2)}) — the same calculation the edge agent uses.</>
+                        : <>No breathing rhythm in {Math.round(result.seconds)} s{result.swing != null ? ` (the box average moved ${result.swing.toFixed(2)} °C)` : ""}. The box is probably off the nostril, or the horse moved its head. Re-aim and run it again.</>}
+                    </span>
+                  </div>
+                  {result.samples < CHECK_S * 3 && (
+                    <p className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+                      Only {result.samples} readings ({result.fs.toFixed(1)}/s) — the connection to the camera is slow.
+                    </p>
+                  )}
+                  {result.bpm != null && (
+                    <>
+                      <div className="flex gap-sm center wrap" style={{ marginTop: 10 }}>
+                        <div className="field" style={{ marginBottom: 0, maxWidth: 170 }}>
+                          <label>Your hand count (bpm)</label>
+                          <input type="number" min={2} max={80} value={hand} onChange={(e) => setHand(e.target.value)} placeholder="optional" />
+                        </div>
+                        {agreesPreview !== null && (
+                          <span className={`pill ${agreesPreview ? "ok" : "alert"}`}>
+                            {agreesPreview ? "agrees" : `differs by ${Math.abs(result.bpm - (handBpm ?? 0)).toFixed(1)} bpm`}
+                          </span>
+                        )}
+                      </div>
+                      {agreesPreview === false && (
+                        <Hint>The camera and your count disagree. A box half on the nostril, or a horse that moved during the check, can lock onto the wrong rhythm. Re-aim and check again before trusting this camera.</Hint>
+                      )}
+                      <div className="flex gap-sm center wrap" style={{ marginTop: 10 }}>
+                        <button className="btn-primary" onClick={save} disabled={!handOk || Boolean(saved)}>
+                          <CheckCircle2 size={15} /> {saved ? "Saved" : "Save this check"}
+                        </button>
+                        {handBpm === null && !saved && <span className="muted" style={{ fontSize: 12 }}>will be saved as “not cross-checked”</span>}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1402,10 +1556,29 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
   );
 }
 
-/** Thermal image with the eye point and nostril box drawn on it. Pointer events,
- *  so it works with a finger on a tablet in the barn as well as a mouse. */
-function RoiStage({ src, rois, mode, onChange }: {
+function Hint({ children }: { children: ReactNode }) {
+  return (
+    <div className="row watch" style={{ marginTop: 10, padding: "10px 14px" }}>
+      <Info size={16} style={{ flexShrink: 0 }} />
+      <span style={{ fontSize: 12.5 }}>{children}</span>
+    </div>
+  );
+}
+
+/** Older calibrations stored the eye as a point; the calibrator works in boxes. */
+function toBox(b: RoiBox | { x: number; y: number }, kind: "eye" | "nostril"): RoiBox {
+  if ("x0" in b) return b;
+  const [hw, hh] = kind === "eye" ? [150, 120] : [400, 300];
+  const cl = (v: number) => Math.max(0, Math.min(10000, v));
+  return { x0: cl(b.x - hw), y0: cl(b.y - hh), x1: cl(b.x + hw), y1: cl(b.y + hh) };
+}
+
+/** Thermal image with the eye and nostril boxes drawn on it, and the camera's
+ *  hottest-pixel marker. Pointer events, so it works with a finger on a tablet
+ *  in the barn as well as a mouse. */
+function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
   src: string; rois: Rois; mode: "eye" | "nostril"; onChange: (r: Rois) => void;
+  onDrag: (dragging: boolean) => void; hotspot: { x: number; y: number } | null;
 }) {
   const stage = useRef<HTMLDivElement>(null);
   const start = useRef<{ x: number; y: number } | null>(null);
@@ -1414,42 +1587,43 @@ function RoiStage({ src, rois, mode, onChange }: {
     const r = stage.current!.getBoundingClientRect();
     return { x: clamp(((e.clientX - r.left) / r.width) * 10000), y: clamp(((e.clientY - r.top) / r.height) * 10000) };
   };
+  const set = (b: RoiBox) => onChange({ ...rois, [mode]: b });
 
   const down = (e: RPointerEvent<HTMLDivElement>) => {
     const p = toRat(e);
-    if (mode === "eye") return onChange({ ...rois, eye: p });
     start.current = p;
+    onDrag(true);
     e.currentTarget.setPointerCapture(e.pointerId);
-    onChange({ ...rois, nostril: { x0: p.x, y0: p.y, x1: p.x, y1: p.y } });
+    set({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
   };
   const move = (e: RPointerEvent<HTMLDivElement>) => {
     if (!start.current) return;
     const p = toRat(e), s = start.current;
-    onChange({ ...rois, nostril: { x0: Math.min(s.x, p.x), y0: Math.min(s.y, p.y), x1: Math.max(s.x, p.x), y1: Math.max(s.y, p.y) } });
+    set({ x0: Math.min(s.x, p.x), y0: Math.min(s.y, p.y), x1: Math.max(s.x, p.x), y1: Math.max(s.y, p.y) });
   };
   const up = () => {
     if (!start.current) return;
     start.current = null;
-    const n = rois.nostril;
-    // A click without a drag would make a zero-size box; give it a usable size.
-    if (n.x1 - n.x0 < 150 || n.y1 - n.y0 < 150)
-      onChange({ ...rois, nostril: { x0: clamp(n.x0 - 400), y0: clamp(n.y0 - 300), x1: clamp(n.x0 + 400), y1: clamp(n.y0 + 300) } });
+    onDrag(false);
+    const b = rois[mode];
+    // A tap without a drag: a usable box centred on the tap.
+    const [minW, hw, hh] = mode === "eye" ? [100, 150, 120] : [150, 400, 300];
+    if (b.x1 - b.x0 < minW || b.y1 - b.y0 < minW)
+      set({ x0: clamp(b.x0 - hw), y0: clamp(b.y0 - hh), x1: clamp(b.x0 + hw), y1: clamp(b.y0 + hh) });
   };
 
-  const n = rois.nostril;
+  const boxStyle = (b: RoiBox) => ({ left: `${b.x0 / 100}%`, top: `${b.y0 / 100}%`, width: `${(b.x1 - b.x0) / 100}%`, height: `${(b.y1 - b.y0) / 100}%` });
   return (
-    <div ref={stage} className="hw-stage" onPointerDown={down} onPointerMove={move} onPointerUp={up}>
+    <div ref={stage} className="hw-stage" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt="Thermal camera view" draggable={false} />
-      <div
-        className="hw-box"
-        style={{ left: `${n.x0 / 100}%`, top: `${n.y0 / 100}%`, width: `${(n.x1 - n.x0) / 100}%`, height: `${(n.y1 - n.y0) / 100}%` }}
-      >
-        <span>nostril</span>
+      <div className={`hw-box ${mode === "nostril" ? "active" : ""}`} style={boxStyle(rois.nostril)}>
+        <span>nostril · average</span>
       </div>
-      <div className="hw-eye" style={{ left: `${rois.eye.x / 100}%`, top: `${rois.eye.y / 100}%` }}>
-        <span>eye</span>
+      <div className={`hw-box eye ${mode === "eye" ? "active" : ""}`} style={boxStyle(rois.eye)}>
+        <span>eye · hottest</span>
       </div>
+      {hotspot && <div className="hw-hot" style={{ left: `${hotspot.x / 100}%`, top: `${hotspot.y / 100}%` }} title="Hottest pixel in the eye box" />}
     </div>
   );
 }

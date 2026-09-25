@@ -49,9 +49,14 @@ export async function startFakeCamera({ serial = "SN-A", password = "pw", maxSes
         if (p === "/ISAPI/Thermometry/BasicParam")
           return req.method === "PUT" ? (Object.assign(st.basic, body), send(res, 200, { Result: "OK" })) : send(res, 200, st.basic);
         if (p === "/ISAPI/Thermometry/Query") {
-          const list = [...st.rois.values()].map((r) => r.Type === "Point"
-            ? { Id: r.Id, Type: "Point", PointTemp: { Value: 3760, RatX: r.Point.RatX, RatY: r.Point.RatY } }
-            : { Id: r.Id, Type: r.Type, MaxTemp: { Value: 3680 }, MinTemp: { Value: 3120 }, AvgTemp: { Value: 3640 } });
+          // Disabled ROIs are not measured. Area 0 (the eye box) reads hotter
+          // than Area 1 (the nostril), so a client that confuses them shows it.
+          const list = [...st.rois.values()].filter((r) => r.Enable !== "No").map((r) => {
+            if (r.Type === "Point") return { Id: r.Id, Type: "Point", PointTemp: { Value: 3760, RatX: r.Point.RatX, RatY: r.Point.RatY } };
+            const pts = r.Area?.EndPointList || [{ RatX: 5000, RatY: 5000 }];
+            const hot = { RatX: Math.round(pts.reduce((a, q) => a + q.RatX, 0) / pts.length), RatY: Math.round(pts.reduce((a, q) => a + q.RatY, 0) / pts.length) };
+            return { Id: r.Id, Type: r.Type, MaxTemp: { Value: r.Id === 0 ? 3775 : 3680, ...hot }, MinTemp: { Value: 3120 }, AvgTemp: { Value: 3640 } };
+          });
           return send(res, 200, { ThermometryList: list });
         }
         const kind = p.match(/^\/ISAPI\/Thermometry\/(Point|Area)$/)?.[1];

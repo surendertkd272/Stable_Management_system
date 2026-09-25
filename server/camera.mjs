@@ -298,7 +298,20 @@ export class CameraClient {
     return (raw.ThermometryList || []).map((it) =>
       it.Type === "Point"
         ? { id: it.Id, type: "Point", pointC: c(it.PointTemp?.Value) }
-        : { id: it.Id, type: it.Type, maxC: c(it.MaxTemp?.Value), minC: c(it.MinTemp?.Value), avgC: c(it.AvgTemp?.Value) });
+        : {
+            id: it.Id, type: it.Type, maxC: c(it.MaxTemp?.Value), minC: c(it.MinTemp?.Value), avgC: c(it.AvgTemp?.Value),
+            // Where the hottest pixel is (0–10000). Shown while aiming the eye box.
+            maxAt: Number.isFinite(it.MaxTemp?.RatX) ? { x: it.MaxTemp.RatX, y: it.MaxTemp.RatY } : null,
+          });
+  }
+
+  /** Switch an ROI off, keeping its other settings (a bare PUT with only
+   *  Enable may be rejected by firmware that validates the whole record). */
+  async disableRoi(kind, idx, dev = 0) {
+    const cur = (await this.getJson(`/ISAPI/Thermometry/${kind}?Dev=${dev}&Idx=${idx}`)).ThermometryList || [];
+    const item = cur.find((x) => x.Id === idx && (x.Type || kind) === kind);
+    if (!item) return { ok: true, status: 200, skipped: true };
+    return this.putJson(`/ISAPI/Thermometry/${kind}?Dev=${dev}&Idx=${idx}`, { ThermometryList: [{ ...item, Enable: "No" }] });
   }
 
   /** Plain snapshot (Type=0). dev 0 = thermal, 1 = visible. */

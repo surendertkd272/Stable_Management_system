@@ -1453,3 +1453,13 @@ button {
 .hw-reg .field { margin-bottom: 0; }
 .hw-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 16px; }
 .modal.wide:has(.hw-reg, .hw-code) { max-width: min(1000px, calc(100vw - 32px)); }
+
+/* calibrator: the box being drawn stands out; the eye box and the camera's
+   hottest-pixel marker are warm-coloured so they read as "the eye" */
+.hw-box.active { border-style: solid; background: rgba(255,255,255,.2); }
+.hw-box.eye { border-color: #ffd166; }
+.hw-box.eye span { background: rgba(120,70,0,.75); }
+.hw-hot {
+  position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  background: #ff3b30; border: 2px solid #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.5); pointer-events: none;
+}

@@ -135,19 +135,65 @@ test("connection test logs in, and pins the camera's serial number", async () =>
   assert.equal(cam.identity.serial, "SN-A");
 });
 
-test("calibration is verified by reading the ROIs back from the camera", async () => {
+test("calibration: eye box + nostril box, read back from the camera", async () => {
+  const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, {
+    eye: { x0: 3100, y0: 3250, x1: 3500, y1: 3550 }, nostril: { x0: 2000, y0: 6250, x1: 3000, y1: 6950 } });
+  assert.equal(r.status, 200, r.raw);
+  assert.equal(r.body.verify.verified, true);
+  const eyeArea = fakeCam.st.rois.get("Area:0");
+  assert.equal(eyeArea.Enable, "Yes");
+  assert.deepEqual(eyeArea.Area.EndPointList[0], { RatX: 3100, RatY: 3250 });
+  assert.deepEqual(r.body.rois.eye, { x0: 3100, y0: 3250, x1: 3500, y1: 3550 });
+});
+
+test("the eye reads as the hottest pixel in its box, matched by id — not the nostril's area", async () => {
+  const t = await admin("GET", `/api/devices/${ids.cam}/temps`);
+  assert.equal(t.status, 200, t.raw);
+  assert.equal(t.body.eye.c, 37.75, "Area 0's max, not Area 1's");
+  assert.equal(t.body.eye.mode, "box-max");
+  assert.deepEqual(t.body.eye.at, { x: 3300, y: 3400 }, "where the hot spot is, for the aiming view");
+  assert.equal(t.body.nostril.avgC, 36.4);
+});
+
+test("an older point-style eye is accepted, and a previous single-point eye is switched off", async () => {
+  fakeCam.st.rois.set("Point:0", { Id: 0, Type: "Point", Enable: "Yes", Point: { RatX: 1, RatY: 1 } });
   const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, {
     eye: { x: 3300, y: 3400 }, nostril: { x0: 2000, y0: 6250, x1: 3000, y1: 6950 } });
   assert.equal(r.status, 200, r.raw);
-  assert.equal(r.body.verify.verified, true);
-  assert.equal(fakeCam.st.rois.get("Point:0").Point.RatX, 3300);
+  assert.deepEqual(r.body.rois.eye, { x0: 3150, y0: 3280, x1: 3450, y1: 3520 });
+  assert.equal(fakeCam.st.rois.get("Point:0").Enable, "No", "no stale point left for anything to read");
+  assert.equal(r.body.results.legacyPointOff, true);
 });
 
-test("tiny or inverted nostril boxes are refused before anything reaches the camera", async () => {
+test("tiny, inverted or oversized boxes are refused before anything reaches the camera", async () => {
+  const eye = { x0: 3100, y0: 3250, x1: 3500, y1: 3550 };
   for (const nostril of [{ x0: 10, y0: 10, x1: 20, y1: 20 }, { x0: 600, y0: 1, x1: 500, y1: 900 }]) {
-    const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, { eye: { x: 5000, y: 5000 }, nostril });
+    const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, { eye, nostril });
     assert.equal(r.status, 400);
   }
+  const huge = await admin("PUT", `/api/devices/${ids.cam}/rois`, {
+    eye: { x0: 0, y0: 0, x1: 9000, y1: 9000 }, nostril: { x0: 2000, y0: 6250, x1: 3000, y1: 6950 } });
+  assert.equal(huge.status, 400);
+  assert.match(huge.body.error, /too large/);
+});
+
+test("verification is saved with the aim, agreement judged by the server", async () => {
+  const none = await admin("POST", `/api/devices/${ids.cam}/verification`, { breathing: { bpm: null } });
+  assert.equal(none.status, 400, "no rhythm found is not a verification");
+  const ok = await admin("POST", `/api/devices/${ids.cam}/verification`, {
+    breathing: { bpm: 14.2, periodicity: 0.8, seconds: 60, samples: 290 }, handCountBpm: 14, eyeC: 37.7, nostrilSwingC: 0.6, agrees: false });
+  assert.equal(ok.status, 200, ok.raw);
+  assert.equal(ok.body.agrees, true, "the client's own verdict is ignored");
+  const off = await admin("POST", `/api/devices/${ids.cam}/verification`, { breathing: { bpm: 22 }, handCountBpm: 12 });
+  assert.equal(off.body.agrees, false);
+  const dev = (await admin("GET", "/api/devices")).body.find((d) => d.id === ids.cam);
+  assert.equal(dev.verification.handCountBpm, 12);
+  assert.equal(dev.verification.roisAt, dev.rois.pushedAt);
+  // Re-aiming clears it: the check was of the old ROIs.
+  await admin("PUT", `/api/devices/${ids.cam}/rois`, {
+    eye: { x0: 3100, y0: 3250, x1: 3500, y1: 3550 }, nostril: { x0: 2000, y0: 6250, x1: 3000, y1: 6950 } });
+  assert.equal((await admin("GET", "/api/devices")).body.find((d) => d.id === ids.cam).verification, null);
+  assert.equal((await call("POST", `/api/devices/${ids.cam}/verification`, { token: tokens.staff, body: { breathing: { bpm: 14 } } })).status, 403);
 });
 
 test("a different camera at the same IP is refused (409), until an admin confirms it", async () => {

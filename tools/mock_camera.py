@@ -103,8 +103,10 @@ class Scene:
             return self.COAT + random.uniform(-0.3, 0.3)
         return self.AMBIENT + random.uniform(-0.4, 0.4)
 
-    def area_stats(self, pts):
-        """min/max/avg over the polygon, sampled on a grid (bbox + point-in-polygon)."""
+    def area_stats(self, pts, with_hotspot=False):
+        """min/max/avg over the polygon, sampled on a grid (bbox + point-in-polygon).
+        with_hotspot also returns where the maximum is, as the camera reports it
+        (MaxTemp.RatX/RatY) — what makes an eye BOX forgiving to aim."""
         xs = [q[0] for q in pts]; ys = [q[1] for q in pts]
         vals = []
         steps = 14
@@ -113,10 +115,16 @@ class Scene:
                 x = min(xs) + (max(xs) - min(xs)) * i / steps
                 y = min(ys) + (max(ys) - min(ys)) * j / steps
                 if _point_in_poly(x, y, pts):
-                    vals.append(self.temp_at(x, y))
+                    vals.append((self.temp_at(x, y), int(x), int(y)))
         if not vals:
-            vals = [self.temp_at(sum(xs) / len(xs), sum(ys) / len(ys))]
-        return min(vals), max(vals), sum(vals) / len(vals)
+            cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+            vals = [(self.temp_at(cx, cy), int(cx), int(cy))]
+        temps = [v[0] for v in vals]
+        lo, hi, avg = min(temps), max(temps), sum(temps) / len(temps)
+        if with_hotspot:
+            _, hx, hy = max(vals)
+            return lo, hi, avg, (hx, hy)
+        return lo, hi, avg
 
 
 def _point_in_poly(x, y, pts):
@@ -215,10 +223,10 @@ def thermometry_list():
             # The reading is whatever is actually inside the box: over the
             # nostril, Avg carries the breath; anywhere else it does not.
             pts = roi.get("pts") or [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)]
-            lo, hi, avg = SCENE.area_stats(pts)
+            lo, hi, avg, (hx, hy) = SCENE.area_stats(pts, with_hotspot=True)
             out.append({"Id": idx, "Type": kind, "Name": roi.get("name", ""),
                         "Area": {"Total": len(pts), "EndPointList": [{"RatX": a, "RatY": b} for a, b in pts]},
-                        "MaxTemp": {"Value": _c100(hi), "RatX": 5000, "RatY": 5000},
+                        "MaxTemp": {"Value": _c100(hi), "RatX": hx, "RatY": hy},
                         "MinTemp": {"Value": _c100(lo), "RatX": 5000, "RatY": 5000},
                         "AvgTemp": {"Value": _c100(avg)}})
     return {"ThermometryList": out}

@@ -22,7 +22,13 @@ import { readRegisters, readSensor, TYPES, WORD_ORDERS } from "./modbus.mjs";
 export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device"];
 const POLLED = new Set(["thermal_camera", "modbus_sensor"]);
 const TOKEN_KINDS = new Set(["edge_box", "push_device"]);
-export const EYE_IDX = 0, NOSTRIL_IDX = 1;          // camera ROI slots the edge agent reads
+// Camera ROI slots the edge agent reads. The eye is a small BOX (Area 0) read
+// as its maximum: the inner corner of the eye is the warmest spot on the head,
+// and the camera reports the hottest pixel inside the box and where it is — so
+// the aim no longer has to be pixel-exact. Cameras calibrated before this used
+// a single point (Point 0); readers still fall back to it.
+export const EYE_AREA_IDX = 0, NOSTRIL_IDX = 1, LEGACY_EYE_POINT_IDX = 0;
+const EYE_BOX_MAX = 4000;       // wider than this and the "max" may be a heat lamp, not the eye
 
 // Freshness thresholds.
 const EDGE_ONLINE_MS = 3 * 60_000;           // edge heartbeats every 30 s
@@ -355,7 +361,11 @@ export function deviceApi({ store, json, CORS }) {
       await step("Live temperatures", () => camera(dev, async (c) => {
         const t = await c.queryTemps();
         if (!t.length) return "no ROIs configured yet — calibrate to start measuring";
-        return t.map((x) => x.type === "Point" ? `point ${x.id}: ${x.pointC?.toFixed(1)} °C` : `${x.type.toLowerCase()} ${x.id}: avg ${x.avgC?.toFixed(1)} °C`).join(" · ");
+        const r = roiReadings(t);
+        const parts = [];
+        if (r.eye) parts.push(`eye ${r.eye.c?.toFixed(1)} °C (${r.eye.mode === "box-max" ? "hottest in box" : "point"})`);
+        if (r.nostril) parts.push(`nostril avg ${r.nostril.avgC?.toFixed(1)} °C`);
+        return parts.join(" · ") || t.map((x) => `${x.type.toLowerCase()} ${x.id}`).join(", ") + " — not the slots EquiCare uses; calibrate";
       }));
     }
     if (reach) {
@@ -386,25 +396,37 @@ export function deviceApi({ store, json, CORS }) {
     return { at: now(), ok: values.length > 0 && values.every((v) => v.ok), values };
   }
 
+  /** Eye and nostril readings from a Query result, matched by type AND id —
+   *  with two Areas on the camera, "the Area" would be ambiguous. */
+  function roiReadings(temps) {
+    const eyeBox = temps.find((x) => x.type === "Area" && x.id === EYE_AREA_IDX);
+    const eyePoint = temps.find((x) => x.type === "Point" && x.id === LEGACY_EYE_POINT_IDX);
+    const nos = temps.find((x) => x.type === "Area" && x.id === NOSTRIL_IDX);
+    return {
+      eye: eyeBox ? { c: eyeBox.maxC, at: eyeBox.maxAt, mode: "box-max" }
+        : eyePoint ? { c: eyePoint.pointC, at: null, mode: "point" } : null,
+      nostril: nos ? { avgC: nos.avgC, minC: nos.minC, maxC: nos.maxC } : null,
+    };
+  }
+
   // ---- ROI verification ---------------------------------------------------- //
   async function verifyRois(c, eye, n) {
+    const sameBox = (pts, b) => {
+      const xs = pts.map((q) => q.RatX), ys = pts.map((q) => q.RatY);
+      return Math.min(...xs) === b.x0 && Math.max(...xs) === b.x1 && Math.min(...ys) === b.y0 && Math.max(...ys) === b.y1;
+    };
     try {
-      const pts = (await c.getJson("/ISAPI/Thermometry/Point?Dev=0&Idx=255")).ThermometryList || [];
       const areas = (await c.getJson("/ISAPI/Thermometry/Area?Dev=0&Idx=255")).ThermometryList || [];
-      const p = pts.find((x) => x.Type === "Point" && x.Id === EYE_IDX);
-      const a = areas.find((x) => x.Type === "Area" && x.Id === NOSTRIL_IDX);
-      const pg = p?.Point || p?.PointTemp;
-      const ag = a?.Area?.EndPointList;
-      if (!p || !a) return { verified: false, detail: "the camera does not list the ROIs it just accepted" };
-      if (!pg || !ag) return { verified: null, detail: "the camera confirms both ROIs exist but does not report their coordinates" };
-      const eyeOk = pg.RatX === eye.x && pg.RatY === eye.y;
-      const xs = ag.map((q) => q.RatX), ys = ag.map((q) => q.RatY);
-      const boxOk = Math.min(...xs) === n.x0 && Math.max(...xs) === n.x1 && Math.min(...ys) === n.y0 && Math.max(...ys) === n.y1;
-      return eyeOk && boxOk
+      const e = areas.find((x) => (x.Type || "Area") === "Area" && x.Id === EYE_AREA_IDX && x.Enable !== "No");
+      const a = areas.find((x) => (x.Type || "Area") === "Area" && x.Id === NOSTRIL_IDX && x.Enable !== "No");
+      if (!e || !a) return { verified: false, detail: "the camera does not list the ROIs it just accepted" };
+      const eg = e.Area?.EndPointList, ag = a.Area?.EndPointList;
+      if (!eg || !ag) return { verified: null, detail: "the camera confirms both ROIs exist but does not report their coordinates" };
+      return sameBox(eg, eye) && sameBox(ag, n)
         ? { verified: true, detail: "read back from the camera and matched" }
         : { verified: false, detail: "the camera reports different coordinates than were sent" };
-    } catch (e) {
-      return { verified: null, detail: `could not read the ROIs back: ${e.message}` };
+    } catch (err) {
+      return { verified: null, detail: `could not read the ROIs back: ${err.message}` };
     }
   }
 
@@ -500,7 +522,7 @@ export function deviceApi({ store, json, CORS }) {
       return json(201, { device: publicDevice(created, list()), token });
     }
 
-    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|rois|temps|token|events))?$/);
+    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|rois|temps|token|events|verification))?$/);
     if (!m) return null;
     const dev = byId(decodeURIComponent(m[1]));
     if (!dev) return json(404, { error: "unknown device" });
@@ -584,12 +606,7 @@ export function deviceApi({ store, json, CORS }) {
       const bad = cameraOnly(); if (bad) return bad;
       try {
         const temps = await camera(dev, (c) => c.queryTemps());
-        const eyeT = temps.find((x) => x.type === "Point" && x.id === EYE_IDX);
-        const nosT = temps.find((x) => x.type !== "Point" && x.id === NOSTRIL_IDX);
-        return json(200, {
-          at: now(), eye: eyeT ? { c: eyeT.pointC } : null,
-          nostril: nosT ? { avgC: nosT.avgC, minC: nosT.minC, maxC: nosT.maxC } : null, all: temps,
-        });
+        return json(200, { at: now(), ...roiReadings(temps), all: temps });
       } catch (e) {
         return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message, code: e.code });
       }
@@ -599,36 +616,84 @@ export function deviceApi({ store, json, CORS }) {
       const bad = cameraOnly(); if (bad) return bad;
       const { body, error } = await readBody(req);
       if (error) return error;
-      const eye = body.eye, n = body.nostril;
-      if (!eye || !inRange(eye.x) || !inRange(eye.y)) return json(400, { error: "eye must be {x, y} in 0–10000" });
-      if (!n || ![n.x0, n.y0, n.x1, n.y1].every(inRange) || n.x1 <= n.x0 || n.y1 <= n.y0)
-        return json(400, { error: "nostril must be {x0, y0, x1, y1} in 0–10000 with x1>x0, y1>y0" });
-      if (n.x1 - n.x0 < 50 || n.y1 - n.y0 < 50) return json(400, { error: "the nostril box is too small to average over" });
+      const n = body.nostril;
+      // Eye: a box {x0,y0,x1,y1}; a point {x,y} (older clients) becomes a small
+      // box around it.
+      let eye = body.eye;
+      if (eye && inRange(eye.x) && inRange(eye.y) && eye.x0 === undefined) {
+        const cl = (v) => Math.max(0, Math.min(10000, v));
+        eye = { x0: cl(eye.x - 150), y0: cl(eye.y - 120), x1: cl(eye.x + 150), y1: cl(eye.y + 120) };
+      }
+      const badBox = (b, what, max) =>
+        !b || ![b.x0, b.y0, b.x1, b.y1].every(inRange) || b.x1 <= b.x0 || b.y1 <= b.y0
+          ? `${what} must be {x0, y0, x1, y1} in 0–10000 with x1>x0, y1>y0`
+          : b.x1 - b.x0 < 50 || b.y1 - b.y0 < 50 ? `the ${what} box is too small to measure over`
+          : max && (b.x1 - b.x0 > max || b.y1 - b.y0 > max) ? `the ${what} box is too large — its hottest pixel may be something other than the eye`
+          : null;
+      const why = badBox(eye, "eye", EYE_BOX_MAX) || badBox(n, "nostril");
+      if (why) return json(400, { error: why });
       const opts = { emissivity: dev.emissivity, distanceM: dev.distanceM };
+      const corners = (b) => [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]];
       try {
         const out = await camera(dev, async (c) => {
           const basic = await c.setBasicParam(opts);
-          const point = await c.setPoint(EYE_IDX, eye.x, eye.y, { ...opts, name: "equicare-eye" });
-          const area = await c.setArea(NOSTRIL_IDX, [[n.x0, n.y0], [n.x1, n.y0], [n.x1, n.y1], [n.x0, n.y1]], { ...opts, name: "equicare-nostril" });
-          const verify = point.ok && area.ok ? await verifyRois(c, eye, n) : null;
-          return { basic, point, area, verify };
+          const eyeRes = await c.setArea(EYE_AREA_IDX, corners(eye), { ...opts, name: "equicare-eye" });
+          const area = await c.setArea(NOSTRIL_IDX, corners(n), { ...opts, name: "equicare-nostril" });
+          // Retire the single-point eye of an earlier calibration, so nothing
+          // reads a stale point. Best effort: failing this does not invalidate
+          // the new ROIs, which readers prefer anyway.
+          let legacy = null;
+          try { legacy = await c.disableRoi("Point", LEGACY_EYE_POINT_IDX); } catch (e) { legacy = { ok: false, error: e.message }; }
+          const verify = eyeRes.ok && area.ok ? await verifyRois(c, eye, n) : null;
+          return { basic, eyeRes, area, legacy, verify };
         });
-        const results = { basic: out.basic.ok, eye: out.point.ok, nostril: out.area.ok };
-        if (!out.point.ok || !out.area.ok) {
+        const results = { basic: out.basic.ok, eye: out.eyeRes.ok, nostril: out.area.ok, legacyPointOff: out.legacy?.ok ?? null };
+        if (!out.eyeRes.ok || !out.area.ok) {
           event(dev, actorOf(who), "calibration failed", JSON.stringify(results));
-          return json(502, { error: "the camera rejected the ROI update", results, camera: { eye: out.point.body, nostril: out.area.body } });
+          return json(502, { error: "the camera rejected the ROI update", results, camera: { eye: out.eyeRes.body, nostril: out.area.body } });
         }
         if (out.verify.verified === false) {
           event(dev, actorOf(who), "calibration not confirmed", out.verify.detail);
           return json(502, { error: `ROIs sent, but ${out.verify.detail}`, results, verify: out.verify });
         }
-        const rois = { eye: { x: eye.x, y: eye.y }, nostril: { x0: n.x0, y0: n.y0, x1: n.x1, y1: n.y1 }, pushedAt: now(), verified: out.verify.verified };
-        store.update("devices", dev.id, { rois });
-        event(dev, actorOf(who), "calibrated", `eye (${eye.x}, ${eye.y}), nostril (${n.x0}, ${n.y0})–(${n.x1}, ${n.y1}); ${out.verify.detail}`);
+        const box = (b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
+        const rois = { eye: box(eye), nostril: box(n), pushedAt: now(), verified: out.verify.verified };
+        // A new aim has not been checked yet: any earlier verification was of
+        // the old ROIs.
+        store.update("devices", dev.id, { rois, verification: null });
+        event(dev, actorOf(who), "calibrated",
+          `eye box (${eye.x0}, ${eye.y0})–(${eye.x1}, ${eye.y1}), nostril (${n.x0}, ${n.y0})–(${n.x1}, ${n.y1}); ${out.verify.detail}`);
         return json(200, { ok: true, results, rois, verify: out.verify });
       } catch (e) {
         return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message, code: e.code });
       }
+    }
+
+    if (action === "verification" && method === "POST") {
+      const bad = cameraOnly(); if (bad) return bad;
+      if (!dev.rois || dev.rois.stale) return json(409, { error: "calibrate the camera first — there is nothing to verify" });
+      const { body, error } = await readBody(req);
+      if (error) return error;
+      const b = body.breathing || {};
+      const num = (v, lo, hi) => (typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi ? v : null);
+      const bpm = num(b.bpm, 4, 60);
+      if (bpm === null) return json(400, { error: "a verification needs a measured breathing rate — the check found no rhythm" });
+      const hand = body.handCountBpm === undefined || body.handCountBpm === null || body.handCountBpm === "" ? null : num(Number(body.handCountBpm), 2, 80);
+      if (body.handCountBpm && hand === null) return json(400, { error: "the hand count must be breaths per minute (2–80)" });
+      // Agreement is decided here, not by the browser.
+      const agrees = hand === null ? null : Math.abs(bpm - hand) <= Math.max(3, 0.2 * hand);
+      const verification = {
+        at: now(), by: actorOf(who),
+        breathing: { bpm: Math.round(bpm * 10) / 10, periodicity: num(b.periodicity, 0, 1), seconds: num(b.seconds, 1, 600), samples: num(b.samples, 1, 10000) },
+        handCountBpm: hand, agrees,
+        eyeC: num(body.eyeC, -20, 100), nostrilSwingC: num(body.nostrilSwingC, 0, 50),
+        roisAt: dev.rois.pushedAt,
+      };
+      store.update("devices", dev.id, { verification });
+      event(dev, actorOf(who), agrees === false ? "verification disagrees" : "verified",
+        `breathing ${verification.breathing.bpm} bpm` + (hand === null ? " (no hand count)" : `, hand count ${hand} bpm`) +
+        (verification.eyeC !== null ? `, eye ${verification.eyeC} °C` : ""));
+      return json(200, verification);
     }
 
     return json(405, { error: "method not allowed" });

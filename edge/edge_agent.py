@@ -368,12 +368,33 @@ def roi_slots(cam):
     return have
 
 
-DEFAULT_EYE = (5000, 5000)
+# ROI slots, shared with the server (server/devices.mjs). The eye is a small
+# box, Area 0, read as its MAXIMUM — the inner corner of the eye is the warmest
+# spot on the head, so the aim need not be pixel-exact. Cameras calibrated
+# before that used a single point, Point 0, which is still read as a fallback.
+EYE_AREA_ID, NOSTRIL_AREA_ID, LEGACY_EYE_POINT_ID = 0, 1, 0
+
+DEFAULT_EYE = [(4850, 4880), (5150, 4880), (5150, 5120), (4850, 5120)]
 DEFAULT_NOSTRIL = [(4200, 5200), (5800, 5200), (5800, 6400), (4200, 6400)]
+LEGACY_DEFAULT_EYE_POINT = (5000, 5000)
+
+
+def roi_readings(rows):
+    """Eye temperature and nostril average from a query_temps() result, matched
+    by type AND id. With two Areas on the camera, picking "the Area" by type
+    alone would read whichever came last — possibly the eye box as the nostril,
+    or the nostril's maximum as body temperature."""
+    by = {(r.get("type"), r.get("id")): r for r in rows}
+    eye_box = by.get(("Area", EYE_AREA_ID))
+    point = by.get(("Point", LEGACY_EYE_POINT_ID))
+    eye = eye_box.get("max_c") if eye_box else (point.get("point_c") if point else None)
+    nostril = (by.get(("Area", NOSTRIL_AREA_ID)) or {}).get("avg_c")
+    return eye, nostril
 
 
 def roi_geometry(cam):
-    """Where Point 0 (eye) and Area 1 (nostril) sit, as the camera reports them."""
+    """Where the eye (Area 0, or a legacy Point 0) and nostril (Area 1) sit, as
+    the camera reports them."""
     geo = {}
     for kind in ("Point", "Area"):
         try:
@@ -381,14 +402,14 @@ def roi_geometry(cam):
                 if it.get("Enable", "Yes") == "No":
                     continue
                 t, i = it.get("Type", kind), it.get("Id")
-                if t == "Point" and i == 0:
+                if t == "Point" and i == LEGACY_EYE_POINT_ID and "eye" not in geo:
                     g = it.get("Point") or it.get("PointTemp") or {}
                     if "RatX" in g:
                         geo["eye"] = (g["RatX"], g["RatY"])
-                elif t == "Area" and i == 1:
+                elif t == "Area" and i in (EYE_AREA_ID, NOSTRIL_AREA_ID):
                     pts = (it.get("Area") or {}).get("EndPointList")
                     if pts:
-                        geo["nostril"] = [(q.get("RatX"), q.get("RatY")) for q in pts]
+                        geo["eye" if i == EYE_AREA_ID else "nostril"] = [(q.get("RatX"), q.get("RatY")) for q in pts]
         except Exception:                                       # noqa: BLE001
             pass
     return geo
@@ -404,14 +425,19 @@ def aimed_since_start(cam):
     firmware does not report ROI coordinates this stays False — a lingering
     warning, never a false alarm."""
     g = roi_geometry(cam)
-    return (g.get("eye") not in (None, DEFAULT_EYE)) or (g.get("nostril") not in (None, DEFAULT_NOSTRIL))
+    # The old frame-centre point an earlier agent version wrote is a default
+    # too — counting it as "aimed" would trust readings nobody calibrated.
+    return (g.get("eye") not in (None, DEFAULT_EYE, LEGACY_DEFAULT_EYE_POINT)) \
+        or (g.get("nostril") not in (None, DEFAULT_NOSTRIL))
 
 
 def camera_has_rois(cam):
-    """True when the camera already holds our eye point (Point 0) and nostril
-    area (Area 1) — i.e. someone calibrated it from the Hardware page."""
+    """True when the camera already holds our eye ROI (Area 0, or a legacy
+    Point 0) and nostril area (Area 1) — i.e. someone calibrated it from the
+    Hardware page."""
     have = roi_slots(cam)
-    return ("Point", 0) in have and ("Area", 1) in have
+    return (("Area", EYE_AREA_ID) in have or ("Point", LEGACY_EYE_POINT_ID) in have) \
+        and ("Area", NOSTRIL_AREA_ID) in have
 
 
 def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, token="",
@@ -429,8 +455,8 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
     calibrated = not reset_rois and camera_has_rois(cam)
     if not calibrated:
         cam.set_basic_param(emissivity_100=98, distance_cm=350)
-        cam.set_point(0, *DEFAULT_EYE, name="eye")                # eye/max ROI
-        cam.set_area(1, DEFAULT_NOSTRIL, name="nostril")
+        cam.set_area(EYE_AREA_ID, DEFAULT_EYE, name="eye")            # eye: hottest pixel in the box
+        cam.set_area(NOSTRIL_AREA_ID, DEFAULT_NOSTRIL, name="nostril")
         print(f"[edge] WARNING: camera {ip} had no calibrated ROIs — using frame-centre defaults. "
               "Readings are only meaningful if the eye and nostril happen to be there; "
               "calibrate from the Hardware page.")
@@ -447,8 +473,7 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
         while time.time() - t0 < window_s:
             tick = time.time()
             try:
-                temps = {x["type"]: x for x in cam.query_temps()}
-                area = temps.get("Area", {}).get("avg_c")
+                _, area = roi_readings(cam.query_temps())
                 if area is not None:
                     window.append(area)
             except Exception as e:                                # noqa: BLE001
@@ -472,7 +497,7 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
 
         now = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         try:
-            latest = {x["type"]: x for x in cam.query_temps()}
+            eye_c, _ = roi_readings(cam.query_temps())
         except Exception as e:                                    # noqa: BLE001
             print(f"[edge] camera unreachable ({e}); skipping this tick")
             if not live:
@@ -482,8 +507,8 @@ def real_camera(api_url, ip, user, password, stall, horse_id, live, interval, to
         # Readings through default ROIs are tagged, and the server keeps them
         # out of clinical alerts: a frame-centre point reads whatever is there.
         meta = {"calibrated": calibrated}
-        if latest.get("Point", {}).get("point_c") is not None:
-            batch.append(reading(horse_id, stall, "body_temp_c", latest["Point"]["point_c"], "°C", now,
+        if eye_c is not None:
+            batch.append(reading(horse_id, stall, "body_temp_c", eye_c, "°C", now,
                                  "thermal_camera", conf=0.95 if calibrated else 0.3, meta=meta))
         rr, quality = compute_resp_rate(window, fs, with_quality=True)
         if rr:
@@ -656,14 +681,13 @@ class CameraWorker(Worker):
         # A camera nobody has calibrated has no ROIs, so there is nothing to
         # read. Say so plainly instead of sampling empty windows while the
         # portal shows "waiting for the first reading" forever.
-        present = {x["type"] for x in self.cam.query_temps()}
-        if "Point" not in present and "Area" not in present:
+        eye0, nostril0 = roi_readings(self.cam.query_temps())
+        if eye0 is None and nostril0 is None:
             raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
         window, t0 = [], time.time()
         while time.time() - t0 < self.window_s and not self.stop_evt.is_set():
             tick = time.time()
-            temps = {x["type"]: x for x in self.cam.query_temps()}
-            area = temps.get("Area", {}).get("avg_c")
+            _, area = roi_readings(self.cam.query_temps())
             if area is not None:
                 window.append(area)
             self.stop_evt.wait(max(0.0, (1.0 / self.target_hz) - (time.time() - tick)))
@@ -671,13 +695,12 @@ class CameraWorker(Worker):
             return
         elapsed = time.time() - t0
         fs = (len(window) / elapsed) if elapsed > 0 and window else self.target_hz
-        latest = {x["type"]: x for x in self.cam.query_temps()}
+        point, _ = roi_readings(self.cam.query_temps())
         # The portal knows whether this camera's ROIs were aimed (and not moved
         # since); readings through un-aimed ROIs are flagged, never alerted on.
         calibrated = bool(self.dev.get("calibrated"))
         meta = {"calibrated": calibrated}
         ts, out = now_iso(), []
-        point = latest.get("Point", {}).get("point_c")
         if point is not None:
             out.append(dict(deviceId=self.dev["id"], metric="body_temp_c", value=round(point, 3), unit="°C",
                             ts=ts, source="thermal_camera", confidence=0.95 if calibrated else 0.3, meta=meta))

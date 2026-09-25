@@ -217,9 +217,11 @@ export type DeviceState =
 export interface DeviceStatus { state: DeviceState; detail: string }
 export interface DeviceHealth { at: string; ok: boolean | null; error: string | null; code: string | null }
 
+export interface RoiBox { x0: number; y0: number; x1: number; y1: number }
 export interface CameraRois {
-  eye: { x: number; y: number };
-  nostril: { x0: number; y0: number; x1: number; y1: number };
+  /** A box read as its hottest pixel. Cameras calibrated before that hold a point. */
+  eye: RoiBox | { x: number; y: number };
+  nostril: RoiBox;
   pushedAt?: string;
   /** true = read back and matched; null = the camera does not report coordinates */
   verified?: boolean | null;
@@ -261,6 +263,15 @@ export interface ThermalCamera extends DeviceCommon {
   distanceM: number; emissivity: number;
   rois: CameraRois | null; lastProbe: CameraProbe | null;
   identity: { serial: string; model: string | null; firmware?: string | null; pinnedAt: string } | null;
+  /** The last aim check: breathing found by the edge agent's own algorithm,
+   *  against a hand count. Applies only while `roisAt` matches rois.pushedAt. */
+  verification?: CameraVerification | null;
+}
+export interface CameraVerification {
+  at: string; by: string;
+  breathing: { bpm: number; periodicity: number | null; seconds: number | null; samples: number | null };
+  handCountBpm: number | null; agrees: boolean | null;
+  eyeC: number | null; nostrilSwingC: number | null; roisAt: string;
 }
 export interface ModbusSensor extends DeviceCommon {
   kind: "modbus_sensor"; stall: string; edgeId: string | null;
@@ -281,7 +292,8 @@ export interface OwnerDevice {
 export interface DeviceEvent { id: string; deviceId: string; device: string; at: string; actor: string; action: string; detail: string }
 export interface CameraTemps {
   at: string;
-  eye: { c: number | null } | null;
+  /** mode "box-max": hottest pixel in the eye box, `at` where it is (0–10000). */
+  eye: { c: number | null; at: { x: number; y: number } | null; mode: "box-max" | "point" } | null;
   nostril: { avgC: number | null; minC: number | null; maxC: number | null } | null;
 }
 /** Fields an admin sends when adding or editing a device (password only for cameras). */
@@ -328,6 +340,10 @@ export const probeDevice = (id: string, acceptIdentity = false) =>
 export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril">) =>
   call<{ ok: true; rois: CameraRois; verify: { verified: boolean | null; detail: string } }>("PUT", dpath(id, "rois"), rois, 30000);
 export const readCameraTemps = (id: string) => call<CameraTemps>("GET", dpath(id, "temps"));
+export const saveVerification = (id: string, v: {
+  breathing: { bpm: number; periodicity: number; seconds: number; samples: number };
+  handCountBpm: number | null; eyeC: number | null; nostrilSwingC: number | null;
+}) => call<CameraVerification>("POST", dpath(id, "verification"), v);
 
 /** Snapshot as an object URL. An <img src> cannot carry the Authorization
  *  header, so the image is fetched and handed to the page as a blob. */
