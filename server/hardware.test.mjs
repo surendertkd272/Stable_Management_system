@@ -56,6 +56,17 @@ test("optics: the PO's 640 variants clear the nostril threshold at 3.5 m; the 25
   assert.ok(spec.assessOptics("640", "25", 3.5).targets.nostril.px > 20);
   assert.ok(spec.assessOptics("640", "13", 3.5).targets.nostril.px > 10);
   assert.equal(spec.assessOptics("256", "3.2", 3.5).targets.nostril.verdict, "insufficient");
+  // Vendor's pixel figures (27 Jul) agree with the model: 13 mm ≈ 12–13 px at 3 m, 25 mm ≈ 24 px.
+  assert.ok(Math.abs(spec.pixelsOnTarget("640", "13", 3, 5) - 12.5) < 1);
+  assert.ok(Math.abs(spec.pixelsOnTarget("640", "25", 3, 5) - 24) < 1.5);
+  // Focus (vendor, factory-focused at 3.5 m): the 25 mm lens is sharp only 3.0–4.3 m.
+  assert.equal(spec.focusFor("640", "25", 3.5).verdict, "sharp");
+  assert.equal(spec.focusFor("640", "25", 2.5).verdict, "blurred", "enough pixels, but out of focus");
+  assert.equal(spec.focusFor("640", "25", 4.5).verdict, "blurred");
+  assert.equal(spec.focusFor("640", "13", 2.5).verdict, "sharp");
+  assert.equal(spec.focusFor("640", "13", 1.5).verdict, "blurred");
+  assert.equal(spec.focusFor("384", "7.5", 3).verdict, "unknown", "not stated by the vendor — not guessed");
+  assert.equal(spec.assessOptics("640", "25", 2.5).focus.verdict, "blurred");
   assert.equal(spec.thermalFootprint("640", "6", 3.5), null, "6 mm is not a 640 lens");
 });
 

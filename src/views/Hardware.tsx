@@ -18,14 +18,14 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as RPointer
 import {
   Camera as CameraIcon, Plus, PlugZap, Crosshair, Pencil, Trash2, CheckCircle2, XCircle,
   Loader2, Wifi, Info, Ruler, ScanLine, Server, Gauge, Send, KeyRound, History, Copy,
-  AlertTriangle, ShieldCheck, Power,
+  AlertTriangle, ShieldCheck, Power, Focus,
 } from "lucide-react";
 import * as api from "../data/api";
 import type {
   CameraProbe, CameraTemps, Device, DeviceEvent, DeviceKind, DeviceState, EdgeBox, ModbusRegister,
   ModbusSensor, PushDevice, SensorProbe, ThermalCamera,
 } from "../data/api";
-import { SC_IT6420_HB_V2 as SPEC, assessOptics, lensesFor, variants } from "../../server/hardware-spec.mjs";
+import { SC_IT6420_HB_V2 as SPEC, assessOptics, focusFor, lensesFor, variants } from "../../server/hardware-spec.mjs";
 import { METRICS } from "../../server/contract.mjs";
 import { Modal, Sparkline } from "../components/ui";
 import { useStable, useToast } from "../store";
@@ -474,6 +474,15 @@ function CameraFacts({ cam, edge }: { cam: ThermalCamera; edge: string }) {
           </b>
         </div>
       )}
+      {optics && optics.focus.verdict !== "unknown" && (
+        <div>
+          <span>Focus</span>
+          <b>
+            sharp {optics.focus.nearM}–{optics.focus.farM} m{" "}
+            <Verdict v={optics.focus.verdict === "sharp" ? "good" : "insufficient"} label={optics.focus.verdict === "sharp" ? "in focus" : `out of focus at ${cam.distanceM} m`} />
+          </b>
+        </div>
+      )}
     </>
   );
 }
@@ -556,9 +565,9 @@ function ProbeResult({ probe, canAccept, onAccept }: { probe: CameraProbe | Sens
   );
 }
 
-function Verdict({ v }: { v: "good" | "marginal" | "insufficient" }) {
+function Verdict({ v, label }: { v: "good" | "marginal" | "insufficient"; label?: string }) {
   const cls = v === "good" ? "ok" : v === "marginal" ? "warn" : "alert";
-  return <span className={`pill ${cls}`} style={{ fontSize: 10.5, padding: "1px 7px" }}>{v}</span>;
+  return <span className={`pill ${cls}`} style={{ fontSize: 10.5, padding: "1px 7px" }}>{label ?? v}</span>;
 }
 
 // --------------------------------------------------------------------------- //
@@ -667,6 +676,7 @@ function OpticsPanel({ variant, lens, distanceM }: { variant: string; lens: stri
           {f.fovV}°) — {f.pxPerCm.toFixed(2)} px/cm.
         </span>
       </div>
+      <FocusRow focus={a.focus} distanceM={distanceM} lens={lens} />
       {(["nostril", "eye"] as const).map((k) => {
         const t = a.targets[k];
         return (
@@ -676,7 +686,7 @@ function OpticsPanel({ variant, lens, distanceM }: { variant: string; lens: stri
               {t.label}: <b>{t.px.toFixed(1)} px</b> across {t.cm} cm <Verdict v={t.verdict} />
               <br />
               <small className="muted">
-                needs ≥{t.need} px · stays viable up to {t.maxDistanceM.toFixed(1)} m
+                needs ≥{t.need} px · enough pixels up to {t.maxDistanceM.toFixed(1)} m{a.focus.farM != null && a.focus.farM < t.maxDistanceM ? ` (but in focus only to ${a.focus.farM} m)` : ""}
               </small>
             </span>
           </div>
@@ -687,6 +697,39 @@ function OpticsPanel({ variant, lens, distanceM }: { variant: string; lens: stri
         thumb. Absolute accuracy is {SPEC.measurement.accuracy} — read temperature as a trend against the horse&apos;s own
         baseline. A wider frame keeps a moving horse in view; a tighter one gives more pixels per nostril.
       </p>
+    </div>
+  );
+}
+
+type Focus = ReturnType<typeof focusFor>;
+
+/** Fixed-focus lenses are sharp only within a range — pixels alone don't
+ *  say whether the nostril is in focus. */
+function FocusRow({ focus, distanceM, lens }: { focus: Focus; distanceM: number; lens: string }) {
+  return (
+    <div className="hw-optics-row">
+      <Focus size={15} />
+      <span>
+        {focus.verdict === "unknown" ? (
+          <>Focus: the vendor has not stated the sharp range for the {lens} mm lens <span className="pill muted" style={{ fontSize: 10.5, padding: "1px 7px" }}>unknown</span></>
+        ) : (
+          <>
+            Focus: sharp from <b>{focus.nearM}–{focus.farM} m</b> <Verdict v={focus.verdict === "sharp" ? "good" : "insufficient"} label={focus.verdict === "sharp" ? "in focus" : "out of focus"} />
+            {focus.verdict === "blurred" && (
+              <>
+                <br />
+                <small style={{ color: "var(--alert)" }}>
+                  At {distanceM} m the thermal image is blurred — the nostril smears into its surroundings, so
+                  breathing and eye temperature read low. Mount the camera {focus.nearM}–{focus.farM} m from the head
+                  {lens === "25" ? ", or use the 13 mm lens (sharp 2–11 m)" : ""}.
+                </small>
+              </>
+            )}
+          </>
+        )}
+        <br />
+        <small className="muted">for a unit factory-focused at {focus.setM} m (vendor&apos;s figures, not the datasheet) — check the order said so</small>
+      </span>
     </div>
   );
 }

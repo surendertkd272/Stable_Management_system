@@ -172,7 +172,14 @@ against the mocks):
 - **Optics planner.** From the datasheet's FOV and resolution: how many thermal
   pixels land on a 5 cm nostril and a 3 cm eye region at the mounting distance.
   At 3.5 m the PO's units give 20.6 px (640/25 mm) and 10.3 px (640/13 mm) on the
-  nostril; the 256/3.2 mm variant gives 3.9 px and cannot resolve it.
+  nostril; the 256/3.2 mm variant gives 3.9 px and cannot resolve it. It also
+  checks **focus**: the lenses are fixed-focus, and for units factory-focused
+  at 3.5 m the vendor states a sharp range of 2–11 m (13 mm) but only
+  3.0–4.3 m (25 mm) — a 25 mm camera at 2.5 m has plenty of pixels and is still
+  blurred. Lenses the vendor has not stated show "unknown".
+- **Login**: ISAPI session login, falling back to HTTP Digest with MD5 or
+  SHA-256 (the vendor API document allows both; SHA-256 is preferred when
+  offered).
 - **Connection test** runs the smoke test's checks from the server: address,
   ISAPI login, device info, capabilities, thermometry, live ROIs, Modbus
   cross-check, RTSP.
