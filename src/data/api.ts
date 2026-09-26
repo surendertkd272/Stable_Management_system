@@ -277,6 +277,8 @@ export interface ThermalCamera extends DeviceCommon {
   rois: CameraRois | null; lastProbe: CameraProbe | null;
   /** "mtrpc" = the JSON-RPC firmware on the Sparsh demo unit; "auto" until detected. */
   protocol?: "auto" | "isapi" | "mtrpc";
+  /** Keep thermal + visible video on the edge box for labelling. */
+  record?: boolean;
   identity: { serial: string; model: string | null; firmware?: string | null; pinnedAt: string } | null;
   /** The last aim check: breathing found by the edge agent's own algorithm,
    *  against a hand count. Applies only while `roisAt` matches rois.pushedAt. */
@@ -402,3 +404,50 @@ export async function fetchSnapshot(id: string, dev: 0 | 1): Promise<{ url?: str
 
 /** The site server's own address, as the edge agent should use it. */
 export const serverOrigin = () => BASE || (typeof window !== "undefined" ? window.location.origin : "http://<site-server>:8080");
+
+/* --- recorded footage and labels (training data) ------------------------- */
+export interface FootageStreamRef { start: string; at: string; bytes: number }
+export interface FootageClip {
+  id: string; camera: string; cameraName: string; stall: string | null;
+  start: string; at: string; end: string; recording: boolean; labels: number;
+  thermal: FootageStreamRef | null; visible: FootageStreamRef | null;
+}
+export interface LabelDef { key: string; name: string; kind: "interval" | "moment"; shortcut: string }
+export interface FootageLabel {
+  id: string; camera: string; clip: string; label: string; startAt: string; endAt: string | null;
+  note: string; horse: string | null; stall: string | null; by: string; createdAt: string;
+}
+export const listFootage = () => call<{ clips: FootageClip[]; cameras: { id: string; name: string; stall: string | null }[] }>("GET", "/api/footage");
+export const footageTicket = () => call<{ ticket: string; expiresInS: number }>("GET", "/api/footage/ticket");
+export const labelVocabulary = () => call<LabelDef[]>("GET", "/api/footage/labels/meta");
+export const footageLabels = (camera: string, from?: string, to?: string) => {
+  const q = new URLSearchParams({ camera });
+  if (from) q.set("from", from);
+  if (to) q.set("to", to);
+  return call<FootageLabel[]>("GET", `/api/footage/labels?${q}`);
+};
+export const createFootageLabel = (l: { camera: string; clip: string; label: string; startAt: string; endAt?: string | null; note?: string }) =>
+  call<FootageLabel>("POST", "/api/footage/labels", l);
+export const deleteFootageLabel = (id: string) => call<{ ok: true }>("DELETE", `/api/footage/labels/${encodeURIComponent(id)}`);
+/** URL a <video> element can play: carries the short-lived ticket, not the session. */
+export const footageVideoUrl = (camera: string, stream: "thermal" | "visible", start: string, ticket: string, h264 = false) =>
+  `${BASE}/api/footage/video/${encodeURIComponent(camera)}/${stream}/${encodeURIComponent(start)}?vt=${encodeURIComponent(ticket)}${h264 ? "&format=h264" : ""}`;
+/** Download all labels as CSV (authenticated, so fetched as a blob). */
+export async function exportFootageLabels(): Promise<boolean> {
+  if (!apiConfigured) return false;
+  try {
+    const res = await fetch(`${BASE}/api/footage/labels/export`, { headers: authHeaders() });
+    if (!res.ok) return false;
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `equicare-labels-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -71,6 +71,25 @@ readings persist in `~/EquiCare-demo`.
 8. Open the horse's page: body temperature and breathing arrive within a
    minute and update every minute.
 
+## Recording footage for training
+
+To teach real behaviour models (lying down, rolling, urinating…) we need
+footage from this camera at real stalls, with events marked.
+
+1. Hardware → edit the camera → tick **Record video for training**. The edge
+   agent keeps thermal + visible video in 10-minute clips in
+   `~/EquiCare-demo/recordings` (~0.4 GB an hour; the oldest are deleted past
+   100 GB). Recording does not need the camera to be calibrated.
+2. **Footage & labels** (sidebar): pick a clip, watch both streams side by
+   side (up to 16× speed), and press a key when something happens —
+   `l` lying (press again where it ends), `s` standing still, `e` eating,
+   `d` drinking, `w` weaving, `p` pawing, `r` rolling, `u` urinating,
+   `m` defecating, `1`/`2` lies down / gets up. Space plays and pauses, ←/→ jump 5 s.
+3. **Export labels (CSV)** when you have a batch — that file plus the clips is
+   the training set.
+
+Ask the stable's permission before recording, and switch it off when not needed.
+
 ## Saying it accurately
 
 - Temperature is **±2 °C** (the datasheet): read it as a trend against the

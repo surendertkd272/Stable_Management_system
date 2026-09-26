@@ -457,6 +457,7 @@ function CameraFacts({ cam, edge }: { cam: ThermalCamera; edge: string }) {
         <b>
           {cam.https ? "https" : "http"}://{cam.host}:{cam.httpPort} · RTSP {cam.rtspPort}
           {cam.protocol === "mtrpc" ? " · JSON-RPC firmware" : cam.protocol === "isapi" ? ` · ISAPI · Modbus ${cam.modbusPort}` : " · protocol detected on the first test"}
+          {cam.record ? " · recording for training" : ""}
         </b>
       </div>
       <div>
@@ -855,7 +856,7 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
     case "thermal_camera": return {
       ...common, stall, edgeId, host: "", httpPort: 80, https: false, rtspPort: 554, modbusPort: 502,
       username: "admin", password: "", variant: "640", thermalLens: "13", visibleLens: "4", distanceM: 3.5, emissivity: 0.98,
-      protocol: "auto",
+      protocol: "auto", record: false,
     };
     case "modbus_sensor": return {
       ...common, stall, edgeId, host: "", port: 502, unitId: 1, function: 3, addressing: "zero-based", pollSeconds: 10,
@@ -1015,6 +1016,11 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
                       <option value="isapi">ISAPI (vendor documentation)</option>
                     </select>
                   </div>
+                  <label className="hw-check" style={{ marginTop: 8 }}>
+                    <input type="checkbox" checked={Boolean(f.record)} onChange={(e) => set("record", e.target.checked)} /> Record
+                    video for training — the edge box keeps this camera&apos;s thermal and visible video in 10-minute clips
+                    (about 0.4 GB an hour; oldest deleted past 100 GB), to label in Footage &amp; labels
+                  </label>
                 </>
               )}
             </>

@@ -25,6 +25,7 @@ import {
   Receipt,
   UserCircle,
   Cpu,
+  Film,
   LucideIcon,
 } from "lucide-react";
 import { useTheme } from "../theme";
@@ -33,7 +34,7 @@ import { useStable, useToast } from "../store";
 import { breedingMares, Horse } from "../data/mock";
 import { Modal } from "./ui";
 
-type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; adminOnly?: boolean };
+type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; adminOnly?: boolean; staffOnly?: boolean };
 
 const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
@@ -70,7 +71,10 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
     // Admin only (filtered in Rail): camera addresses, credentials and aim.
     title: "System",
-    items: [{ to: "/hardware", label: "Hardware", icon: Cpu, adminOnly: true }],
+    items: [
+      { to: "/hardware", label: "Hardware", icon: Cpu, adminOnly: true },
+      { to: "/footage", label: "Footage & labels", icon: Film, staffOnly: true },
+    ],
   },
 ];
 
@@ -80,7 +84,9 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, authRequired } = useAuth();
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
   // Signed-in: role decides. No auth (demo / open local backend): show all.
-  const canSee = (n: NavItem) => !n.adminOnly || !authRequired || user?.role === "admin";
+  const canSee = (n: NavItem) =>
+    (!n.adminOnly || !authRequired || user?.role === "admin") &&
+    (!n.staffOnly || !authRequired || user?.role === "admin" || user?.role === "staff");
 
   const pathname = usePathname() ?? "/";
   // `end` = exact match (the dashboard); otherwise a section stays highlighted
@@ -235,6 +241,7 @@ function TopBar() {
     "/portal": { h1: "Owner Portal", p: "Scoped read-only view of each owner's horses" },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
     "/hardware": { h1: "Hardware", p: "Edge boxes, cameras and sensors — connect, test and calibrate" },
+    "/footage": { h1: "Footage & labels", p: "Recorded camera video — mark what the horse does, for training" },
   };
 
   const base = "/" + (pathname.split("/")[1] || "");

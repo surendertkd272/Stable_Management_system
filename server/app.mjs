@@ -20,6 +20,8 @@ import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
 import {
   summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries, behaviourForHorse,
 } from "./rollup.mjs";
+import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labelsCsv } from "./footage.mjs";
+import { randomBytes as footageRandom } from "node:crypto";
 import { SC_IT6420_HB_V2 } from "./hardware-spec.mjs";
 import { deviceApi } from "./devices.mjs";
 
@@ -242,6 +244,24 @@ export async function handle(req) {
                : json(401, { error: "not signed in", authRequired: authRequired() });
     }
 
+    // ---- recorded footage: the video files themselves --------------------- //
+    // A <video> element cannot send an Authorization header, and seeking needs
+    // direct range requests, so clips are played with a short-lived ticket
+    // issued to a logged-in admin or staff user (GET /api/footage/ticket).
+    const fv = path.match(/^\/api\/footage\/video\/([^/]+)\/(thermal|visible)\/([^/]+)$/);
+    if (fv && method === "GET") {
+      const t = G.videoTickets?.get(url.searchParams.get("vt") || "");
+      if (!t || t.exp < Date.now()) return json(401, { error: "video ticket missing or expired — reopen the footage page" });
+      const file = clipPath(decodeURIComponent(fv[1]), fv[2], decodeURIComponent(fv[3]));
+      if (!file) return json(404, { error: "no such clip" });
+      try {
+        const served = url.searchParams.get("format") === "h264" ? await h264Copy(file) : file;
+        return serveFile(req, served, "video/mp4", CORS);
+      } catch (e) {
+        return json(502, { error: e.message });
+      }
+    }
+
     // ---- query (SPA -> cloud) -------------------------------------------- //
     const who = principal(req);
     if (path.startsWith("/api/") && authRequired() && !who)
@@ -261,6 +281,9 @@ export async function handle(req) {
       // Owners get the list (status for their own horses' stalls) and nothing
       // else — "GET" alone would have let them pull any camera's snapshot.
       if (path.startsWith("/api/devices/") && who.role === "owner")
+        return json(404, { error: "not found" });
+      // Stall footage is for the yard's own people, not owners.
+      if (path.startsWith("/api/footage") && who.role === "owner")
         return json(404, { error: "not found" });
     }
 
@@ -356,6 +379,57 @@ export async function handle(req) {
     if (path === "/api/devices" || path.startsWith("/api/devices/")) {
       const res = await devices.handleDevices(req, url, who, visibleRoster);
       if (res) return res;
+    }
+
+    // ---- footage & labels (training data) --------------------------------- //
+    if (path.startsWith("/api/footage")) {
+      const actor = who?.name || who?.username || who?.role || "admin";
+      if (path === "/api/footage/ticket" && method === "GET") {
+        G.videoTickets ??= new Map();
+        for (const [k, v] of G.videoTickets) if (v.exp < Date.now()) G.videoTickets.delete(k);
+        const vt = footageRandom(18).toString("base64url");
+        G.videoTickets.set(vt, { user: actor, exp: Date.now() + 2 * 3600 * 1000 });
+        return json(200, { ticket: vt, expiresInS: 7200 });
+      }
+      if (path === "/api/footage/labels/meta" && method === "GET") return json(200, LABELS);
+      if (path === "/api/footage" && method === "GET") {
+        const cams = new Map(store.list("devices").filter((d) => d.kind === "thermal_camera").map((d) => [d.id, d]));
+        const labels = store.list("footage_labels");
+        const clips = listClips().map((c) => ({
+          ...c,
+          cameraName: cams.get(c.camera)?.name ?? c.camera, stall: cams.get(c.camera)?.stall ?? null,
+          labels: labels.filter((l) => l.camera === c.camera && l.startAt >= c.at && l.startAt < c.end).length,
+        }));
+        return json(200, { clips, cameras: [...new Set(clips.map((c) => c.camera))].map((id) => ({ id, name: cams.get(id)?.name ?? id, stall: cams.get(id)?.stall ?? null })) });
+      }
+      if (path === "/api/footage/labels" && method === "GET") {
+        const cam = url.searchParams.get("camera"), from = url.searchParams.get("from"), to = url.searchParams.get("to");
+        const rows = store.list("footage_labels").filter((l) => (!cam || l.camera === cam) && (!from || l.startAt >= from) && (!to || l.startAt < to));
+        return json(200, rows.sort((a, b) => a.startAt.localeCompare(b.startAt)));
+      }
+      if (path === "/api/footage/labels/export" && method === "GET") {
+        const rows = store.list("footage_labels").sort((a, b) => a.startAt.localeCompare(b.startAt));
+        if (url.searchParams.get("format") === "json") return json(200, { labels: rows, vocabulary: LABELS });
+        return new Response(labelsCsv(rows), { status: 200, headers: { "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="equicare-labels-${new Date().toISOString().slice(0, 10)}.csv"`, ...CORS } });
+      }
+      if (path === "/api/footage/labels" && method === "POST") {
+        let body;
+        try { body = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
+        const { label, errs } = validateLabel(body);
+        if (errs.length) return json(400, { error: "invalid label", details: errs });
+        const cam = store.list("devices").find((d) => d.id === label.camera);
+        const horse = label.horse || roster().find((h) => cam?.stall && h.stall === cam.stall)?.name || null;
+        return json(201, store.create("footage_labels", { ...label, horse, stall: cam?.stall ?? null, by: actor, createdAt: new Date().toISOString() }));
+      }
+      const del = path.match(/^\/api\/footage\/labels\/([^/]+)$/);
+      if (del && method === "DELETE") {
+        const id = decodeURIComponent(del[1]);
+        if (!store.list("footage_labels").some((l) => l.id === id)) return json(404, { error: "unknown label" });
+        store.remove("footage_labels", id);
+        return json(200, { ok: true });
+      }
+      return json(404, { error: "not found" });
     }
 
     // ---- generic CRUD over record collections --------------------------- //
