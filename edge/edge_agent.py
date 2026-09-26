@@ -844,7 +844,7 @@ class MtrpcCameraWorker(CameraWorker):
             add("activity_index", summary["activity"], "0..1", source="thermal_video", conf=0.6,
                 method="thermal video motion", **proto)
             add("inactive_minutes", summary["inactive_min"], "min", source="thermal_video", conf=0.6,
-                method="thermal video stillness (not lying-down)", **proto)
+                method="thermal video stillness (not lying-down)", windowMin=round(summary["seconds"] / 60, 2), **proto)
         wv = summary.get("weave") or {}
         if wv.get("detected"):
             add("vice_event", 1, "event", source="thermal_video", conf=min(0.8, wv["strength"]),

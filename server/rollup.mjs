@@ -14,6 +14,11 @@ const RESP_ALERT = 24, RESP_WATCH = 20;             // bpm, at rest
 const GAIT_WATCH = 0.35;                            // asymmetry 0..1
 const REST_MIN_LOW = 180;                           // < 3h lying/day
 const WATER_LOW_FRAC = 0.55;                        // < 55% of own baseline
+// Camera-behaviour watch notes (prototype detectors). Starting points for a
+// vet to confirm — they raise "watch" notes, never alarms.
+const NO_URINE_H = 8, NO_MANURE_H = 12;             // hours without an event
+const ACT_UNUSUAL_HI = 2.0, ACT_UNUSUAL_LO = 0.4;   // x the horse's own 7-day activity
+const ACT_BASELINE_DAYS = 3;                        // days of activity needed before judging
 
 // Monitoring-gap thresholds. A 24/7 monitor that goes blind must SAY so —
 // otherwise stale data reads as "calm" and the barn is silently unwatched.
@@ -76,6 +81,13 @@ function gapText(ms) {
  *  judged against clinical thresholds or folded into baselines. */
 export const uncalibrated = (r) => r?.meta?.calibrated === false;
 
+/** A reading produced by a heuristic not yet validated on real horses (camera
+ *  behaviour: activity, stillness, weaving, floor events). Shown, and used for
+ *  "watch" notes, but never for a clinical alarm — the same principle as
+ *  uncalibrated readings. Moving in front of the camera read activity 0.55,
+ *  which was enough to raise "colic pattern" before this rule. */
+export const prototype = (r) => r?.meta?.prototype === true || SOURCE_STATUS[r?.source] === "prototype";
+
 /** Evaluate all rule checks for one horse -> list of {type, severity, detail, ts}. */
 function evaluate(bio, rd) {
   const out = [];
@@ -130,10 +142,15 @@ function evaluate(bio, rd) {
   const now = new Date().toISOString();
   const restToday = sumToday(rd, "rest_minutes");
   const WIN = 4 * 3600 * 1000;
-  const recentActs = rd.filter((r) => r.metric === "activity_index" && within(r, WIN)).map((r) => r.value);
-  const recentRest = rd.filter((r) => r.metric === "rest_minutes" && within(r, WIN)).reduce((a, r) => a + r.value, 0);
+  // Validated activity only (an IMU): the camera's motion heuristic is a
+  // prototype and must not raise a colic alarm.
+  const recentActs = rd.filter((r) => r.metric === "activity_index" && within(r, WIN) && !prototype(r)).map((r) => r.value);
+  const restRows = rd.filter((r) => r.metric === "rest_minutes" && within(r, WIN));
+  const recentRest = restRows.reduce((a, r) => a + r.value, 0);
   const actAvg = recentActs.length ? recentActs.reduce((a, b) => a + b, 0) / recentActs.length : 0;
-  if (actAvg > 0.55 && recentRest < 60) push("Abnormal activity — colic pattern", "alert",
+  // "Little lying" can only be judged where lying is measured: with no
+  // rest_minutes at all, 0 minutes means "not measured", not "never lay down".
+  if (actAvg > 0.55 && restRows.length > 0 && recentRest < 60) push("Abnormal activity — colic pattern", "alert",
     "Restlessness well above baseline with little lying in the last few hours — possible colic.", now);
   else if (countToday(rd, "rest_minutes") > 0 && restToday < REST_MIN_LOW) push("Low lying-down time", "warn",
     `Only ${fmtHM(restToday)} lying in the last 24h — below the ~3h comfort floor.`, now);
@@ -150,7 +167,24 @@ function evaluate(bio, rd) {
 
   const vice = rd.filter((r) => r.metric === "vice_event" && within(r, DAY_MS)).slice(-1)[0];
   if (vice) push("Stable vice", "ok",
-    `${(vice.meta?.kind || "vice").replace("_", "-")} episodes detected — enrichment / routine review suggested.`, vice.ts);
+    `${(vice.meta?.kind || "vice").replace("_", "-")} episodes detected${prototype(vice) ? " (prototype detector)" : ""} — enrichment / routine review suggested.`, vice.ts);
+
+  // ---- camera behaviour: watch notes, never alarms ---------------------- //
+  const b = behaviourForHorse(rd);
+  if (b.activity?.unusual) push("Activity unusual for this horse", "warn",
+    `Activity over the last 4 h is ${b.activity.unusual === "high" ? "well above" : "well below"} this horse's own ` +
+    `7-day level (${b.activity.avg4h.toFixed(2)} vs ${b.activity.baseline.toFixed(2)}) — prototype camera measure; worth a look.`, now);
+  // Absence of an event only means something where the detector is known to
+  // see this stall: it must have reported events here in the last 3 days.
+  for (const [metric, hours, what] of [["urination_event", NO_URINE_H, "urination"], ["excretion_event", NO_MANURE_H, "manure"]]) {
+    const ev = rd.filter((r) => r.metric === metric);
+    const last = ev.length ? Math.max(...ev.map((r) => Date.parse(r.ts))) : null;
+    const seesStall = ev.some((r) => within(r, 3 * DAY_MS));
+    if (seesStall && last !== null && Date.now() - last >= hours * 3600 * 1000)
+      push(what === "manure" ? "No manure seen" : "No urination seen", "warn",
+        `No ${what} seen for ${gapText(Date.now() - last)} (watch threshold ${hours} h) — prototype floor detector; ` +
+        `check the horse and the stall.`, now);
+  }
 
   return out;
 }
@@ -184,7 +218,7 @@ function uninstrumented(rd) {
 }
 
 function stressLevel(rd) {
-  const act = rd.filter((r) => r.metric === "activity_index" && within(r, DAY_MS)).map((r) => r.value);
+  const act = rd.filter((r) => r.metric === "activity_index" && within(r, DAY_MS) && !prototype(r)).map((r) => r.value);
   const vices = countToday(rd, "vice_event");
   const mean = act.length ? act.reduce((a, b) => a + b, 0) / act.length : 0;
   const score = mean + vices * 0.15;
@@ -223,7 +257,10 @@ export function summarizeHorse(bio, allReadings) {
     water: gaps.has("water_ml") && gaps.has("water_visit") ? null
       : countToday(rd, "water_visit") || Math.round(sumToday(rd, "water_ml") / 4000) || 0,
     outside: gaps.has("outside_minutes") ? null : fmtHM(sumToday(rd, "outside_minutes")),
-    stress: gaps.has("activity_index") && gaps.has("vice_event") ? null : stressLevel(rd),
+    // The stress estimate needs a validated activity source; camera motion
+    // (prototype) alone would present a heuristic as a welfare score.
+    stress: rd.some((r) => r.metric === "activity_index" && !prototype(r)) || rd.some((r) => r.metric === "vice_event" && !prototype(r))
+      ? stressLevel(rd) : null,
     // The two vitals the camera measures directly. These belong on the summary,
     // not only in the per-horse detail: they are what this system can actually
     // tell you today, and a dashboard that headlines rest and water — neither
@@ -243,6 +280,66 @@ export function summarizeHorse(bio, allReadings) {
     monitoring: seen === null ? "no-data"
       : Date.now() - seen >= STALE_ALERT_MS ? "offline"
       : Date.now() - seen >= STALE_WARN_MS ? "stale" : "live",
+  };
+}
+
+/** What the camera tells us about behaviour and intake/output, for the horse
+ *  page. Everything here is from prototype heuristics and says so. null parts
+ *  mean "not measured here" (no readings), never zero. */
+export function behaviourForHorse(rd) {
+  const of = (m) => rd.filter((r) => r.metric === m).sort((a, b) => a.ts.localeCompare(b.ts));
+  const day = (rows) => rows.filter((r) => within(r, DAY_MS));
+  const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+
+  const act = of("activity_index");
+  let activity = null;
+  if (act.length) {
+    const avg4h = mean(act.filter((r) => within(r, 4 * 3600 * 1000)).map((r) => r.value));
+    const older = act.filter((r) => within(r, 7 * DAY_MS) && !within(r, 4 * 3600 * 1000));
+    const baseline = new Set(older.map((r) => dayKey(r.ts))).size >= ACT_BASELINE_DAYS ? mean(older.map((r) => r.value)) : null;
+    const unusual = avg4h === null || baseline === null || baseline <= 0.01 ? null
+      : avg4h >= baseline * ACT_UNUSUAL_HI ? "high" : avg4h <= baseline * ACT_UNUSUAL_LO ? "low" : null;
+    activity = { now: act.at(-1).value, at: act.at(-1).ts, avg4h, baseline, unusual };
+  }
+
+  // Rest periods: runs of consecutive windows that were (almost) entirely still.
+  const ina = day(of("inactive_minutes"));
+  let inactive = null;
+  if (ina.length) {
+    const bouts = [];
+    let cur = null;
+    for (const r of ina) {
+      const windowMin = r.meta?.windowMin ?? 1;
+      const still = r.value >= 0.75 * windowMin;
+      const t = Date.parse(r.ts);
+      if (still && cur && t - cur.endMs <= (windowMin * 60 + 90) * 1000) { cur.endMs = t; cur.minutes += r.value; }
+      else if (still) { cur = { startMs: t - windowMin * 60000, endMs: t, minutes: r.value }; bouts.push(cur); }
+      else cur = null;
+    }
+    const periods = bouts.filter((x) => x.minutes >= 10)
+      .map((x) => ({ start: new Date(x.startMs).toISOString(), end: new Date(x.endMs).toISOString(), minutes: Math.round(x.minutes) }));
+    inactive = {
+      todayMin: Math.round(ina.reduce((a, r) => a + r.value, 0)),
+      periods: periods.slice(-12),
+      longestMin: periods.length ? Math.max(...periods.map((x) => x.minutes)) : 0,
+    };
+  }
+
+  const events = (m) => {
+    const all = of(m);
+    if (!all.length) return null;
+    const today = day(all);
+    return { count24h: today.length, last: all.at(-1).ts, times: today.map((r) => r.ts).slice(-12) };
+  };
+
+  const resp = of("respiratory_rate_bpm").at(-1);
+  return {
+    activity, inactive,
+    urination: events("urination_event"),
+    excretion: events("excretion_event"),
+    weaving: (() => { const e = of("vice_event").filter((r) => (r.meta?.kind || "weaving") === "weaving");
+      return e.length ? { count24h: day(e).length, last: e.at(-1).ts } : null; })(),
+    breathing: resp ? { regularity: resp.meta?.regularity ?? resp.confidence ?? null, method: resp.meta?.method ?? null, at: resp.ts } : null,
   };
 }
 

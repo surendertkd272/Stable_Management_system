@@ -18,7 +18,7 @@ import { dispatch, notifyStatus } from "./notify.mjs";
 import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
          verifyPassword, hashPassword, publicUser, ROLES } from "./auth.mjs";
 import {
-  summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries,
+  summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries, behaviourForHorse,
 } from "./rollup.mjs";
 import { SC_IT6420_HB_V2 } from "./hardware-spec.mjs";
 import { deviceApi } from "./devices.mjs";
@@ -154,6 +154,7 @@ export async function handle(req) {
     if (path === "/api/health") return json(200, { ok: true, ...store.statsSummary(), sessions: sessionCount(), authRequired: authRequired() });
     if (path === "/api/coverage") return json(200, coverage());
     const devices = G.devices;
+    if (!devices) return json(503, { error: "server initialising, retry in a moment" });
 
     // ---- edge boxes (their own token) ------------------------------------ //
     if (path.startsWith("/edge/")) return devices.handleEdge(req, url);
@@ -284,10 +285,13 @@ export async function handle(req) {
       return json(200, {
         ...summarizeHorse(bio, store.allReadings()),
         vitals: vitalsForHorse(rd),
+        behaviour: behaviourForHorse(rd),
         charts: {
           body_temp_c: metricSeries(rd, "body_temp_c", 7, "avg"),
           respiratory_rate_bpm: metricSeries(rd, "respiratory_rate_bpm", 7, "avg"),
-          rest_hours: metricSeries(rd, "rest_minutes", 7, "sum").map((m) => +(m / 60).toFixed(1)),
+          // null stays null: a day without data is not 0 hours of rest.
+          rest_hours: metricSeries(rd, "rest_minutes", 7, "sum").map((m) => (m === null ? null : +(m / 60).toFixed(1))),
+          inactive_hours: metricSeries(rd, "inactive_minutes", 7, "sum").map((m) => (m === null ? null : +(m / 60).toFixed(1))),
           activity_index: metricSeries(rd, "activity_index", 7, "avg"),
           feed_intake_g: metricSeries(rd, "feed_intake_g", 7, "sum"),
           feed_refusal_g: metricSeries(rd, "feed_refusal_g", 7, "sum"),
@@ -299,7 +303,8 @@ export async function handle(req) {
     if (path === "/api/alerts" && method === "GET") {
       const alerts = buildAlerts(visibleRoster(), store.allReadings(), store.isAcked);
       // Hardware that stopped working, for the people who can fix it.
-      if (who?.role !== "owner") alerts.push(...devices.deviceAlerts(store.isAcked));
+      if (who?.role !== "owner" && devices?.deviceAlerts)
+        alerts.push(...devices.deviceAlerts(store.isAcked));
       dispatch(alerts).catch((e) => console.error("[notify]", e.message));
       return json(200, alerts);
     }
