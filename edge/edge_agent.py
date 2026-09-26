@@ -916,9 +916,12 @@ class ModbusWorker(Worker):
 
 
 class EdgeRuntime:
-    def __init__(self, server, token, window_s=60):
+    def __init__(self, server, token, window_s=60, recordings=None, recordings_cap_gb=100):
         self.server, self.token, self.window_s = server.rstrip("/"), token, window_s
         self.workers = {}          # id -> (worker, connection fingerprint)
+        self.recorders = {}        # id -> (CameraRecorder, fingerprint)
+        self.recordings, self.recordings_cap_gb = recordings, recordings_cap_gb
+        self.retention = None
         self.started = time.time()
         self.stop_evt = threading.Event()
 
@@ -953,7 +956,7 @@ class EdgeRuntime:
     @staticmethod
     def _fingerprint(d):
         keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
-                "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol")
+                "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol", "rtspPort")
         return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
 
     def apply(self, cfg):
@@ -972,6 +975,31 @@ class EdgeRuntime:
             print(f"[edge] starting {w.name}")
             w.start()
             self.workers[did] = (w, self._fingerprint(d))
+        self._apply_recording(wanted)
+
+    def _apply_recording(self, wanted):
+        """Record the cameras switched to "record" in the Hardware page."""
+        from recorder import CameraRecorder, RetentionThread, recordings_dir  # noqa
+        rec = {did: d for did, d in wanted.items()
+               if d["kind"] == "thermal_camera" and d.get("record") and d.get("protocol") == "mtrpc"}
+        for did in list(self.recorders):
+            r, fp = self.recorders[did]
+            if did not in rec or self._fingerprint(rec[did]) != fp:
+                r.stop()
+                del self.recorders[did]
+        root = Path(self.recordings) if self.recordings else recordings_dir()
+        for did, d in rec.items():
+            if did in self.recorders:
+                continue
+            r = CameraRecorder(d, root)
+            r.start()
+            self.recorders[did] = (r, self._fingerprint(d))
+        if self.recorders and self.retention is None:
+            self.retention = RetentionThread(root, self.recordings_cap_gb)
+            self.retention.start()
+        for did, d in wanted.items():
+            if d["kind"] == "thermal_camera" and d.get("record") and d.get("protocol") not in ("mtrpc",):
+                print(f"[edge] {d['name']}: recording is only available for JSON-RPC cameras so far — not recording")
 
     def heartbeat(self):
         body = {"agent": {"version": AGENT_VERSION, "host": socket.gethostname(),
@@ -1007,6 +1035,8 @@ class EdgeRuntime:
         finally:
             for w, _ in self.workers.values():
                 w.stop()
+            for r, _ in self.recorders.values():
+                r.stop()
             flush(self.server, self.token)
 
 # --------------------------------------------------------------------------- #
@@ -1015,6 +1045,9 @@ def main():
     ap.add_argument("--api", default=os.environ.get("EQUICARE_API", "http://127.0.0.1:8080"))
     ap.add_argument("--server", help="server mode: the site server URL; devices come from the Hardware page")
     ap.add_argument("--refresh", type=int, default=60, help="server mode: seconds between config refreshes")
+    ap.add_argument("--recordings", default=os.environ.get("EQUICARE_RECORDINGS_DIR"),
+                    help="server mode: where to keep camera recordings (default ~/EquiCare-demo/recordings)")
+    ap.add_argument("--recordings-cap-gb", type=float, default=100, help="delete the oldest clips beyond this size")
     ap.add_argument("--simulate", action="store_true")
     ap.add_argument("--backfill-days", type=int, default=14)
     ap.add_argument("--live", action="store_true")
@@ -1038,7 +1071,8 @@ def main():
         if not a.token:
             ap.error("--server needs --token (the edge box's token from the Hardware page)")
         use_outbox(a.server, a.token)
-        EdgeRuntime(a.server, a.token, window_s=a.window).run(refresh_s=a.refresh)
+        EdgeRuntime(a.server, a.token, window_s=a.window, recordings=a.recordings,
+                    recordings_cap_gb=a.recordings_cap_gb).run(refresh_s=a.refresh)
         return
     if a.simulate:
         simulate(a.api, a.backfill_days, a.live, a.interval, a.token)

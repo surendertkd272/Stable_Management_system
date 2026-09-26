@@ -189,6 +189,54 @@ class WindowAnalyzer:
         return out
 
 
+def local_relay(host, port, stop_evt):
+    """A 127.0.0.1 TCP port that forwards to host:port, until stop_evt. ffmpeg
+    cannot use an IPv6 zone (fe80::…%en8) in a URL; this lets it reach a
+    camera on a direct cable. Returns the local port."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(4)
+    target = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)[0][4]
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    def pipe(a, b):
+        try:
+            while True:
+                d = a.recv(65536)
+                if not d:
+                    break
+                b.sendall(d)
+        except OSError:
+            pass
+        finally:
+            for x in (a, b):
+                try:
+                    x.close()
+                except OSError:
+                    pass
+
+    def serve():
+        while not stop_evt.is_set():
+            try:
+                srv.settimeout(1.0)
+                c, _ = srv.accept()
+            except OSError:
+                continue
+            r = socket.socket(family, socket.SOCK_STREAM)
+            try:
+                r.connect(target)
+            except OSError:
+                c.close()
+                continue
+            threading.Thread(target=pipe, args=(c, r), daemon=True).start()
+            threading.Thread(target=pipe, args=(r, c), daemon=True).start()
+        srv.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return srv.getsockname()[1]
+
+
 class ThermalStream(threading.Thread):
     """ffmpeg reading the camera's thermal sub-stream, frames to a callback.
     A local relay carries RTSP because ffmpeg cannot use an IPv6 zone
@@ -204,48 +252,7 @@ class ThermalStream(threading.Thread):
         self.frames = 0
 
     def _relay(self):
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("127.0.0.1", 0))
-        srv.listen(4)
-        target = socket.getaddrinfo(self.host, self.port, 0, socket.SOCK_STREAM)[0][4]
-        family = socket.AF_INET6 if ":" in self.host else socket.AF_INET
-
-        def pipe(a, b):
-            try:
-                while True:
-                    d = a.recv(65536)
-                    if not d:
-                        break
-                    b.sendall(d)
-            except OSError:
-                pass
-            finally:
-                for s in (a, b):
-                    try:
-                        s.close()
-                    except OSError:
-                        pass
-
-        def serve():
-            while not self.stop_evt.is_set():
-                try:
-                    srv.settimeout(1.0)
-                    c, _ = srv.accept()
-                except OSError:
-                    continue
-                r = socket.socket(family, socket.SOCK_STREAM)
-                try:
-                    r.connect(target)
-                except OSError:
-                    c.close()
-                    continue
-                threading.Thread(target=pipe, args=(c, r), daemon=True).start()
-                threading.Thread(target=pipe, args=(r, c), daemon=True).start()
-            srv.close()
-
-        threading.Thread(target=serve, daemon=True).start()
-        return srv.getsockname()[1]
+        return local_relay(self.host, self.port, self.stop_evt)
 
     def run(self):
         while not self.stop_evt.is_set():

@@ -104,6 +104,9 @@ export function validateDevice(kind, body, existing = {}, all = []) {
       // "isapi": the vendor's documented API. "mtrpc": the JSON-RPC firmware
       // the demo unit actually runs. "auto": detected on first contact.
       protocol: String(pick("protocol", "auto")),
+      // Keep thermal + visible video on the edge box for labelling and
+      // training (off by default: it is continuous footage, and disk).
+      record: pick("record", false) === true,
     });
     if (!["auto", "isapi", "mtrpc"].includes(out.protocol)) errs.push("protocol must be auto, isapi or mtrpc");
     errs.push(...validateCameraModel(out));
@@ -501,6 +504,7 @@ export function deviceApi({ store, json, CORS }) {
             emissivity: d.emissivity, distanceM: d.distanceM,
             calibrated: Boolean(d.rois && !d.rois.stale), serial: d.identity?.serial ?? null,
             protocol: d.protocol || "auto",
+            record: d.record === true, rtspPort: d.rtspPort,
             // JSON-RPC cameras are measured by the edge box sampling these.
             rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null } : null,
           };
