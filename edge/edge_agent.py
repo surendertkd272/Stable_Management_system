@@ -721,6 +721,70 @@ class CameraWorker(Worker):
             pass
 
 
+class MtrpcCameraWorker(CameraWorker):
+    """A JSON-RPC (/mtrpc) camera — the firmware on the Sparsh demo unit. Its
+    per-rule temperature feed sends nothing, so the ROIs stored in the portal
+    are measured here by sampling pixels: the nostril box's average ~5 times a
+    second for breathing, and the eye box's hottest pixel once per window."""
+
+    def connect(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from mtrpc import MtrpcCamera  # noqa
+        d = self.dev
+        if d.get("configError"):
+            raise RuntimeError(d["configError"])
+        cam = MtrpcCamera(d["host"], d.get("username", "admin"), d.get("password") or "", port=d.get("httpPort", 80))
+        if not cam.login():
+            raise RuntimeError("camera login failed — check the password in the Hardware page")
+        want, got = d.get("serial"), cam.identity()
+        if want and got and want != got:
+            raise RuntimeError(f"a different camera ({got}) is answering at {d['host']}; expected {want}. "
+                               "Not sampling — confirm the unit in the Hardware page.")
+        self.cam = cam
+
+    def _run_once(self):
+        rois = self.dev.get("rois")
+        if not rois or not rois.get("nostril"):
+            raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
+        if self.cam is None:
+            self.connect()
+        window, t0 = [], time.time()
+        while time.time() - t0 < self.window_s and not self.stop_evt.is_set():
+            tick = time.time()
+            rois = self.dev.get("rois") or rois               # re-aimed mid-window: follow it
+            v = self.cam.box_avg(rois["nostril"])
+            if v is not None:
+                window.append(v)
+            self.stop_evt.wait(max(0.0, (1.0 / self.target_hz) - (time.time() - tick)))
+        if self.stop_evt.is_set():
+            return
+        elapsed = time.time() - t0
+        fs = (len(window) / elapsed) if elapsed > 0 and window else self.target_hz
+        eye = self.cam.box_max(rois["eye"]) if rois.get("eye") and "x0" in rois["eye"] else None
+        calibrated = bool(self.dev.get("calibrated"))
+        meta = {"calibrated": calibrated, "method": "pixel-sampled"}
+        ts, out = now_iso(), []
+        if eye is not None:
+            out.append(dict(deviceId=self.dev["id"], metric="body_temp_c", value=round(eye, 3), unit="°C",
+                            ts=ts, source="thermal_camera", confidence=0.95 if calibrated else 0.3, meta=meta))
+        rr, quality = compute_resp_rate(window, fs, with_quality=True)
+        if rr:
+            out.append(dict(deviceId=self.dev["id"], metric="respiratory_rate_bpm", value=round(rr, 3), unit="bpm",
+                            ts=ts, source="thermal_camera",
+                            confidence=round(min(0.95, quality), 2) if calibrated else 0.3, meta=meta))
+        self.emit(out)
+
+
+def camera_worker_for(dev, sink, window_s):
+    """ISAPI or JSON-RPC, as the portal detected it; asks the camera if unknown."""
+    proto = dev.get("protocol") or "auto"
+    if proto == "auto":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from mtrpc import detect  # noqa
+        proto = "mtrpc" if detect(dev["host"], dev.get("httpPort", 80)) else "isapi"
+    return (MtrpcCameraWorker if proto == "mtrpc" else CameraWorker)(dev, sink, window_s)
+
+
 class ModbusWorker(Worker):
     """Any Modbus/TCP sensor, per its register map.
 
@@ -798,7 +862,7 @@ class EdgeRuntime:
     @staticmethod
     def _fingerprint(d):
         keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
-                "function", "addressing", "pollSeconds", "registers", "serial", "configError")
+                "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol")
         return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
 
     def apply(self, cfg):
@@ -813,7 +877,7 @@ class EdgeRuntime:
             if did in self.workers:
                 self.workers[did][0].dev = d                   # e.g. calibration changed: no restart
                 continue
-            w = CameraWorker(d, enqueue, self.window_s) if d["kind"] == "thermal_camera" else ModbusWorker(d, enqueue)
+            w = camera_worker_for(d, enqueue, self.window_s) if d["kind"] == "thermal_camera" else ModbusWorker(d, enqueue)
             print(f"[edge] starting {w.name}")
             w.start()
             self.workers[did] = (w, self._fingerprint(d))
