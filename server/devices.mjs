@@ -29,6 +29,8 @@ const TOKEN_KINDS = new Set(["edge_box", "push_device"]);
 // a single point (Point 0); readers still fall back to it.
 export const EYE_AREA_IDX = 0, NOSTRIL_IDX = 1, LEGACY_EYE_POINT_IDX = 0;
 const EYE_BOX_MAX = 4000;       // wider than this and the "max" may be a heat lamp, not the eye
+// Readings whose meaning depends on the ROIs being on the eye and nostril.
+const AIMED_METRICS = new Set(["body_temp_c", "nostril_temp_c", "respiratory_rate_bpm"]);
 
 // Freshness thresholds.
 const EDGE_ONLINE_MS = 3 * 60_000;           // edge heartbeats every 30 s
@@ -313,8 +315,11 @@ export function deviceApi({ store, json, CORS }) {
         if (!r.unit && METRICS[r.metric]) r.unit = METRICS[r.metric].unit;
         if (!r.source && dev.kind === "push_device") r.source = METRICS[r.metric]?.source ?? "push_device";
         if (dev.kind === "thermal_camera") {
-          r.source = "thermal_camera";
-          if (!dev.rois || dev.rois.stale) r.meta.calibrated = false;
+          // Vitals come off the camera's thermometry; behaviour (activity,
+          // stillness, weaving, floor events) off its thermal video.
+          r.source = r.source === "thermal_video" ? "thermal_video" : "thermal_camera";
+          // Only the vitals depend on where the ROIs are aimed.
+          if (AIMED_METRICS.has(r.metric) && (!dev.rois || dev.rois.stale)) r.meta.calibrated = false;
         }
         seen.set(dev.id, r.ts || now());
       }
@@ -496,7 +501,7 @@ export function deviceApi({ store, json, CORS }) {
             calibrated: Boolean(d.rois && !d.rois.stale), serial: d.identity?.serial ?? null,
             protocol: d.protocol || "auto",
             // JSON-RPC cameras are measured by the edge box sampling these.
-            rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril } : null,
+            rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null } : null,
           };
         }
         return {
@@ -681,7 +686,10 @@ export function deviceApi({ store, json, CORS }) {
           : b.x1 - b.x0 < 50 || b.y1 - b.y0 < 50 ? `the ${what} box is too small to measure over`
           : max && (b.x1 - b.x0 > max || b.y1 - b.y0 > max) ? `the ${what} box is too large — its hottest pixel may be something other than the eye`
           : null;
-      const why = badBox(eye, "eye", EYE_BOX_MAX) || badBox(n, "nostril");
+      // Optional: where the horse stands and urinates/defecates, for the
+      // floor-event detector. Sent as null to remove it.
+      const floor = body.floor ?? null;
+      const why = badBox(eye, "eye", EYE_BOX_MAX) || badBox(n, "nostril") || (floor ? badBox(floor, "floor") : null);
       if (why) return json(400, { error: why });
       const box = (b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
       if (await protocolOf(dev) === "mtrpc") {
@@ -696,7 +704,7 @@ export function deviceApi({ store, json, CORS }) {
           if (e instanceof IdentityMismatch) return json(409, { error: e.message, code: e.code });
           verify = { verified: null, detail: `stored in EquiCare; the camera's own rule display was not updated (${e.message})` };
         }
-        const rois = { eye: box(eye), nostril: box(n), pushedAt: now(), verified: verify.verified };
+        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), pushedAt: now(), verified: verify.verified };
         store.update("devices", dev.id, { rois, verification: null });
         event(dev, actorOf(who), "calibrated",
           `eye box (${eye.x0}, ${eye.y0})–(${eye.x1}, ${eye.y1}), nostril (${n.x0}, ${n.y0})–(${n.x1}, ${n.y1}); ${verify.detail}`);
@@ -726,7 +734,7 @@ export function deviceApi({ store, json, CORS }) {
           event(dev, actorOf(who), "calibration not confirmed", out.verify.detail);
           return json(502, { error: `ROIs sent, but ${out.verify.detail}`, results, verify: out.verify });
         }
-        const rois = { eye: box(eye), nostril: box(n), pushedAt: now(), verified: out.verify.verified };
+        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), pushedAt: now(), verified: out.verify.verified };
         // A new aim has not been checked yet: any earlier verification was of
         // the old ROIs.
         store.update("devices", dev.id, { rois, verification: null });

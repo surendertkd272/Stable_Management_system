@@ -32,7 +32,7 @@ import { Modal, Sparkline } from "../components/ui";
 import { useStable, useToast } from "../store";
 import { useAuth } from "../auth";
 
-type Rois = { eye: RoiBox; nostril: RoiBox };
+type Rois = { eye: RoiBox; nostril: RoiBox; floor?: RoiBox | null };
 
 // Where the edge agent points ROIs on an uncalibrated camera — frame centre.
 const DEFAULT_ROIS: Rois = { eye: { x0: 4850, y0: 4880, x1: 5150, y1: 5120 }, nostril: { x0: 4200, y0: 5200, x1: 5800, y1: 6400 } };
@@ -1218,8 +1218,9 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
   const notify = useToast();
   const [thermal, setThermal] = useState<Snap | null>(null);
   const [visible, setVisible] = useState<Snap | null>(null);
-  const [rois, setRois] = useState<Rois>(() => (cam.rois ? { eye: toBox(cam.rois.eye, "eye"), nostril: cam.rois.nostril } : DEFAULT_ROIS));
-  const [mode, setMode] = useState<"eye" | "nostril">("eye");
+  const [rois, setRois] = useState<Rois>(() =>
+    cam.rois ? { eye: toBox(cam.rois.eye, "eye"), nostril: cam.rois.nostril, floor: cam.rois.floor ?? null } : DEFAULT_ROIS);
+  const [mode, setMode] = useState<"eye" | "nostril" | "floor">("eye");
   const [live, setLive] = useState(true);
   const [busy, setBusy] = useState(false);
   const [pushed, setPushed] = useState<{ at: string; detail: string; verified: boolean | null } | null>(
@@ -1407,6 +1408,9 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
               <button className={mode === "nostril" ? "on" : ""} onClick={() => setMode("nostril")}>
                 2 · Nostril box
               </button>
+              <button className={mode === "floor" ? "on" : ""} onClick={() => setMode("floor")} title="Optional: for urination and excretion">
+                3 · Floor
+              </button>
             </div>
             <label className="hw-check" style={{ margin: 0, alignItems: "center" }}>
               <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
@@ -1439,7 +1443,9 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
           <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
             {mode === "eye"
               ? "Drag a small box around the eye. The camera reads the hottest pixel inside it — the inner corner of the eye — so it does not have to be exact."
-              : "Drag a tight box over the nostril. Breathing is read from the box's average, so keep coat and background out of it."}{" "}
+              : mode === "nostril"
+                ? "Drag a tight box over the nostril. Breathing is read from the box's average, so keep coat and background out of it."
+                : "Optional: drag a box over the floor where the horse stands. Fresh urine and manure show as warm patches there (prototype detector). Keep the horse's body out of it if you can."}{" "}
             Tip: wait until the horse stands still in the live view before drawing.
           </p>
           {eyeW > EYE_BOX_WARN || eyeH > EYE_BOX_WARN ? (
@@ -1468,7 +1474,7 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
             For orientation only — aim on the thermal image (the vendor provides no visible↔thermal mapping).
           </p>
 
-          <p className="hw-legend">3 · Check the aim</p>
+          <p className="hw-legend">Check the aim</p>
           {pushError && (
             <div className="row urgent" style={{ padding: "10px 14px", marginBottom: 10 }}>
               <XCircle size={16} style={{ flexShrink: 0 }} />
@@ -1597,7 +1603,7 @@ function toBox(b: RoiBox | { x: number; y: number }, kind: "eye" | "nostril"): R
  *  hottest-pixel marker. Pointer events, so it works with a finger on a tablet
  *  in the barn as well as a mouse. */
 function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
-  src: string; rois: Rois; mode: "eye" | "nostril"; onChange: (r: Rois) => void;
+  src: string; rois: Rois; mode: "eye" | "nostril" | "floor"; onChange: (r: Rois) => void;
   onDrag: (dragging: boolean) => void; hotspot: { x: number; y: number } | null;
 }) {
   const stage = useRef<HTMLDivElement>(null);
@@ -1626,8 +1632,9 @@ function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
     start.current = null;
     onDrag(false);
     const b = rois[mode];
+    if (!b) return;
     // A tap without a drag: a usable box centred on the tap.
-    const [minW, hw, hh] = mode === "eye" ? [100, 150, 120] : [150, 400, 300];
+    const [minW, hw, hh] = mode === "eye" ? [100, 150, 120] : mode === "nostril" ? [150, 400, 300] : [300, 1500, 800];
     if (b.x1 - b.x0 < minW || b.y1 - b.y0 < minW)
       set({ x0: clamp(b.x0 - hw), y0: clamp(b.y0 - hh), x1: clamp(b.x0 + hw), y1: clamp(b.y0 + hh) });
   };
@@ -1637,6 +1644,11 @@ function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
     <div ref={stage} className="hw-stage" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt="Thermal camera view" draggable={false} />
+      {rois.floor && (
+        <div className={`hw-box floor ${mode === "floor" ? "active" : ""}`} style={boxStyle(rois.floor)}>
+          <span>floor · warm patches</span>
+        </div>
+      )}
       <div className={`hw-box ${mode === "nostril" ? "active" : ""}`} style={boxStyle(rois.nostril)}>
         <span>nostril · average</span>
       </div>

@@ -112,6 +112,15 @@ test("a box missing the eye reads coat, not a fabricated eye temperature", async
   assert.equal(t.body.eye.c, 30, "background, so the calibrator's 'probably off the eye' hint can fire");
 });
 
+test("an optional floor box is stored and sent to the edge box; a tiny one is refused", async () => {
+  const eye = { x0: 3000, y0: 3000, x1: 3600, y1: 3600 }, nostril = { x0: 5000, y0: 6200, x1: 6000, y1: 7000 };
+  assert.equal((await admin("PUT", `/api/devices/${ids.cam}/rois`, { eye, nostril, floor: { x0: 0, y0: 0, x1: 10, y1: 10 } })).status, 400);
+  const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, { eye, nostril, floor: { x0: 1000, y0: 7500, x1: 9000, y1: 9800 } });
+  assert.equal(r.status, 200, r.raw);
+  const c = await call("GET", "/edge/config", { token: tokens.edge });
+  assert.deepEqual(c.body.devices.find((x) => x.id === ids.cam).rois.floor, { x0: 1000, y0: 7500, x1: 9000, y1: 9800 });
+});
+
 test("the edge box receives the protocol and the ROIs to sample", async () => {
   const c = await call("GET", "/edge/config", { token: tokens.edge });
   const d = c.body.devices.find((x) => x.id === ids.cam);

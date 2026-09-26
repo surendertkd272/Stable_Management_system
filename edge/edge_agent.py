@@ -722,10 +722,24 @@ class CameraWorker(Worker):
 
 
 class MtrpcCameraWorker(CameraWorker):
-    """A JSON-RPC (/mtrpc) camera — the firmware on the Sparsh demo unit. Its
-    per-rule temperature feed sends nothing, so the ROIs stored in the portal
-    are measured here by sampling pixels: the nostril box's average ~5 times a
-    second for breathing, and the eye box's hottest pixel once per window."""
+    """A JSON-RPC (/mtrpc) camera — the firmware on the Sparsh demo unit.
+
+    Two data paths, each used for what it is good at:
+      pixel reads (absolute °C, ~1 refresh/s): eye temperature (hottest pixel
+        in the eye box), the nostril box's average °C, floor warm patches;
+      thermal video (25 fps, relative brightness): breathing rhythm, activity,
+        stillness, weaving — see video_analytics.py.
+    Without ffmpeg the video path is off and breathing falls back to pixel
+    sampling (too slow on this firmware to find a rhythm reliably)."""
+
+    FLOOR_EVERY_S = 5.0
+
+    def __init__(self, dev, sink, window_s=60, target_hz=5.0):
+        super().__init__(dev, sink, window_s, target_hz)
+        self.video = None
+        self.analyzer = None
+        self.floor = None
+        self._lock = threading.Lock()
 
     def connect(self):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -741,6 +755,36 @@ class MtrpcCameraWorker(CameraWorker):
             raise RuntimeError(f"a different camera ({got}) is answering at {d['host']}; expected {want}. "
                                "Not sampling — confirm the unit in the Hardware page.")
         self.cam = cam
+        self._start_video()
+
+    def _start_video(self):
+        from video_analytics import ThermalStream, WindowAnalyzer, box_px  # noqa
+        if self.video is not None and self.video.is_alive():
+            return
+        self.analyzer = WindowAnalyzer()
+        self._box_px = box_px
+
+        def on_frame(frame, _t):
+            rois = self.dev.get("rois") or {}
+            nb = box_px(rois["nostril"]) if rois.get("nostril") else None
+            with self._lock:
+                self.analyzer.feed(frame, nb)
+
+        d = self.dev
+        self.video = ThermalStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_frame,
+                                   port=d.get("rtspPort", 554))
+        self.video.start()
+
+    def _floor_scan(self, rois):
+        from video_analytics import FloorWatcher  # noqa
+        from mtrpc import to_cam, clamp_cam  # noqa
+        if not rois.get("floor"):
+            self.floor = None
+            return None
+        if self.floor is None:
+            self.floor = FloorWatcher()
+        pts = [{"x": clamp_cam(to_cam(p["x"])), "y": clamp_cam(to_cam(p["y"]))} for p in self.floor.grid(rois["floor"])]
+        return self.floor.scan(self.cam.read_pixels(pts))
 
     def _run_once(self):
         rois = self.dev.get("rois")
@@ -748,31 +792,78 @@ class MtrpcCameraWorker(CameraWorker):
             raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
         if self.cam is None:
             self.connect()
-        window, t0 = [], time.time()
+        video_ok = self.video is not None and self.video.is_alive() and not self.video.error
+        with self._lock:
+            self.analyzer.reset()
+        pixel_window, floor_events = [], []
+        t0 = last_floor = time.time()
         while time.time() - t0 < self.window_s and not self.stop_evt.is_set():
             tick = time.time()
             rois = self.dev.get("rois") or rois               # re-aimed mid-window: follow it
-            v = self.cam.box_avg(rois["nostril"])
-            if v is not None:
-                window.append(v)
-            self.stop_evt.wait(max(0.0, (1.0 / self.target_hz) - (time.time() - tick)))
+            if not video_ok:                                  # fallback: pixel-sampled breathing
+                v = self.cam.box_avg(rois["nostril"])
+                if v is not None:
+                    pixel_window.append(v)
+            if tick - last_floor >= self.FLOOR_EVERY_S:
+                ev = self._floor_scan(rois)
+                if ev:
+                    floor_events.append(ev)
+                last_floor = tick
+            self.stop_evt.wait(max(0.0, (1.0 / self.target_hz if not video_ok else 1.0) - (time.time() - tick)))
         if self.stop_evt.is_set():
             return
-        elapsed = time.time() - t0
-        fs = (len(window) / elapsed) if elapsed > 0 and window else self.target_hz
+        with self._lock:
+            summary = self.analyzer.summary(compute_resp_rate) if video_ok else {}
         eye = self.cam.box_max(rois["eye"]) if rois.get("eye") and "x0" in rois["eye"] else None
+        nostril_c = self.cam.box_avg(rois["nostril"])
         calibrated = bool(self.dev.get("calibrated"))
-        meta = {"calibrated": calibrated, "method": "pixel-sampled"}
         ts, out = now_iso(), []
+        dev_id = self.dev["id"]
+
+        def add(metric, value, unit, source="thermal_camera", conf=0.95, **meta):
+            out.append(dict(deviceId=dev_id, metric=metric, value=round(value, 3), unit=unit, ts=ts,
+                            source=source, confidence=round(conf, 2), meta=meta))
+
+        vit = {"calibrated": calibrated}
         if eye is not None:
-            out.append(dict(deviceId=self.dev["id"], metric="body_temp_c", value=round(eye, 3), unit="°C",
-                            ts=ts, source="thermal_camera", confidence=0.95 if calibrated else 0.3, meta=meta))
-        rr, quality = compute_resp_rate(window, fs, with_quality=True)
-        if rr:
-            out.append(dict(deviceId=self.dev["id"], metric="respiratory_rate_bpm", value=round(rr, 3), unit="bpm",
-                            ts=ts, source="thermal_camera",
-                            confidence=round(min(0.95, quality), 2) if calibrated else 0.3, meta=meta))
+            add("body_temp_c", eye, "°C", conf=0.95 if calibrated else 0.3, method="eye box, hottest pixel", **vit)
+        if nostril_c is not None:
+            add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
+        br = summary.get("breathing") or {}
+        if br.get("bpm"):
+            add("respiratory_rate_bpm", br["bpm"], "bpm", conf=min(0.95, br["strength"]) if calibrated else 0.3,
+                method="thermal video, nostril box", regularity=round(br["strength"], 2), **vit)
+        elif not video_ok:
+            rr, q = compute_resp_rate(pixel_window, len(pixel_window) / self.window_s if pixel_window else 1, with_quality=True)
+            if rr:
+                add("respiratory_rate_bpm", rr, "bpm", conf=min(0.95, q) if calibrated else 0.3,
+                    method="pixel sampling", regularity=round(q, 2), **vit)
+        # Behaviour — prototype heuristics, reported as such (source thermal_video).
+        proto = {"prototype": True}
+        if "activity" in summary:
+            add("activity_index", summary["activity"], "0..1", source="thermal_video", conf=0.6,
+                method="thermal video motion", **proto)
+            add("inactive_minutes", summary["inactive_min"], "min", source="thermal_video", conf=0.6,
+                method="thermal video stillness (not lying-down)", **proto)
+        wv = summary.get("weave") or {}
+        if wv.get("detected"):
+            add("vice_event", 1, "event", source="thermal_video", conf=min(0.8, wv["strength"]),
+                kind="weaving", hz=round(wv["hz"], 2), swing=round(wv["swing"], 3), method="side-to-side sway rhythm", **proto)
+        for ev in floor_events:
+            add(f"{ev['kind']}_event", 1, "event", source="thermal_video", conf=0.6 if ev["shape_agrees"] else 0.4,
+                minutes_warm=round(ev["minutes_warm"], 1), peak_c=round(ev["peak_c"], 1),
+                peak_area=round(ev["peak_area"], 3), method="warm patch on the floor box", **proto)
         self.emit(out)
+
+    def stop(self):
+        Worker.stop(self)
+        if self.video is not None:
+            self.video.stop()
+        try:
+            if self.cam is not None:
+                self.cam.logout()                     # the camera allows only a couple of sessions
+        except Exception:                                   # noqa: BLE001
+            pass
 
 
 def camera_worker_for(dev, sink, window_s):

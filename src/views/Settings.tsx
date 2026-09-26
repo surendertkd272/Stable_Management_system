@@ -53,6 +53,7 @@ export default function SettingsPage() {
     if (!coverage) return undefined;                     // unknown (no backend)
     const st = sourceStatus.get(source);
     if (st === "available") return undefined;            // ready — no annotation
+    if (st === "prototype") return undefined;            // produced today (heuristic)
     return st === "model-pending" ? "model not trained yet" : `needs ${need}`;
   };
 
@@ -210,21 +211,23 @@ function CoverageCard() {
   // group metrics under their monitoring point
   const points = new Map<
     number,
-    { labels: string[]; available: boolean; modelPending: boolean; sources: Set<string> }
+    { labels: string[]; available: boolean; prototype: boolean; modelPending: boolean; sources: Set<string> }
   >();
   for (const r of rows) {
     const p =
       points.get(r.point) ??
-      { labels: [], available: false, modelPending: false, sources: new Set<string>() };
+      { labels: [], available: false, prototype: false, modelPending: false, sources: new Set<string>() };
     p.labels.push(r.label);
     if (r.status === "available") p.available = true;
     if (r.status === "model-pending") p.modelPending = true;
+    if (r.status === "prototype") p.prototype = true;
     p.sources.add(r.source.replace(/_/g, " "));
     points.set(r.point, p);
   }
   const ordered = [...points.entries()].sort((a, b) => a[0] - b[0]);
   const liveCount = ordered.filter(([, p]) => p.available).length;
   const modelCount = ordered.filter(([, p]) => !p.available && p.modelPending).length;
+  const protoCount = ordered.filter(([, p]) => !p.available && p.prototype).length;
 
   return (
     <div className="card" style={{ gridColumn: "1 / -1" }}>
@@ -232,13 +235,15 @@ function CoverageCard() {
         <h3>Monitoring coverage</h3>
         <span className="pill accent">
           {liveCount} of {ordered.length} points sourced
+          {protoCount > 0 && ` · ${protoCount} prototype`}
           {modelCount > 0 && ` · ${modelCount} awaiting model`}
         </span>
       </div>
       <p className="muted" style={{ fontSize: 13, marginTop: -4, marginBottom: 14 }}>
         Which of the 12 monitoring points have a live data source today. "Model" means the
         camera is installed but the vision model for that point still needs labelled footage;
-        "pending" means the sensor itself is not procured yet. The software already carries
+        "prototype" means the camera produces it today with a heuristic still to be validated
+        on real horses; "pending" means the sensor itself is not procured yet. The software already carries
         the data for all of them.
       </p>
       <div className="grid cols-2" style={{ gap: 10 }}>
@@ -250,10 +255,14 @@ function CoverageCard() {
               </b>
               <span>{[...p.sources].join(", ")}</span>
             </div>
-            <span className={`pill ${p.available ? "ok" : "muted"}`}>
+            <span className={`pill ${p.available ? "ok" : p.prototype ? "warn" : "muted"}`}>
               {p.available ? (
                 <>
                   <CheckCircle2 size={13} /> live
+                </>
+              ) : p.prototype ? (
+                <>
+                  <CheckCircle2 size={13} /> prototype
                 </>
               ) : p.modelPending ? (
                 <>

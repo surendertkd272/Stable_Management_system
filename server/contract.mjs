@@ -13,17 +13,20 @@ export const METRICS = {
   body_temp_c:          { point: 2,  label: "Body temperature",     unit: "°C",    source: "thermal_camera", kind: "sample" },
   nostril_temp_c:       { point: 3,  label: "Respiration (raw)",    unit: "°C",    source: "thermal_camera", kind: "sample" },
   respiratory_rate_bpm: { point: 4,  label: "Respiratory rate",     unit: "bpm",   source: "thermal_camera", kind: "sample" },
-  activity_index:       { point: 5,  label: "Activity",             unit: "0..1",  source: "imu_optical",    kind: "sample" },
+  activity_index:       { point: 5,  label: "Activity",             unit: "0..1",  source: "thermal_video",  kind: "sample" },
   rest_minutes:         { point: 6,  label: "Rest / lying",         unit: "min",   source: "imu_optical",    kind: "sample" },
   outside_minutes:      { point: 6,  label: "Time outside box",     unit: "min",   source: "optical",        kind: "sample" },
+  // Stillness measured from video. NOT lying-down time (rest_minutes, which
+  // the "low lying-down time" alert uses) — a horse can stand still, dozing.
+  inactive_minutes:     { point: 6,  label: "Inactive (still)",     unit: "min",   source: "thermal_video",  kind: "sample" },
   gait_asymmetry:       { point: 7,  label: "Lameness / gait",      unit: "0..1",  source: "imu_optical",    kind: "sample" },
-  vice_event:           { point: 8,  label: "Stable vice",          unit: "event", source: "optical_audio",  kind: "event" }, // meta.kind: weaving|crib_biting|wind_sucking
+  vice_event:           { point: 8,  label: "Stable vice (weaving)", unit: "event", source: "thermal_video", kind: "event" }, // meta.kind: weaving (video); crib_biting|wind_sucking need a model / microphone
   water_ml:             { point: 9,  label: "Water intake",         unit: "ml",    source: "flow_meter",     kind: "sample" },
   water_visit:          { point: 9,  label: "Water visit",          unit: "event", source: "flow_meter",     kind: "event" },
   feed_intake_g:        { point: 10, label: "Feed intake",          unit: "g",     source: "feeder",         kind: "sample" },
   feed_refusal_g:       { point: 10, label: "Feed refusal",         unit: "g",     source: "feeder",         kind: "sample" },
-  urination_event:      { point: 11, label: "Urination",            unit: "event", source: "optical",        kind: "event" },
-  excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "optical",        kind: "event" },
+  urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
+  excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },
 };
 
 // Which of the 12 points can we actually source *today* (camera only) vs. need
@@ -37,8 +40,12 @@ export const METRICS = {
 //   pending       — the sensor itself is not procured
 // Anything other than "available" means no data will arrive, so the rollup
 // reports those metrics as "not measured" rather than as zero.
+//   prototype     — sensor in hand and the metric is produced today by a
+//                   heuristic whose thresholds are not yet validated on real
+//                   horses (readings carry meta.method)
 export const SOURCE_STATUS = {
   thermal_camera: "available",   // camera in hand — points 2,3,4 measured directly off thermometry
+  thermal_video:  "prototype",   // same camera's thermal video: activity, stillness, weaving, urination/excretion
   optical:        "model-pending", // same camera's visible stream, but points 6/11/12 need our CV models
   optical_audio:  "pending",     // microphone RFI not yet placed
   imu:            "pending",     // IMU leg tag RFI not yet placed

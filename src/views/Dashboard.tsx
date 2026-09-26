@@ -120,15 +120,17 @@ export default function Dashboard() {
     };
   }, []);
 
-  const points = new Map<number, { live: boolean; model: boolean }>();
+  const points = new Map<number, { live: boolean; proto: boolean; model: boolean }>();
   for (const r of coverage ?? []) {
-    const p = points.get(r.point) ?? { live: false, model: false };
+    const p = points.get(r.point) ?? { live: false, proto: false, model: false };
     if (r.status === "available") p.live = true;
+    if (r.status === "prototype") p.proto = true;
     if (r.status === "model-pending") p.model = true;
     points.set(r.point, p);
   }
   const livePoints = [...points.values()].filter((p) => p.live).length;
   const modelPoints = [...points.values()].filter((p) => !p.live && p.model).length;
+  const protoPoints = [...points.values()].filter((p) => !p.live && p.proto).length;
 
   // Incidents for the focus horse, from real alerts — never invented.
   const focusAlerts = alerts
@@ -520,6 +522,7 @@ export default function Dashboard() {
               <b style={{ fontSize: 15, color: "var(--ink)" }}>
                 {livePoints} of {points.size} monitoring points live
               </b>
+              {protoPoints > 0 && <span className="pill warn">{protoPoints} prototype</span>}
               {modelPoints > 0 && <span className="pill muted">{modelPoints} awaiting model</span>}
             </div>
             <div className="progress" style={{ height: 7, marginBottom: 16 }}>
