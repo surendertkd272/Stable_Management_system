@@ -90,6 +90,21 @@ footage from this camera at real stalls, with events marked.
 
 Ask the stable's permission before recording, and switch it off when not needed.
 
+## What the behaviour models can and cannot do (tested 26 Sep)
+
+- **Activity (movement) is sound.** Checked against zoologists' labels on
+  4.5 h of zebra video (KABR, CC0): our movement measure separates moving
+  from grazing/standing on 80 % of frames. It also ignored sunlight moving
+  over an empty stall in a real stable recording.
+- **An empty stall is not a resting horse.** In that recording the pen was
+  empty 87 of 133 minutes; stillness alone would have counted those as rest.
+  The edge agent now reports nothing unless a warm body is in view.
+- **No posture model is deployed.** A posture model trained on the zebras
+  (75 % right on zebras) got 24 % on horses in a stall and called an empty
+  pen "moving" at 98 % confidence. Models trained elsewhere are confidently
+  wrong here — posture (head down eating / head up / lying) needs hours of
+  labelled footage from OUR camera: record at the demos and label it.
+
 ## Saying it accurately
 
 - Temperature is **±2 °C** (the datasheet): read it as a trend against the

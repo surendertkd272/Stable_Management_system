@@ -25,6 +25,7 @@ export const LABELS = [
   { key: "pawing", name: "Pawing", kind: "interval", shortcut: "p" },
   { key: "rolling", name: "Rolling", kind: "interval", shortcut: "r" },
   { key: "crib_biting", name: "Crib-biting / wind-sucking", kind: "interval", shortcut: "c" },
+  { key: "nursing", name: "Nursing / suckling (foal)", kind: "interval", shortcut: "n" },
   { key: "out_of_view", name: "Horse out of view", kind: "interval", shortcut: "o" },
   // moment labels: something that happens
   { key: "lies_down", name: "Lies down (moment)", kind: "moment", shortcut: "1" },
