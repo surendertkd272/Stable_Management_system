@@ -353,3 +353,37 @@ class FloorWatcher:
             elif i not in warm:
                 self.base[i] += 0.05 * (t - self.base[i])
         return done
+
+
+# --------------------------------------------------------------------------- #
+# Is a horse there at all?
+#
+# Learned from a real stable recording (a mare-and-foal pen, 2 h 13 min): the
+# pen was EMPTY for 87 of 133 minutes, and a movement-only rule counted 86 of
+# those as "a horse at rest" — stillness is not rest when nobody is there. Nor
+# can movement decide presence: a horse dozing or lying still moves as little
+# as an empty pen. A thermal camera can do better: a horse is warm.
+# --------------------------------------------------------------------------- #
+PRESENT_CONTRAST_C = 2.5          # warmest cells vs coolest cells of the frame
+PRESENT_EYE_C = 32.0              # the eye box's hottest pixel, if a horse is in it
+
+
+def horse_present(grid_c, eye_max_c=None):
+    """grid_c: °C over a coarse grid of the whole frame (None = no reading).
+    Returns (present: bool | None, reason). None = cannot tell (no readings).
+
+    Present when the frame holds a clearly warmer body than its background, or
+    when the eye box reads like a living eye. The second rule covers a head
+    filling the frame at stall distance (no background to contrast with); it
+    will over-report in ambient heat above ~32 °C — noted, not solved."""
+    vals = sorted(v for v in grid_c if v is not None)
+    if len(vals) < 8 and eye_max_c is None:
+        return None, "no temperature readings"
+    if vals:
+        hi = vals[int(0.95 * (len(vals) - 1))]
+        lo = vals[int(0.10 * (len(vals) - 1))]
+        if hi - lo >= PRESENT_CONTRAST_C:
+            return True, f"warm body {hi:.1f} °C against {lo:.1f} °C"
+    if eye_max_c is not None and eye_max_c >= PRESENT_EYE_C:
+        return True, f"eye box {eye_max_c:.1f} °C"
+    return False, "no warm body in view"

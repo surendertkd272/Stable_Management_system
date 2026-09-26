@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from edge_agent import compute_resp_rate  # noqa: E402
-from video_analytics import W, H, FPS, WindowAnalyzer, FloorWatcher, box_px  # noqa: E402
+from video_analytics import W, H, FPS, WindowAnalyzer, FloorWatcher, box_px, horse_present  # noqa: E402
 
 rng = random.Random(7)
 fails = 0
@@ -98,6 +98,17 @@ check("compact patch staying warm: excretion", len(manure) == 1 and manure[0]["k
 check("shape agrees for both", urine and manure and urine[0]["shape_agrees"] and manure[0]["shape_agrees"])
 nothing = floor_run([], 0)
 check("empty floor: no events", nothing == [], nothing)
+
+# Presence: an empty stall is not a resting horse.
+empty = [26.0 + rng.gauss(0, 0.3) for _ in range(48)]
+check("empty stall: not present", horse_present(empty)[0] is False, horse_present(empty))
+horse = empty[:]
+for i in range(12, 24):
+    horse[i] = 33.5 + rng.gauss(0, 0.3)
+check("warm body in view: present", horse_present(horse)[0] is True, horse_present(horse))
+close = [33.0 + rng.gauss(0, 0.3) for _ in range(48)]      # head fills the frame, no background
+check("head filling the frame: present via the eye box", horse_present(close, eye_max_c=35.2)[0] is True)
+check("no readings: cannot tell", horse_present([None] * 48)[0] is None)
 
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

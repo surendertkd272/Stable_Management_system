@@ -820,6 +820,21 @@ class MtrpcCameraWorker(CameraWorker):
         ts, out = now_iso(), []
         dev_id = self.dev["id"]
 
+        # Is a horse there at all? An empty stall is not a horse at rest, and
+        # its "eye box" reads the wall. (A real recording: empty 87 of 133
+        # minutes, 86 of which a movement-only rule counted as rest.)
+        from video_analytics import horse_present  # noqa
+        from mtrpc import grid_points  # noqa
+        grid = self.cam.read_pixels(grid_points({"x0": 0, "y0": 0, "x1": 10000, "y1": 10000}, 8))
+        present, why = horse_present(grid, eye)
+        if present is False:
+            if getattr(self, "_absent_logged", False) is False:
+                print(f"[edge] {self.name}: no horse in view ({why}) — reporting nothing until one is")
+                self._absent_logged = True
+            self.emit([])
+            return
+        self._absent_logged = False
+
         def add(metric, value, unit, source="thermal_camera", conf=0.95, **meta):
             out.append(dict(deviceId=dev_id, metric=metric, value=round(value, 3), unit=unit, ts=ts,
                             source=source, confidence=round(conf, 2), meta=meta))
@@ -839,7 +854,7 @@ class MtrpcCameraWorker(CameraWorker):
                 add("respiratory_rate_bpm", rr, "bpm", conf=min(0.95, q) if calibrated else 0.3,
                     method="pixel sampling", regularity=round(q, 2), **vit)
         # Behaviour — prototype heuristics, reported as such (source thermal_video).
-        proto = {"prototype": True}
+        proto = {"prototype": True, "presence": why}
         if "activity" in summary:
             add("activity_index", summary["activity"], "0..1", source="thermal_video", conf=0.6,
                 method="thermal video motion", **proto)
