@@ -3,10 +3,14 @@
 Everything runs on the Mac: the site server, the edge agent, and the camera on
 a cable. No internet is needed at the stable.
 
-> **Still pending:** the camera's admin password (from Sparsh). Until then the
-> camera cannot be added — this unit speaks a JSON-RPC protocol, not the ISAPI
-> the vendor documented, and its driver is finished and tested once we can log
-> in. Items marked ⏳ depend on that.
+> **The camera (checked 26 Sep):** Sparsh demo unit, hardware TPC-B3404-ILP,
+> firmware V0.4.5, **25 mm thermal lens**. It runs a JSON-RPC firmware, not the
+> ISAPI the vendor documented — EquiCare detects this and measures the eye
+> and nostril boxes itself by sampling pixels. Set on the camera so far:
+> **body-surface mode** (not the human "body temperature" correction) and the
+> clock. Emissivity (0.95) and distance (1 m) are still the camera's own
+> values — set them on the day if you want them changed. Login: `admin` and
+> the password from Sparsh (not written here).
 
 ## Pack
 
@@ -26,9 +30,9 @@ is fixed at 3.5 m; figures from Sparsh):
 | 13 mm | 2 – 11 m | 12–13 / 9–10 |
 | 25 mm | **3.0 – 4.3 m only** | 24 / 18 |
 
-⏳ The lens is read from the camera once we can log in. Aim for about 3.5 m,
-level with the head, out of direct sun (the camera's limit is 50 °C). The
-infrared lamp is 850 nm and glows faintly red at night.
+**This unit has the 25 mm lens: mount it 3.0–4.3 m from the head** (aim for
+3.5 m), level with the head, out of direct sun (the camera's limit is 50 °C).
+The infrared lamp is 850 nm and glows faintly red at night.
 
 ## Start
 
@@ -43,10 +47,12 @@ token (Hardware → **Add edge box** → copy the token → paste). After that i
 starts with no questions. **Ctrl-C** stops everything. Horses, devices and
 readings persist in `~/EquiCare-demo`.
 
-## Once, before the day ⏳
+## Once, before the day
 
-1. Hardware → **Add camera**: its IP address, `admin` and the password, stall,
-   lens, distance, *Polled by* the edge box.
+1. Hardware → **Add camera**: as IP address use what `scripts/demo.sh` prints
+   ("camera found at fe80::…%en8" — on a direct cable the Mac reaches it this
+   way, no network settings needed), `admin` and the password, stall, variant
+   640, lens 25 mm, *Polled by* the edge box, protocol *Detect automatically*.
 2. **Test connection** — every step green; the serial number is pinned.
 3. Rehearse on a person: eye box on the inner corner of their eye (35–37 °C),
    nostril box under the nose, breathing check against a hand count.
@@ -86,3 +92,5 @@ readings persist in `~/EquiCare-demo`.
 | Check *disagrees* with the hand count | Re-aim the nostril box tighter and repeat |
 | Eye reads below 33 °C | The eye box is on coat or background — move it onto the eye |
 | Port 8080 in use | `kill $(lsof -tiTCP:8080 -sTCP:LISTEN)` then start again |
+| *Camera not found on any cable* | Power the camera, check the adapter; if the adapter moved to another port, the address printed changes — edit the camera's IP in the Hardware page |
+| Test: *body-temperature mode* | Switch the camera to body-surface mode (its web page → Measurement → Global) |

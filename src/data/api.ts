@@ -262,6 +262,8 @@ export interface ThermalCamera extends DeviceCommon {
   variant: "256" | "384" | "640"; thermalLens: string; visibleLens: string;
   distanceM: number; emissivity: number;
   rois: CameraRois | null; lastProbe: CameraProbe | null;
+  /** "mtrpc" = the JSON-RPC firmware on the Sparsh demo unit; "auto" until detected. */
+  protocol?: "auto" | "isapi" | "mtrpc";
   identity: { serial: string; model: string | null; firmware?: string | null; pinnedAt: string } | null;
   /** The last aim check: breathing found by the edge agent's own algorithm,
    *  against a hand count. Applies only while `roisAt` matches rois.pushedAt. */
@@ -339,7 +341,19 @@ export const probeDevice = (id: string, acceptIdentity = false) =>
   call<CameraProbe | SensorProbe>("POST", dpath(id, "probe") + (acceptIdentity ? "?acceptIdentity=1" : ""), undefined, 45000);
 export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril">) =>
   call<{ ok: true; rois: CameraRois; verify: { verified: boolean | null; detail: string } }>("PUT", dpath(id, "rois"), rois, 30000);
-export const readCameraTemps = (id: string) => call<CameraTemps>("GET", dpath(id, "temps"));
+/** Live ROI temperatures. `parts: "nostril"` is the fast path for the
+ *  breathing check; `rois` measures boxes not yet pushed (JSON-RPC cameras
+ *  are measured by EquiCare, so it can read any box while you aim). */
+export const readCameraTemps = (id: string, opts: { parts?: "nostril"; rois?: { eye: RoiBox; nostril: RoiBox } } = {}) => {
+  const q = new URLSearchParams();
+  if (opts.parts) q.set("parts", opts.parts);
+  if (opts.rois) {
+    const b = (x: RoiBox) => [x.x0, x.y0, x.x1, x.y1].join(",");
+    q.set("eye", b(opts.rois.eye));
+    q.set("nostril", b(opts.rois.nostril));
+  }
+  return call<CameraTemps>("GET", dpath(id, "temps") + (q.size ? `?${q}` : ""));
+};
 export const saveVerification = (id: string, v: {
   breathing: { bpm: number; periodicity: number; seconds: number; samples: number };
   handCountBpm: number | null; eyeC: number | null; nostrilSwingC: number | null;

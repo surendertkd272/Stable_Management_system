@@ -454,7 +454,10 @@ function CameraFacts({ cam, edge }: { cam: ThermalCamera; edge: string }) {
       <div><span>Edge box</span><b>{edge}</b></div>
       <div>
         <span>Network</span>
-        <b>{cam.https ? "https" : "http"}://{cam.host}:{cam.httpPort} · RTSP {cam.rtspPort} · Modbus {cam.modbusPort}</b>
+        <b>
+          {cam.https ? "https" : "http"}://{cam.host}:{cam.httpPort} · RTSP {cam.rtspPort}
+          {cam.protocol === "mtrpc" ? " · JSON-RPC firmware" : cam.protocol === "isapi" ? ` · ISAPI · Modbus ${cam.modbusPort}` : " · protocol detected on the first test"}
+        </b>
       </div>
       <div>
         <span>Optics</span>
@@ -852,6 +855,7 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
     case "thermal_camera": return {
       ...common, stall, edgeId, host: "", httpPort: 80, https: false, rtspPort: 554, modbusPort: 502,
       username: "admin", password: "", variant: "640", thermalLens: "13", visibleLens: "4", distanceM: 3.5, emissivity: 0.98,
+      protocol: "auto",
     };
     case "modbus_sensor": return {
       ...common, stall, edgeId, host: "", port: 502, unitId: 1, function: 3, addressing: "zero-based", pollSeconds: 10,
@@ -998,10 +1002,20 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
                 )}
               </div>
               {isCamera && (
-                <label className="hw-check">
-                  <input type="checkbox" checked={Boolean(f.https)} onChange={(e) => set("https", e.target.checked)} /> Use
-                  HTTPS (camera certificates are self-signed; the site LAN is trusted)
-                </label>
+                <>
+                  <label className="hw-check">
+                    <input type="checkbox" checked={Boolean(f.https)} onChange={(e) => set("https", e.target.checked)} /> Use
+                    HTTPS (camera certificates are self-signed; the site LAN is trusted)
+                  </label>
+                  <div className="field" style={{ marginTop: 10, maxWidth: 360 }}>
+                    <label>Camera protocol</label>
+                    <select value={s("protocol") || "auto"} onChange={(e) => set("protocol", e.target.value)}>
+                      <option value="auto">Detect automatically</option>
+                      <option value="mtrpc">JSON-RPC (Sparsh demo unit firmware)</option>
+                      <option value="isapi">ISAPI (vendor documentation)</option>
+                    </select>
+                  </div>
+                </>
               )}
             </>
           )}
@@ -1236,8 +1250,12 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
     if (visible?.url) URL.revokeObjectURL(visible.url);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const roisRef = useRef(rois);
+  roisRef.current = rois;
   const readTemps = useCallback(async () => {
-    const r = await api.readCameraTemps(cam.id);
+    // JSON-RPC cameras are measured by EquiCare, so the boxes on screen can be
+    // read before they are pushed; ISAPI cameras ignore this and report theirs.
+    const r = await api.readCameraTemps(cam.id, { rois: roisRef.current });
     if (r.ok && alive.current) setTemps(r.data);
     return r;
   }, [cam.id]);
@@ -1267,13 +1285,13 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
         if (stop || !alive.current) break;
         swap(setThermal, { ...t, at: Date.now() });
         if (t.status === 409) { setLive(false); break; }     // a different camera: stop and say so
-        if (pushed) await readTemps();                        // hot-spot marker follows the horse
+        if (pushed || cam.protocol === "mtrpc") await readTemps();   // hot-spot marker follows the horse
       }
     })();
     return () => {
       stop = true;
     };
-  }, [live, cam.id, pushed, readTemps]);
+  }, [live, cam.id, cam.protocol, pushed, readTemps]);
 
   // "updated 3 s ago"
   useEffect(() => {
@@ -1313,7 +1331,7 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
     let last: CameraTemps | null = null;
     while (alive.current && performance.now() - t0 < CHECK_S * 1000) {
       const tickAt = performance.now();
-      const r = await api.readCameraTemps(cam.id);
+      const r = await api.readCameraTemps(cam.id, { parts: "nostril", rois });
       if (r.ok) {
         last = r.data;
         if (r.data.nostril?.avgC != null) vals.push(r.data.nostril.avgC);
@@ -1328,6 +1346,8 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
     if (!alive.current) return;
     const seconds = (performance.now() - t0) / 1000;
     const fs = vals.length / seconds;
+    const full = await api.readCameraTemps(cam.id, { rois });       // the eye, once, for the record
+    if (full.ok) last = { ...full.data, nostril: last?.nostril ?? full.data.nostril };
     const rr = computeRespRate(vals, fs);
     setSeries([...vals]);
     if (last) setTemps(last);
@@ -1411,7 +1431,7 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
                 mode={mode}
                 onChange={setRois}
                 onDrag={(d) => (dragging.current = d)}
-                hotspot={pushed && temps?.eye?.mode === "box-max" ? temps.eye.at : null}
+                hotspot={(pushed || cam.protocol === "mtrpc") && temps?.eye?.mode === "box-max" ? temps.eye.at : null}
               />
               {thermal.error && <p className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Live view paused: {thermal.error}</p>}
             </>

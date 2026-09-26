@@ -35,6 +35,26 @@ if [ ! -d .next ] || [ "${1:-}" = "--build" ]; then
   npm run build > "$LOGS/build.log" 2>&1 || die "build failed — see $LOGS/build.log"
 fi
 
+# ---- where is the camera? ---------------------------------------------------
+# On a direct cable the Mac has no IPv4 route to the camera, but it can reach
+# it over IPv6 link-local — an address that includes the adapter's name
+# (e.g. %en8), which changes if the adapter moves to another port. Find the
+# camera by its MAC prefix on every active interface and print what to use.
+CAMERA_MAC_PREFIX="${CAMERA_MAC_PREFIX:-18:74:e2}"
+find_camera() {
+  for ifc in $(ifconfig -l); do
+    ifconfig "$ifc" 2>/dev/null | grep -q "status: active" || continue
+    ping6 -c 1 -i 0.2 "ff02::1%$ifc" >/dev/null 2>&1
+  done
+  ndp -an 2>/dev/null | awk -v p="$CAMERA_MAC_PREFIX" 'tolower($2) ~ "^"p {print $1; exit}'
+}
+CAM_ADDR="$(find_camera)"
+if [ -n "$CAM_ADDR" ]; then
+  say "camera found at $CAM_ADDR — use this as its IP address in the Hardware page"
+else
+  say "camera not found on any cable — check its power and the USB-Ethernet adapter (continuing anyway)"
+fi
+
 # ---- server ---------------------------------------------------------------
 say "starting the server on $URL (data: $DATA)"
 EQUICARE_DATA_DIR="$DATA" NEXT_TELEMETRY_DISABLED=1 PORT="$PORT" HOST=127.0.0.1 \
