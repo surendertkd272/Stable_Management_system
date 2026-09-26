@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge, Crosshair } from "lucide-react";
+import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge, Crosshair, FlaskConical } from "lucide-react";
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { getHorseDetail, type HorseDetail as HorseVitals } from "../data/api";
+import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour } from "../data/api";
 import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand } from "../components/ui";
 
 const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
@@ -53,7 +53,7 @@ export default function HorseDetail() {
     if (!id) return;
     let stop = false;
     getHorseDetail(id).then((d) => {
-      if (!stop && d) setLive({ vitals: d.vitals, charts: d.charts });
+      if (!stop && d) setLive({ vitals: d.vitals, charts: d.charts, behaviour: d.behaviour });
     });
     return () => {
       stop = true;
@@ -213,7 +213,7 @@ export default function HorseDetail() {
             {live.vitals.activity_index && (
               <MetricCard
                 icon={<Activity size={18} />}
-                label="Activity index"
+                label={live.vitals.activity_index.source === "thermal_video" ? "Activity · prototype" : "Activity index"}
                 value={live.vitals.activity_index.value.toFixed(2)}
                 delta={trend(live.charts.activity_index)}
                 spark={live.charts.activity_index}
@@ -223,6 +223,8 @@ export default function HorseDetail() {
           </div>
         </>
       )}
+
+      {live?.behaviour && <CameraBehaviour b={live.behaviour} nostrilC={live.vitals?.nostril_temp_c?.value ?? null} />}
 
       {/* Behaviour cards. These plot THIS horse's series when the backend has
           it — they used to fall back to the yard-wide series, so the chart
@@ -563,6 +565,94 @@ function MetricCard({
             no sensor
           </span>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// What the camera tells us beyond the vitals. Every line here comes from a
+// prototype heuristic (thermal video / floor warm patches) and says so; a part
+// with no readings says "not measured here" rather than showing zero.
+// --------------------------------------------------------------------------- //
+const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const hmm = (min: number) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, "0")}m`;
+
+function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number | null }) {
+  const any = b.activity || b.inactive || b.urination || b.excretion || b.weaving || b.breathing;
+  if (!any) return null;
+  const none = <span className="muted">not measured here</span>;
+  const reg = b.breathing?.regularity;
+  const events = (e: HorseBehaviour["urination"]) =>
+    !e ? none : (
+      <>
+        <b>{e.count24h}</b> in 24 h · last {hm(e.last)}
+        {e.times.length > 0 && <span className="muted"> · {e.times.map(hm).join(", ")}</span>}
+      </>
+    );
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card-head">
+        <h3>Behaviour from the camera</h3>
+        <span className="pill warn" title="Produced today by heuristics whose thresholds are not yet validated on horses">
+          <FlaskConical size={12} /> prototype
+        </span>
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 12 }}>
+        From the thermal camera&apos;s video and floor temperatures. Shown for context and watch notes only — never used
+        for clinical alarms until validated on horses.
+      </p>
+      <div className="hw-facts">
+        <div>
+          <span>Respiration pattern</span>
+          <b>
+            {b.breathing
+              ? <>rhythm {reg == null ? "?" : reg >= 0.75 ? "regular" : reg >= 0.5 ? "somewhat irregular" : "weak"}
+                  {reg != null && <span className="muted"> ({reg.toFixed(2)})</span>}
+                  {nostrilC != null && <span className="muted"> · nostril {nostrilC.toFixed(1)} °C</span>}</>
+              : none}
+          </b>
+        </div>
+        <div>
+          <span>Activity</span>
+          <b>
+            {!b.activity ? none : (
+              <>
+                {b.activity.now.toFixed(2)} now
+                {b.activity.avg4h != null && <span className="muted"> · 4 h avg {b.activity.avg4h.toFixed(2)}</span>}
+                {b.activity.baseline != null
+                  ? <span className="muted"> · own normal {b.activity.baseline.toFixed(2)}</span>
+                  : <span className="muted"> · learning this horse&apos;s normal (3 days)</span>}
+                {b.activity.unusual && <span className="pill warn" style={{ marginLeft: 6, fontSize: 10.5 }}>unusually {b.activity.unusual}</span>}
+              </>
+            )}
+          </b>
+        </div>
+        <div>
+          <span>Resting (still)</span>
+          <b>
+            {!b.inactive ? none : (
+              <>
+                {hmm(b.inactive.todayMin)} still in 24 h · longest {b.inactive.longestMin} min
+                {b.inactive.periods.length > 0 && (
+                  <span className="muted"> · {b.inactive.periods.slice(-4).map((p) => `${hm(p.start)}–${hm(p.end)}`).join(", ")}</span>
+                )}
+                <br />
+                <small className="muted">Stillness, not lying down — a horse can doze standing.</small>
+              </>
+            )}
+          </b>
+        </div>
+        <div><span>Urination</span><b>{events(b.urination)}</b></div>
+        <div><span>Excretion</span><b>{events(b.excretion)}</b></div>
+        <div>
+          <span>Weaving</span>
+          <b>
+            {b.weaving ? <><b>{b.weaving.count24h}</b> {b.weaving.count24h === 1 ? "episode" : "episodes"} in 24 h · last {hm(b.weaving.last)}</>
+              : b.activity ? <span className="muted">none seen</span>   /* the video is being analysed */
+              : none}
+          </b>
+        </div>
       </div>
     </div>
   );

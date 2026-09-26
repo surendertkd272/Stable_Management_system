@@ -129,7 +129,7 @@ export default function Dashboard() {
     points.set(r.point, p);
   }
   const livePoints = [...points.values()].filter((p) => p.live).length;
-  const modelPoints = [...points.values()].filter((p) => !p.live && p.model).length;
+  const modelPoints = [...points.values()].filter((p) => !p.live && !p.proto && p.model).length;
   const protoPoints = [...points.values()].filter((p) => !p.live && p.proto).length;
 
   // Incidents for the focus horse, from real alerts — never invented.

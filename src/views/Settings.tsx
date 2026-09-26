@@ -226,7 +226,7 @@ function CoverageCard() {
   }
   const ordered = [...points.entries()].sort((a, b) => a[0] - b[0]);
   const liveCount = ordered.filter(([, p]) => p.available).length;
-  const modelCount = ordered.filter(([, p]) => !p.available && p.modelPending).length;
+  const modelCount = ordered.filter(([, p]) => !p.available && !p.prototype && p.modelPending).length;
   const protoCount = ordered.filter(([, p]) => !p.available && p.prototype).length;
 
   return (

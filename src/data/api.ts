@@ -119,8 +119,19 @@ export interface CoverageRow {
 }
 export const getCoverage = () => get<CoverageRow[]>("/api/coverage");
 
+/** Camera behaviour (prototype heuristics). null = not measured here. */
+export interface HorseBehaviour {
+  activity: { now: number; at: string; avg4h: number | null; baseline: number | null; unusual: "high" | "low" | null } | null;
+  inactive: { todayMin: number; longestMin: number; periods: { start: string; end: string; minutes: number }[] } | null;
+  urination: { count24h: number; last: string; times: string[] } | null;
+  excretion: { count24h: number; last: string; times: string[] } | null;
+  weaving: { count24h: number; last: string } | null;
+  breathing: { regularity: number | null; method: string | null; at: string } | null;
+}
+
 // Per-horse live detail (summary + latest vitals + 7-day charts).
 export interface HorseDetail {
+  behaviour?: HorseBehaviour;
   vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number; calibrated?: boolean }>;
   // null entries are days with no reading — never render them as zero.
   charts: Record<string, (number | null)[]>;
@@ -356,6 +367,18 @@ export const readCameraTemps = (id: string, opts: { parts?: "nostril"; rois?: { 
   }
   return call<CameraTemps>("GET", dpath(id, "temps") + (q.size ? `?${q}` : ""));
 };
+/** Breathing check from the thermal video (JSON-RPC cameras): a job the
+ *  calibrator polls for its trace and verdict. */
+export interface BreathingJob {
+  id: string; state: "running" | "done" | "failed"; error: string | null;
+  elapsed: number; seconds: number; samples: number; trace: number[];
+  result: { bpm: number | null; periodicity: number; samples: number; seconds: number; swing: number; method: string } | null;
+}
+export const startBreathingCheck = (id: string, nostril: RoiBox, seconds = 60) =>
+  call<BreathingJob>("POST", dpath(id, "breathing"), { nostril, seconds }, 30000);
+export const breathingCheckStatus = (id: string, job: string) =>
+  call<BreathingJob>("GET", `${dpath(id, "breathing")}/${encodeURIComponent(job)}`);
+
 export const saveVerification = (id: string, v: {
   breathing: { bpm: number; periodicity: number; seconds: number; samples: number };
   handCountBpm: number | null; eyeC: number | null; nostrilSwingC: number | null;

@@ -1232,6 +1232,8 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
   const [result, setResult] = useState<CheckResult | null>(null);
   const [hand, setHand] = useState("");
   const [saved, setSaved] = useState<CameraVerification | null>(null);
+  const [checkError, setCheckError] = useState("");
+  const [checkProgress, setCheckProgress] = useState(0);
   const [tick, setTick] = useState(0);
   const alive = useRef(true);
   const dragging = useRef(false);
@@ -1322,7 +1324,40 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
   // 60 s of the nostril box's average at ~5 Hz, judged by the edge agent's
   // algorithm with the rate actually achieved (not the one aimed for — a slow
   // network would otherwise scale the answer).
+  // JSON-RPC cameras (the Sparsh demo unit): pixel temperatures refresh ~1×/s,
+  // too slow for a breath, so the site server follows the nostril box in the
+  // 25 fps thermal video instead.
+  const runVideoCheck = async () => {
+    setChecking(true);
+    setResult(null);
+    setSaved(null);
+    setSeries([]);
+    setCheckError("");
+    const started = await api.startBreathingCheck(cam.id, rois.nostril, CHECK_S);
+    if (!started.ok) {
+      setChecking(false);
+      return setCheckError(started.error);
+    }
+    let job = started.data;
+    while (alive.current && job.state === "running") {
+      await sleep(1000);
+      const r = await api.breathingCheckStatus(cam.id, job.id);
+      if (!r.ok) break;
+      job = r.data;
+      setSeries(job.trace);
+      setCheckProgress(Math.round(job.elapsed));
+    }
+    if (!alive.current) return;
+    setChecking(false);
+    if (job.state !== "done" || !job.result) return setCheckError(job.error || "the check did not finish");
+    const full = await api.readCameraTemps(cam.id, { rois });       // the eye, once, for the record
+    if (full.ok) setTemps(full.data);
+    const res = job.result;
+    setResult({ bpm: res.bpm, periodicity: res.periodicity, seconds: res.seconds, samples: res.samples, fs: res.samples / Math.max(1, res.seconds), swing: null });
+  };
+
   const runCheck = async () => {
+    if (cam.protocol === "mtrpc") return runVideoCheck();
     setChecking(true);
     busyCam.current = true;
     setResult(null);
@@ -1519,8 +1554,16 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
               <div style={{ marginTop: 12 }}>
                 <button className="btn-ghost accent" onClick={runCheck} disabled={checking || busy}>
                   {checking ? <Loader2 size={15} className="spin" /> : <ScanLine size={15} />}
-                  {checking ? `Checking breathing… ${Math.min(CHECK_S, Math.round(series.length / CHECK_HZ))}/${CHECK_S} s` : result ? "Run the check again" : `Breathing check (${CHECK_S} s)`}
+                  {checking
+                    ? `Checking breathing… ${cam.protocol === "mtrpc" ? checkProgress : Math.min(CHECK_S, Math.round(series.length / CHECK_HZ))}/${CHECK_S} s`
+                    : result ? "Run the check again" : `Breathing check (${CHECK_S} s)`}
                 </button>
+                {checkError && (
+                  <div className="row urgent" style={{ padding: "8px 12px", marginTop: 8 }}>
+                    <XCircle size={15} style={{ flexShrink: 0 }} />
+                    <span style={{ fontSize: 12 }}>Breathing check failed: {checkError}</span>
+                  </div>
+                )}
                 {!result && !checking && (
                   <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                     While it runs, count the horse&apos;s breaths by watching its flanks rise — the count over {CHECK_S} s is
@@ -1539,11 +1582,11 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
                     {result.bpm != null ? <CheckCircle2 size={16} style={{ flexShrink: 0 }} /> : <XCircle size={16} style={{ flexShrink: 0 }} />}
                     <span style={{ fontSize: 12.5 }}>
                       {result.bpm != null
-                        ? <>Breathing found: <b>{result.bpm.toFixed(1)} bpm</b> (rhythm strength {result.periodicity.toFixed(2)}) — the same calculation the edge agent uses.</>
+                        ? <>Breathing found: <b>{result.bpm.toFixed(1)} bpm</b> (rhythm strength {result.periodicity.toFixed(2)}{cam.protocol === "mtrpc" ? ", from the thermal video" : ""}) — the same calculation the edge agent uses.</>
                         : <>No breathing rhythm in {Math.round(result.seconds)} s{result.swing != null ? ` (the box average moved ${result.swing.toFixed(2)} °C)` : ""}. The box is probably off the nostril, or the horse moved its head. Re-aim and run it again.</>}
                     </span>
                   </div>
-                  {result.samples < CHECK_S * 3 && (
+                  {cam.protocol !== "mtrpc" && result.samples < CHECK_S * 3 && (
                     <p className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
                       Only {result.samples} readings ({result.fs.toFixed(1)}/s) — the connection to the camera is slow.
                     </p>

@@ -18,6 +18,7 @@ import { seal, open } from "./secrets.mjs";
 import { checkHost, rtspOptions } from "./camera.mjs";
 import { withCamera, forget, protocolOf, IdentityMismatch } from "./camera-pool.mjs";
 import { readRegisters, readSensor, TYPES, WORD_ORDERS } from "./modbus.mjs";
+import { startBreathingCheck, breathingJob, jobView } from "./thermal-video.mjs";
 
 export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device"];
 const POLLED = new Set(["thermal_camera", "modbus_sensor"]);
@@ -568,7 +569,15 @@ export function deviceApi({ store, json, CORS }) {
       return json(201, { device: publicDevice(created, list()), token });
     }
 
-    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|rois|temps|token|events|verification))?$/);
+    // Breathing check progress (JSON-RPC cameras: from the thermal video).
+    const bj = path.match(/^\/api\/devices\/([^/]+)\/breathing\/([^/]+)$/);
+    if (bj && method === "GET") {
+      const job = breathingJob(decodeURIComponent(bj[2]));
+      if (!job || job.deviceId !== decodeURIComponent(bj[1])) return json(404, { error: "unknown check" });
+      return json(200, jobView(job));
+    }
+
+    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|rois|temps|token|events|verification|breathing))?$/);
     if (!m) return null;
     const dev = byId(decodeURIComponent(m[1]));
     if (!dev) return json(404, { error: "unknown device" });
@@ -744,6 +753,29 @@ export function deviceApi({ store, json, CORS }) {
       } catch (e) {
         return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message, code: e.code });
       }
+    }
+
+    if (action === "breathing" && method === "POST") {
+      const bad = cameraOnly(); if (bad) return bad;
+      if (await protocolOf(dev) !== "mtrpc")
+        return json(400, { error: "this camera's breathing check reads its temperature stream directly (use temps)" });
+      const { body, error } = await readBody(req);
+      if (error) return error;
+      const n = body.nostril;
+      if (!n || ![n.x0, n.y0, n.x1, n.y1].every(inRange) || n.x1 <= n.x0 || n.y1 <= n.y0)
+        return json(400, { error: "nostril must be {x0, y0, x1, y1} in 0–10000" });
+      const seconds = Math.max(20, Math.min(120, Number(body.seconds) || 60));
+      try {
+        // Same credentials and identity check as every other camera action,
+        // before the video is opened.
+        await camera(dev, async () => true);
+      } catch (e) {
+        return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message, code: e.code });
+      }
+      const cred = cameraPassword(dev);
+      if (cred.error) return json(502, { error: cred.error });
+      const job = await startBreathingCheck(dev, cred.password, n, { seconds });
+      return json(202, jobView(job));
     }
 
     if (action === "verification" && method === "POST") {

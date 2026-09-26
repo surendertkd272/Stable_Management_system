@@ -129,6 +129,21 @@ test("the edge box receives the protocol and the ROIs to sample", async () => {
   assert.equal(d.calibrated, true);
 });
 
+test("breathing check: starts a video job, which reports failure clearly when there is no video", async () => {
+  const r = await admin("POST", `/api/devices/${ids.cam}/breathing`, { nostril: { x0: 5000, y0: 6200, x1: 6000, y1: 7000 }, seconds: 20 });
+  assert.equal(r.status, 202, r.raw);
+  assert.ok(r.body.id);
+  let v;
+  for (let i = 0; i < 100; i++) {
+    v = (await admin("GET", `/api/devices/${ids.cam}/breathing/${r.body.id}`)).body;
+    if (v.state !== "running") break;
+    await new Promise((res) => setTimeout(res, 200));
+  }
+  assert.equal(v.state, "failed", "the imitation camera has no RTSP stream");
+  assert.ok(v.error && v.error.length > 5, v.error);
+  assert.equal((await admin("POST", `/api/devices/${ids.cam}/breathing`, { nostril: { x0: 1, y0: 1, x1: 0, y1: 0 } })).status, 400);
+});
+
 test("a different unit at the address (different MAC) is refused", async () => {
   cam.st.config["NetWork.net_interface_list"].iface[0].mac = "aa:bb:cc:dd:ee:ff";
   (await import("./camera-pool.mjs")).forget(ids.cam);
