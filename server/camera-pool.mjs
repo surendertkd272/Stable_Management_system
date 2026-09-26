@@ -16,6 +16,7 @@
 //     calibrating the wrong stall.
 import { createHash } from "node:crypto";
 import { CameraClient, IdentityMismatch } from "./camera.mjs";
+import { MtrpcCamera, detectMtrpc } from "./mtrpc.mjs";
 
 export { IdentityMismatch };
 
@@ -23,9 +24,9 @@ const G = (globalThis.__equicareCameraPool ??= { entries: new Map(), timer: null
 const IDLE_MS = Number(process.env.EQUICARE_CAMERA_IDLE_MS) || 60_000;
 
 /** Anything that changes how we reach or log into the camera starts a new session. */
-const keyFor = (dev, password) =>
+const keyFor = (dev, password, protocol) =>
   `${dev.id}|` + createHash("sha256")
-    .update(JSON.stringify([dev.host, dev.httpPort, dev.https, dev.username, password]))
+    .update(JSON.stringify([dev.host, dev.httpPort, dev.https, dev.username, password, protocol]))
     .digest("hex").slice(0, 16);
 
 function sweep() {
@@ -48,9 +49,20 @@ function ensureSweeper() {
  * Run fn(client) against the camera with an authenticated, serialized session.
  * opts.password: decrypted password. opts.expectSerial: pinned serial, if any.
  */
+/** Which protocol a camera speaks: its setting, or — for "auto" — detected
+ *  once by asking for a JSON-RPC login challenge (no credentials involved). */
+export async function protocolOf(dev) {
+  if (dev.protocol === "isapi" || dev.protocol === "mtrpc") return dev.protocol;
+  const k = `${dev.host}|${dev.httpPort}|${dev.https}`;
+  G.detected ??= new Map();
+  if (!G.detected.has(k)) G.detected.set(k, (await detectMtrpc({ host: dev.host, httpPort: dev.httpPort, https: dev.https })) ? "mtrpc" : "isapi");
+  return G.detected.get(k);
+}
+
 export async function withCamera(dev, fn, { password, expectSerial, fresh = false } = {}) {
   ensureSweeper();
-  const key = keyFor(dev, password);
+  const protocol = await protocolOf(dev);
+  const key = keyFor(dev, password, protocol);
   // A changed configuration must not leave the old session open on the camera.
   for (const [k, e] of G.entries) {
     if (k.startsWith(`${dev.id}|`) && k !== key && !e.busy) {
@@ -61,7 +73,7 @@ export async function withCamera(dev, fn, { password, expectSerial, fresh = fals
   let e = G.entries.get(key);
   if (!e) {
     e = {
-      client: new CameraClient({ host: dev.host, httpPort: dev.httpPort, https: dev.https, username: dev.username, password }),
+      client: new (protocol === "mtrpc" ? MtrpcCamera : CameraClient)({ host: dev.host, httpPort: dev.httpPort, https: dev.https, username: dev.username, password }),
       chain: Promise.resolve(), lastUsed: Date.now(), busy: 0, serial: null,
     };
     G.entries.set(key, e);
@@ -88,7 +100,7 @@ export async function withCamera(dev, fn, { password, expectSerial, fresh = fals
       }
       if (expectSerial && e.serial && e.serial !== expectSerial)
         throw new IdentityMismatch(expectSerial, e.serial, dev.host);
-      return await fn(e.client, { loginMethod: e.loginMethod, device: e.device, serial: e.serial });
+      return await fn(e.client, { loginMethod: e.loginMethod, device: e.device, serial: e.serial, protocol });
     } finally {
       e.busy--;
       e.lastUsed = Date.now();
@@ -111,6 +123,7 @@ export async function withCamera(dev, fn, { password, expectSerial, fresh = fals
 
 /** Drop a device's session (on delete or credential change). */
 export function forget(devId) {
+  G.detected?.clear();          // an address may now hold a different kind of camera
   for (const [k, e] of G.entries) {
     if (k.startsWith(`${devId}|`)) {
       G.entries.delete(k);

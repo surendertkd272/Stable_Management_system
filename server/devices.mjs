@@ -16,7 +16,7 @@ import { isKnownMetric, METRICS } from "./contract.mjs";
 import { validateCameraModel } from "./hardware-spec.mjs";
 import { seal, open } from "./secrets.mjs";
 import { checkHost, rtspOptions } from "./camera.mjs";
-import { withCamera, forget, IdentityMismatch } from "./camera-pool.mjs";
+import { withCamera, forget, protocolOf, IdentityMismatch } from "./camera-pool.mjs";
 import { readRegisters, readSensor, TYPES, WORD_ORDERS } from "./modbus.mjs";
 
 export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device"];
@@ -98,7 +98,11 @@ export function validateDevice(kind, body, existing = {}, all = []) {
       visibleLens: String(pick("visibleLens", "4")),
       distanceM: num(pick("distanceM"), 3.5),
       emissivity: num(pick("emissivity"), 0.98),
+      // "isapi": the vendor's documented API. "mtrpc": the JSON-RPC firmware
+      // the demo unit actually runs. "auto": detected on first contact.
+      protocol: String(pick("protocol", "auto")),
     });
+    if (!["auto", "isapi", "mtrpc"].includes(out.protocol)) errs.push("protocol must be auto, isapi or mtrpc");
     errs.push(...validateCameraModel(out));
     if (!out.stall) errs.push("stall is required — the camera's readings are attributed to it");
     for (const k of ["httpPort", "rtspPort", "modbusPort"]) if (!isPort(out[k])) errs.push(`${k} must be a port number`);
@@ -342,6 +346,13 @@ export function deviceApi({ store, json, CORS }) {
       if (!h.ok) throw new Error(h.error);
       return h.addrs.join(", ");
     });
+    let protocol = null;
+    if (reach) await step("Protocol", async () => {
+      protocol = await protocolOf(dev);
+      return protocol === "mtrpc"
+        ? "JSON-RPC (/mtrpc) — the firmware on the Sparsh demo unit; temperatures are read by sampling the ROI pixels"
+        : "ISAPI — the vendor-documented API";
+    });
     const authed = reach && await step("Login + identity", () => camera(dev, async (c, s) => {
       device = s.device;
       return `authenticated (${s.loginMethod}) · ${device.Model || "?"} · S/N ${s.serial || "?"}` +
@@ -356,9 +367,19 @@ export function deviceApi({ store, json, CORS }) {
       }));
       await step("Thermometry", () => camera(dev, async (c) => {
         const b = await c.basicParam();
-        return `emissivity ${(b.FPara100 ?? 0) / 100} · distance ${(b.AimDistance ?? 0) / 100} m`;
+        if (b.mode === "kBodyTemperature")
+          throw new Error(`the camera is in body-temperature mode, which applies a human skin-to-core correction — switch it to body-surface mode (emissivity ${(b.FPara100 ?? 0) / 100}, distance ${(b.AimDistance ?? 0) / 100} m)`);
+        return `emissivity ${(b.FPara100 ?? 0) / 100} · distance ${(b.AimDistance ?? 0) / 100} m` + (b.mode ? " · surface-temperature mode" : "");
       }));
-      await step("Live temperatures", () => camera(dev, async (c) => {
+      if (protocol === "mtrpc") await step("Live temperatures", () => camera(dev, async (c) => {
+        if (dev.rois && !dev.rois.stale) {
+          const r = await mtrpcReadings(c, dev.rois);
+          return `eye ${r.eye?.c?.toFixed(1) ?? "?"} °C (hottest in box) · nostril avg ${r.nostril?.avgC?.toFixed(1) ?? "?"} °C`;
+        }
+        const centre = await c.readPixels([{ x: 4096, y: 4096 }]);
+        return `centre of the frame ${centre[0]?.toFixed(1) ?? "?"} °C — no ROIs yet, calibrate to start measuring`;
+      }));
+      else await step("Live temperatures", () => camera(dev, async (c) => {
         const t = await c.queryTemps();
         if (!t.length) return "no ROIs configured yet — calibrate to start measuring";
         const r = roiReadings(t);
@@ -368,16 +389,19 @@ export function deviceApi({ store, json, CORS }) {
         return parts.join(" · ") || t.map((x) => `${x.type.toLowerCase()} ${x.id}`).join(", ") + " — not the slots EquiCare uses; calibrate";
       }));
     }
-    if (reach) {
+    if (reach && protocol !== "mtrpc") {
       await step(`Modbus/TCP :${dev.modbusPort}`, async () => {
         const regs = await readRegisters(dev.host, dev.modbusPort, 1, 3, 1018, 2);
         const b = Buffer.alloc(4); b.writeUInt16LE(regs[0], 0); b.writeUInt16LE(regs[1], 2);
         return `point 1 = ${b.readFloatLE(0).toFixed(1)} °C (cross-check against ISAPI)`;
       });
       await step(`RTSP :${dev.rtspPort}`, () => rtspOptions(dev.host, dev.rtspPort));
+    } else if (reach) {
+      await step(`RTSP :${dev.rtspPort}`, () => rtspOptions(dev.host, dev.rtspPort));
     }
     const ok = Boolean(authed);
     const patch = { lastProbe: { at: now(), ok, steps, device } };
+    if (protocol && dev.protocol !== protocol) patch.protocol = protocol;   // remember what auto found
     // Pin the unit's identity the first time it answers (or when an admin
     // confirms a replacement), so a different camera at this IP is refused later.
     if (ok && device?.DeviceSN && (!dev.identity?.serial || acceptIdentity))
@@ -406,6 +430,20 @@ export function deviceApi({ store, json, CORS }) {
       eye: eyeBox ? { c: eyeBox.maxC, at: eyeBox.maxAt, mode: "box-max" }
         : eyePoint ? { c: eyePoint.pointC, at: null, mode: "point" } : null,
       nostril: nos ? { avgC: nos.avgC, minC: nos.minC, maxC: nos.maxC } : null,
+    };
+  }
+
+  /** JSON-RPC cameras: measure the stored ROIs by sampling pixels. `parts`
+   *  "nostril" skips the eye scan (~0.7 s), for the fast breathing check. */
+  async function mtrpcReadings(c, rois, parts = "all") {
+    if (!rois) return { eye: null, nostril: null };
+    const nostril = await c.boxStats(rois.nostril);
+    const eyeBox = rois.eye && rois.eye.x0 !== undefined ? rois.eye
+      : rois.eye ? { x0: rois.eye.x - 150, y0: rois.eye.y - 120, x1: rois.eye.x + 150, y1: rois.eye.y + 120 } : null;
+    const eye = parts === "nostril" || !eyeBox ? null : await c.boxMax(eyeBox);
+    return {
+      eye: eye ? { c: eye.c, at: eye.at, mode: "box-max" } : null,
+      nostril: nostril ? { avgC: nostril.avgC, minC: nostril.minC, maxC: nostril.maxC } : null,
     };
   }
 
@@ -456,6 +494,9 @@ export function deviceApi({ store, json, CORS }) {
             password: cred.password ?? null, configError: cred.error ?? null,
             emissivity: d.emissivity, distanceM: d.distanceM,
             calibrated: Boolean(d.rois && !d.rois.stale), serial: d.identity?.serial ?? null,
+            protocol: d.protocol || "auto",
+            // JSON-RPC cameras are measured by the edge box sampling these.
+            rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril } : null,
           };
         }
         return {
@@ -605,6 +646,16 @@ export function deviceApi({ store, json, CORS }) {
     if (action === "temps" && method === "GET") {
       const bad = cameraOnly(); if (bad) return bad;
       try {
+        if (await protocolOf(dev) === "mtrpc") {
+          // Measured against the ROIs sent with the request (while aiming) or
+          // the stored ones.
+          const q = url.searchParams;
+          const box = (k) => { const v = q.get(k)?.split(",").map(Number); return v?.length === 4 && v.every(inRange) ? { x0: v[0], y0: v[1], x1: v[2], y1: v[3] } : null; };
+          const rois = box("nostril") ? { nostril: box("nostril"), eye: box("eye") } : dev.rois;
+          if (!rois) return json(200, { at: now(), eye: null, nostril: null, note: "no ROIs yet" });
+          const r = await camera(dev, (c) => mtrpcReadings(c, rois, q.get("parts") === "nostril" ? "nostril" : "all"));
+          return json(200, { at: now(), ...r });
+        }
         const temps = await camera(dev, (c) => c.queryTemps());
         return json(200, { at: now(), ...roiReadings(temps), all: temps });
       } catch (e) {
@@ -632,6 +683,25 @@ export function deviceApi({ store, json, CORS }) {
           : null;
       const why = badBox(eye, "eye", EYE_BOX_MAX) || badBox(n, "nostril");
       if (why) return json(400, { error: why });
+      const box = (b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
+      if (await protocolOf(dev) === "mtrpc") {
+        // EquiCare measures these ROIs itself (pixel sampling), so storing
+        // them is what matters. They are also mirrored as the camera's own
+        // rules, so its web page shows the same boxes — best effort. The
+        // camera's emissivity/distance are not touched here.
+        let verify;
+        try {
+          verify = await camera(dev, (c) => c.writeRules(eye, n));
+        } catch (e) {
+          if (e instanceof IdentityMismatch) return json(409, { error: e.message, code: e.code });
+          verify = { verified: null, detail: `stored in EquiCare; the camera's own rule display was not updated (${e.message})` };
+        }
+        const rois = { eye: box(eye), nostril: box(n), pushedAt: now(), verified: verify.verified };
+        store.update("devices", dev.id, { rois, verification: null });
+        event(dev, actorOf(who), "calibrated",
+          `eye box (${eye.x0}, ${eye.y0})–(${eye.x1}, ${eye.y1}), nostril (${n.x0}, ${n.y0})–(${n.x1}, ${n.y1}); ${verify.detail}`);
+        return json(200, { ok: true, results: { eye: true, nostril: true }, rois, verify });
+      }
       const opts = { emissivity: dev.emissivity, distanceM: dev.distanceM };
       const corners = (b) => [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]];
       try {
@@ -656,7 +726,6 @@ export function deviceApi({ store, json, CORS }) {
           event(dev, actorOf(who), "calibration not confirmed", out.verify.detail);
           return json(502, { error: `ROIs sent, but ${out.verify.detail}`, results, verify: out.verify });
         }
-        const box = (b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
         const rois = { eye: box(eye), nostril: box(n), pushedAt: now(), verified: out.verify.verified };
         // A new aim has not been checked yet: any earlier verification was of
         // the old ROIs.
