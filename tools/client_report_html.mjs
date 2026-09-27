@@ -49,7 +49,9 @@ for (const r of of("activity_index")) act[minuteOf(r)] = r.value;
 for (const r of of("inactive_minutes")) still[minuteOf(r)] = Math.min(1, r.value / (r.meta?.windowMin || 1));
 const actV = act.filter((v) => v !== null);
 const roll = act.map((_, i) => { const w = act.slice(Math.max(0, i - 2), i + 3).filter((v) => v !== null); return w.length ? avg(w) : null; });
-const bands = { low: actV.filter((v) => v < 0.2).length, moderate: actV.filter((v) => v >= 0.2 && v < 0.6).length, high: actV.filter((v) => v >= 0.6).length };
+const LEVELS = [["none", "No activity", 0, 0.05], ["low", "Low", 0.05, 0.2], ["moderate", "Moderate", 0.2, 0.6], ["high", "High", 0.6, 1.01]];
+const levelOf = (v) => LEVELS.find(([, , lo, hi]) => v >= lo && v < hi)[0];
+const bands = Object.fromEntries(LEVELS.map(([k, , lo, hi]) => [k, actV.filter((v) => v >= lo && v < hi).length]));
 const stillMin = Math.round(still.filter((v) => v !== null).reduce((a, v) => a + v, 0));
 const turns = of("vice_event").map((r) => Date.parse(r.ts));
 const resp = of("respiratory_rate_bpm");
@@ -132,15 +134,39 @@ function timeline() {
 }
 
 function activityChart() {
-  const H = 200, bw = (W - L - R) / minutes - 2, y = (v) => H - v * H;
-  const grid = [0, 0.2, 0.6, 1].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 8}" y="${y(v) + 4}" class="tick" text-anchor="end">${v.toFixed(1)}</text>`).join("");
-  const zones = `<rect x="${L}" y="${y(1)}" width="${W - L - R}" height="${y(0.6) - y(1)}" class="zone-hi"/>`;
-  const bars = act.map((v, m) => v === null ? "" : v < 0.02
-    ? `<rect x="${X(m) + 1}" y="${H - 1.5}" width="${bw}" height="1.5" class="bar" data-tip="${clock(from + m * 60000)} · activity ${f2(v)}"/>`
-    : `<path d="M${X(m) + 1},${H} V${Math.min(H - 1, y(v) + 3)} q0,-3 3,-3 h${Math.max(0, bw - 6)} q3,0 3,3 V${H} Z" class="bar" data-tip="${clock(from + m * 60000)} · activity ${f2(v)}"/>`).join("");
-  const pts = roll.map((v, m) => (v === null ? null : `${X(m) + bw / 2 + 1},${y(v)}`)).filter(Boolean).join(" ");
-  const line = `<polyline points="${pts}" class="trend"/>`;
-  return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="Activity per minute with 5-minute average">${zones}${grid}${ticks(H)}${bars}${line}</svg>`;
+  const H = 230, RG = 78, Wp = W - RG;                       // right gutter for level labels
+  const Xa = (m) => L + (m / minutes) * (Wp - L);
+  const bw = (Wp - L) / minutes - 3, y = (v) => H - v * H;
+  const lvlName = Object.fromEntries(LEVELS.map(([k, n]) => [k, n]));
+  // Level bands and labels (single axis, 0–1).
+  const bandsSvg = [["high", 0.6, 1], ["moderate", 0.2, 0.6], ["low", 0.05, 0.2]].map(([k, lo, hi]) =>
+    `<text x="${Wp + 12}" y="${(y(lo) + y(hi)) / 2 + 4}" class="lvl lvl-${k}">${lvlName[k]}</text>`).join("") +
+    `<text x="${Wp + 12}" y="${H - 2}" class="lvl lvl-none">None</text>` +
+    [0.2, 0.6].map((v) => `<line x1="${L}" x2="${Wp}" y1="${y(v)}" y2="${y(v)}" class="thr"/>`).join("");
+  const grid = [0, 0.2, 0.4, 0.6, 0.8, 1].map((v) => `<line x1="${L}" x2="${Wp}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 10}" y="${y(v) + 4}" class="tick" text-anchor="end">${v.toFixed(1)}</text>`).join("");
+  const tk = Array.from({ length: Math.floor(minutes / 10) + 1 }, (_, i) => i * 10).map((m) => `<text x="${Xa(m)}" y="${H + 20}" class="tick" text-anchor="middle">${clock(from + m * 60000)}</text>`).join("");
+  const bars = act.map((v, m) => {
+    const x0 = Xa(m) + 1.5, tip = `${clock(from + m * 60000)} · `;
+    if (v === null) return `<rect x="${x0}" y="${H - 10}" width="${bw}" height="10" rx="2" class="nodata" data-tip="${tip}no reading"/>`;
+    const k = levelOf(v);
+    if (k === "none") return `<rect x="${x0}" y="${H - 4}" width="${bw}" height="4" rx="2" class="b-none" data-tip="${tip}no activity (${f2(v)})"/>`;
+    const top = y(v), r = Math.min(5, bw / 2);
+    return `<path d="M${x0},${H} V${top + r} q0,-${r} ${r},-${r} h${bw - 2 * r} q${r},0 ${r},${r} V${H} Z" class="b-${k}" data-tip="${tip}${lvlName[k].toLowerCase()} activity (${f2(v)})"/>`;
+  }).join("");
+  // Smooth 5-minute average (Catmull-Rom → Bézier), a soft area under it, markers every 5 min.
+  const pts = roll.map((v, m) => (v === null ? null : [Xa(m) + bw / 2 + 1.5, y(v), m, v])).filter(Boolean);
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C${c1[0].toFixed(1)},${Math.min(H, c1[1]).toFixed(1)} ${c2[0].toFixed(1)},${Math.min(H, c2[1]).toFixed(1)} ${p2[0]},${p2[1]}`;
+  }
+  const area = `${d} L${pts.at(-1)[0]},${H} L${pts[0][0]},${H} Z`;
+  const markers = pts.filter((p) => p[2] % 5 === 2).map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="5" class="avg-dot" data-tip="${clock(from + p[2] * 60000)} · 5-min average ${f2(p[3])}"/>`).join("");
+  return `<svg viewBox="0 -10 ${W} ${H + 36}" role="img" aria-label="Activity per minute by level, with the 5-minute average">
+<defs><linearGradient id="avgfill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--avg)" stop-opacity=".28"/><stop offset="1" stop-color="var(--avg)" stop-opacity="0"/></linearGradient></defs>
+${grid}${bandsSvg}${tk}${bars}<path d="${area}" fill="url(#avgfill)"/><path d="${d}" class="avg-line"/>${markers}
+<line x1="${L}" x2="${Wp}" y1="${H}" y2="${H}" class="axis"/></svg>`;
 }
 
 function tempChart() {
@@ -155,9 +181,9 @@ function tempChart() {
 }
 
 function distribution() {
-  const tot = actV.length || 1, seg = [["Low", bands.low, "d-low"], ["Moderate", bands.moderate, "d-mid"], ["High", bands.high, "d-hi"]];
-  let x = 0;
-  const rects = seg.map(([n, v, c]) => { const w = (v / tot) * 100; const r = `<div class="dseg ${c}" style="width:${w}%" data-tip="${n} activity · ${v} min (${Math.round(w)}%)"></div>`; x += w; return r; }).join("");
+  const tot = actV.length || 1;
+  const seg = [["High", bands.high, "lv-high"], ["Moderate", bands.moderate, "lv-moderate"], ["Low", bands.low, "lv-low"], ["No activity", bands.none, "lv-none"]];
+  const rects = seg.filter(([, v]) => v > 0).map(([n, v, c]) => `<div class="dseg ${c}" style="width:${(v / tot) * 100}%" data-tip="${n} · ${v} min (${Math.round((v / tot) * 100)}%)"></div>`).join("");
   return `<div class="dbar">${rects}</div><div class="dlegend">${seg.map(([n, v, c]) => `<span><i class="${c}"></i>${n} <b>${v} min</b> <em>${Math.round((v / tot) * 100)}%</em></span>`).join("")}</div>`;
 }
 
@@ -207,7 +233,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <title>${esc(horse.name)} — Monitoring Session Report</title>
 <style>
 :root{color-scheme:light;--page:#eef0f3;--surface:#ffffff;--ink:#0f1720;--ink2:#46505c;--muted:#8a929c;--grid:#e7eaee;--ring:rgba(15,23,32,.08);
---navy:#0f2a47;--navy2:#1c4a78;--accent:#2a78d6;--accentSoft:rgba(42,120,214,.12);--alt:#9aa3ad;--hot:#e0822f;--ok:#0ca30c;--part:#d59a0d;--cam:#9aa3ad;--lanebg:#f0f2f5;}
+--lv-high:#184f95;--lv-mod:#3987e5;--lv-low:#9ec5f4;--lv-none:#c9cdd3;--avg:#e0822f;--navy:#0f2a47;--navy2:#1c4a78;--accent:#2a78d6;--accentSoft:rgba(42,120,214,.12);--alt:#9aa3ad;--hot:#e0822f;--ok:#0ca30c;--part:#d59a0d;--cam:#9aa3ad;--lanebg:#f0f2f5;}
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){color-scheme:dark;--page:#0b0d10;--surface:#15181c;--ink:#f3f5f7;--ink2:#c0c6cd;--grid:#262b31;--ring:rgba(255,255,255,.08);--accent:#3987e5;--accentSoft:rgba(57,135,229,.18);--lanebg:#1f2328;}}
 :root[data-theme="dark"]{color-scheme:dark;--page:#0b0d10;--surface:#15181c;--ink:#f3f5f7;--ink2:#c0c6cd;--grid:#262b31;--ring:rgba(255,255,255,.08);--accent:#3987e5;--accentSoft:rgba(57,135,229,.18);--lanebg:#1f2328;}
 *{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
@@ -248,7 +274,13 @@ svg{width:100%;height:auto;display:block;overflow:visible}.grid{stroke:var(--gri
 .lane-bg{fill:var(--lanebg)}.lane-on{fill:var(--accent)}.lane-alt{fill:var(--alt);opacity:.55}.lane-hot{fill:var(--hot)}.turn{fill:var(--hot);stroke:var(--surface);stroke-width:1.5}
 .legend{display:flex;flex-wrap:wrap;gap:18px;font-size:12.5px;color:var(--ink2);margin-top:12px}.legend span{display:inline-flex;align-items:center;gap:7px}
 .sw{display:inline-block;width:12px;height:12px;border-radius:3px}.sw.bar{background:var(--accent)}.sw.line{height:2px;width:18px;background:var(--ink);opacity:.7;border-radius:0}.sw.dot{border-radius:50%;background:var(--accent)}.sw.iqr{background:var(--accentSoft)}.sw.hot{background:var(--hot)}.sw.alt{background:var(--alt);opacity:.55}
-.dbar{display:flex;height:24px;border-radius:8px;overflow:hidden;gap:2px;margin-top:12px}.dseg{height:100%}.d-low,.dlegend i.d-low{background:#b7d3f6}.d-mid,.dlegend i.d-mid{background:#5598e7}.d-hi,.dlegend i.d-hi{background:#1c5cab}
+.dbar{display:flex;height:24px;border-radius:8px;overflow:hidden;gap:2px;margin-top:12px}.dseg{height:100%}
+.lv-high{background:var(--lv-high)}.lv-moderate{background:var(--lv-mod)}.lv-low{background:var(--lv-low)}.lv-none{background:var(--lv-none)}
+.b-high{fill:var(--lv-high);opacity:.9}.b-moderate{fill:var(--lv-mod);opacity:.85}.b-low{fill:var(--lv-low);opacity:.95}.b-none{fill:var(--lv-none)}
+.nodata{fill:none;stroke:var(--lv-none);stroke-dasharray:2 2}.thr{stroke:var(--muted);stroke-width:1;stroke-dasharray:4 4;opacity:.6}.axis{stroke:var(--grid);stroke-width:1.5}
+.lvl{font-size:11.5px;font-weight:600}.lvl-high{fill:var(--lv-high)}.lvl-moderate{fill:var(--lv-mod)}.lvl-low{fill:#6b9fd8}.lvl-none{fill:var(--muted)}
+.avg-line{fill:none;stroke:var(--avg);stroke-width:2.5;stroke-linecap:round}.avg-dot{fill:var(--surface);stroke:var(--avg);stroke-width:2.5}
+.sw.avgkey{width:22px;height:10px;background:linear-gradient(var(--avg),var(--avg)) center/100% 2.5px no-repeat;position:relative}.sw.avgkey:after{content:"";position:absolute;left:7px;top:1px;width:8px;height:8px;border-radius:50%;border:2.5px solid var(--avg);background:var(--surface);box-sizing:border-box}
 .dlegend{display:flex;flex-wrap:wrap;gap:20px;margin-top:10px;font-size:13px;color:var(--ink2)}.dlegend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}.dlegend em{color:var(--muted);font-style:normal;margin-left:4px}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}.stat{background:var(--lanebg);border-radius:12px;padding:12px 14px}.stat b{display:block;font-size:21px;letter-spacing:-.01em}.stat span{font-size:12px;color:var(--ink2)}
 .fig{font-size:11.5px;color:var(--muted);margin-top:10px;letter-spacing:.02em}
@@ -311,12 +343,12 @@ ${points.map(([n, name, st, val, note]) => `<tr><td class="pt-name">${esc(name)}
 <div class="legend"><span><i class="sw bar"></i>present</span><span><i class="sw alt"></i>facing away from the camera</span><span><i class="sw hot"></i>high activity / turn</span></div>
 <p class="fig">Figure 1 · Session timeline</p></section>
 
-<section class="card"><div class="sh"><span class="n">06</span><h2>Activity</h2></div><p class="sub">Activity index per minute (0 = still, 1 = very active) with the 5-minute average.</p>
+<section class="card"><div class="sh"><span class="n">06</span><h2>Activity</h2></div><p class="sub">Each bar is one minute, coloured by activity level (activity index 0 = still, 1 = very active); the line is the 5-minute average.</p>
 <div style="margin-top:14px">${activityChart()}</div>
-<div class="legend"><span><i class="sw bar"></i>activity per minute</span><span><i class="sw line"></i>5-minute average</span><span><i class="sw iqr"></i>high-activity zone (0.6+) · low is below 0.2</span></div>
+<div class="legend"><span><i class="sw lv-high"></i>High (0.6+)</span><span><i class="sw lv-moderate"></i>Moderate (0.2–0.6)</span><span><i class="sw lv-low"></i>Low (0.05–0.2)</span><span><i class="sw lv-none"></i>No activity</span><span><i class="sw avgkey"></i>5-minute average</span></div>
 <p class="fig">Figure 2 · Activity per minute</p>
 <h3 style="margin:22px 0 0;font-size:15px">Time by activity level</h3>${distribution()}
-<div class="stats"><div class="stat"><b>${stillMin} min</b><span>standing rest</span></div><div class="stat"><b>${bands.moderate} min</b><span>moderate activity</span></div><div class="stat"><b>${bands.high} min</b><span>high activity</span></div><div class="stat"><b>${turns.length}</b><span>turns in the stall</span></div></div>
+<div class="stats"><div class="stat"><b>${bands.high} min</b><span>high activity</span></div><div class="stat"><b>${bands.moderate} min</b><span>moderate activity</span></div><div class="stat"><b>${bands.low + bands.none} min</b><span>low or no activity</span></div><div class="stat"><b>${turns.length}</b><span>turns in the stall</span></div></div>
 <p class="sub" style="margin-top:14px">${restSentence}</p></section>
 
 <section class="card"><div class="sh"><span class="n">07</span><h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Eye-surface temperature reads about 2 °C below rectal temperature.</p>
