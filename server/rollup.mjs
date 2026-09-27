@@ -100,12 +100,14 @@ export const prototype = (r) => r?.meta?.prototype === true || SOURCE_STATUS[r?.
 
 /** This horse's usual eye temperature: the mean of calibrated camera readings
  *  from the last 7 days, excluding the last 6 h (so a fever building now does
- *  not raise its own baseline). Null until EYE_BASELINE_DAYS distinct days. */
+ *  not raise its own baseline). Null until the readings span ~EYE_BASELINE_DAYS days. */
 export function eyeBaseline(rd, cur) {
   const cutoff = Date.parse(cur.ts) - 6 * 3600 * 1000;
   const rows = rd.filter((r) => r.metric === "body_temp_c" && r.source === cur.source && !uncalibrated(r)
     && Date.parse(r.ts) < cutoff && within(r, 7 * DAY_MS));
-  if (new Set(rows.map((r) => dayKey(r.ts))).size < EYE_BASELINE_DAYS) return null;
+  // Span in hours, not calendar dates: 41 h of data can touch 3 dates.
+  const ts = rows.map((r) => Date.parse(r.ts));
+  if (!rows.length || Math.max(...ts) - Math.min(...ts) < (EYE_BASELINE_DAYS - 0.5) * DAY_MS) return null;
   return rows.reduce((a, r) => a + r.value, 0) / rows.length;
 }
 

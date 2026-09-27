@@ -19,8 +19,10 @@ export const METRICS = {
   // Stillness measured from video. NOT lying-down time (rest_minutes, which
   // the "low lying-down time" alert uses) — a horse can stand still, dozing.
   inactive_minutes:     { point: 6,  label: "Inactive (still)",     unit: "min",   source: "thermal_video",  kind: "sample" },
+  lying_minutes:        { point: 6,  label: "Lying (camera)",       unit: "min",   source: "visible_video",  kind: "sample" }, // meta.lateralMin: possibly flat on the side
+  posture_event:        { point: 6,  label: "Lies down / gets up",  unit: "event", source: "visible_video",  kind: "event" },  // meta.kind: lie_down|get_up|possible_roll|possible_cast
   gait_asymmetry:       { point: 7,  label: "Lameness / gait",      unit: "0..1",  source: "imu_optical",    kind: "sample" },
-  vice_event:           { point: 8,  label: "Stable vice (weaving)", unit: "event", source: "thermal_video", kind: "event" }, // meta.kind: weaving (video); crib_biting|wind_sucking need a model / microphone
+  vice_event:           { point: 8,  label: "Stable vice",          unit: "event", source: "visible_video", kind: "event" }, // meta.kind: weaving|box_walking|head_tossing (video); crib_biting needs a model / microphone
   water_ml:             { point: 9,  label: "Water intake",         unit: "ml",    source: "flow_meter",     kind: "sample" },
   water_visit:          { point: 9,  label: "Water visit",          unit: "event", source: "flow_meter",     kind: "event" },
   feed_intake_g:        { point: 10, label: "Feed intake",          unit: "g",     source: "feeder",         kind: "sample" },
@@ -45,7 +47,8 @@ export const METRICS = {
 //                   horses (readings carry meta.method)
 export const SOURCE_STATUS = {
   thermal_camera: "available",   // camera in hand — points 2,3,4 measured directly off thermometry
-  thermal_video:  "prototype",   // same camera's thermal video: activity, stillness, weaving, urination/excretion
+  thermal_video:  "prototype",   // same camera's thermal video: breathing rhythm, urination/excretion (floor), behaviour if chosen
+  visible_video:  "prototype",   // same camera's colour video: activity, stillness, vices, lying (with the detector)
   optical:        "model-pending", // same camera's visible stream, but points 6/11/12 need our CV models
   optical_audio:  "pending",     // microphone RFI not yet placed
   imu:            "pending",     // IMU leg tag RFI not yet placed

@@ -19,6 +19,7 @@ import { checkHost, rtspOptions } from "./camera.mjs";
 import { withCamera, forget, protocolOf, IdentityMismatch } from "./camera-pool.mjs";
 import { readRegisters, readSensor, TYPES, WORD_ORDERS } from "./modbus.mjs";
 import { startBreathingCheck, breathingJob, jobView } from "./thermal-video.mjs";
+import { startCoolingTest, coolingJob, coolingView, splitFromCalib } from "./cooling.mjs";
 
 export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device"];
 const POLLED = new Set(["thermal_camera", "modbus_sensor"]);
@@ -107,8 +108,13 @@ export function validateDevice(kind, body, existing = {}, all = []) {
       // Keep thermal + visible video on the edge box for labelling and
       // training (off by default: it is continuous footage, and disk).
       record: pick("record", false) === true,
+      // Which picture behaviour (activity, lying, vices) is read from. The
+      // colour lens sees the whole stall; the 25 mm thermal view is ~1.5 x
+      // 1.2 m at 3.5 m — the head and neck — so colour is the default.
+      behaviourStream: String(pick("behaviourStream", "visible")),
     });
     if (!["auto", "isapi", "mtrpc"].includes(out.protocol)) errs.push("protocol must be auto, isapi or mtrpc");
+    if (!["visible", "thermal"].includes(out.behaviourStream)) errs.push("behaviourStream must be visible or thermal");
     errs.push(...validateCameraModel(out));
     if (!out.stall) errs.push("stall is required — the camera's readings are attributed to it");
     for (const k of ["httpPort", "rtspPort", "modbusPort"]) if (!isPort(out[k])) errs.push(`${k} must be a port number`);
@@ -505,8 +511,13 @@ export function deviceApi({ store, json, CORS }) {
             calibrated: Boolean(d.rois && !d.rois.stale), serial: d.identity?.serial ?? null,
             protocol: d.protocol || "auto",
             record: d.record === true, rtspPort: d.rtspPort,
+            behaviourStream: d.behaviourStream || "visible",
+            // Urine/manure split from the floor cooling test (null = the
+            // edge agent's default guess).
+            floorCalib: { urineHalfLifeMin: splitFromCalib(d.floorCalib), deltaC: d.floorCalib?.deltaC ?? null },
             // JSON-RPC cameras are measured by the edge box sampling these.
-            rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null } : null,
+            // flank is on the COLOUR picture (breathing from flank movement).
+            rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null, flank: d.rois.flank ?? null } : null,
           };
         }
         return {
@@ -581,7 +592,32 @@ export function deviceApi({ store, json, CORS }) {
       return json(200, jobView(job));
     }
 
-    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|rois|temps|token|events|verification|breathing))?$/);
+    // Floor cooling test progress, stop, and save as the urine/manure calibration.
+    const cj = path.match(/^\/api\/devices\/([^/]+)\/cooling\/([^/]+)(?:\/(stop|save))?$/);
+    if (cj) {
+      const job = coolingJob(decodeURIComponent(cj[2]));
+      const dev = byId(decodeURIComponent(cj[1]));
+      if (!job || !dev || job.deviceId !== dev.id) return json(404, { error: "unknown test" });
+      if (!cj[3] && method === "GET") return json(200, coolingView(job));
+      if (cj[3] === "stop" && method === "POST") { job.stop = true; await job.done; return json(200, coolingView(job)); }
+      if (cj[3] === "save" && method === "POST") {
+        const { body, error } = await readBody(req);
+        if (error) return error;
+        if (!["urine", "manure"].includes(body.as)) return json(400, { error: "save it as urine or manure" });
+        const r = coolingView(job).result;
+        if (!r.halfLifeMin) return json(409, { error: "not measured yet — the patch has not cooled to half its warmth" });
+        const floorCalib = { ...(dev.floorCalib || {}),
+          [body.as]: { halfLifeMin: r.halfLifeMin, peakRiseC: r.peakRiseC, areaFrac: r.areaFrac, fill: r.fill, at: now(), by: actorOf(who) } };
+        store.update("devices", dev.id, { floorCalib });
+        const split = splitFromCalib(floorCalib);
+        event(dev, actorOf(who), "floor calibrated",
+          `${body.as}: cooled to half in ${r.halfLifeMin} min (peak +${r.peakRiseC} °C)` + (split ? `; urine/manure split now ${split} min` : ""));
+        return json(200, { floorCalib, urineHalfLifeMin: split });
+      }
+      return json(405, { error: "method not allowed" });
+    }
+
+    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|rois|temps|token|events|verification|breathing|cooling))?$/);
     if (!m) return null;
     const dev = byId(decodeURIComponent(m[1]));
     if (!dev) return json(404, { error: "unknown device" });
@@ -702,7 +738,11 @@ export function deviceApi({ store, json, CORS }) {
       // Optional: where the horse stands and urinates/defecates, for the
       // floor-event detector. Sent as null to remove it.
       const floor = body.floor ?? null;
-      const why = badBox(eye, "eye", EYE_BOX_MAX) || badBox(n, "nostril") || (floor ? badBox(floor, "floor") : null);
+      // Optional, on the COLOUR picture: the horse's flank, for breathing
+      // from flank movement (a second opinion to the nostril).
+      const flank = body.flank ?? null;
+      const why = badBox(eye, "eye", EYE_BOX_MAX) || badBox(n, "nostril") || (floor ? badBox(floor, "floor") : null)
+        || (flank ? badBox(flank, "flank") : null);
       if (why) return json(400, { error: why });
       const box = (b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
       if (await protocolOf(dev) === "mtrpc") {
@@ -717,7 +757,7 @@ export function deviceApi({ store, json, CORS }) {
           if (e instanceof IdentityMismatch) return json(409, { error: e.message, code: e.code });
           verify = { verified: null, detail: `stored in EquiCare; the camera's own rule display was not updated (${e.message})` };
         }
-        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), pushedAt: now(), verified: verify.verified };
+        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), ...(flank ? { flank: box(flank) } : {}), pushedAt: now(), verified: verify.verified };
         store.update("devices", dev.id, { rois, verification: null });
         event(dev, actorOf(who), "calibrated",
           `eye box (${eye.x0}, ${eye.y0})–(${eye.x1}, ${eye.y1}), nostril (${n.x0}, ${n.y0})–(${n.x1}, ${n.y1}); ${verify.detail}`);
@@ -747,7 +787,7 @@ export function deviceApi({ store, json, CORS }) {
           event(dev, actorOf(who), "calibration not confirmed", out.verify.detail);
           return json(502, { error: `ROIs sent, but ${out.verify.detail}`, results, verify: out.verify });
         }
-        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), pushedAt: now(), verified: out.verify.verified };
+        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), ...(flank ? { flank: box(flank) } : {}), pushedAt: now(), verified: out.verify.verified };
         // A new aim has not been checked yet: any earlier verification was of
         // the old ROIs.
         store.update("devices", dev.id, { rois, verification: null });
@@ -780,6 +820,23 @@ export function deviceApi({ store, json, CORS }) {
       if (cred.error) return json(502, { error: cred.error });
       const job = await startBreathingCheck(dev, cred.password, n, { seconds });
       return json(202, jobView(job));
+    }
+
+    if (action === "cooling" && method === "POST") {
+      const bad = cameraOnly(); if (bad) return bad;
+      if (await protocolOf(dev) !== "mtrpc") return json(400, { error: "the floor cooling test needs the JSON-RPC camera's pixel reads" });
+      if (!dev.rois?.floor || dev.rois.stale) return json(409, { error: "draw and save a floor box first (Hardware → calibrate → Floor)" });
+      const { body, error } = await readBody(req);
+      if (error) return error;
+      const minutes = Math.max(3, Math.min(60, Number(body.minutes) || 20));
+      try {
+        await camera(dev, async () => true);             // credentials + identity, before starting
+      } catch (e) {
+        return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message, code: e.code });
+      }
+      const job = startCoolingTest(dev, (pts) => camera(dev, (c) => c.readPixels(pts)), { minutes });
+      event(dev, actorOf(who), "floor cooling test", `started (${minutes} min)`);
+      return json(202, coolingView(job));
     }
 
     if (action === "verification" && method === "POST") {

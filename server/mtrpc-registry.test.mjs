@@ -121,6 +121,40 @@ test("an optional floor box is stored and sent to the edge box; a tiny one is re
   assert.deepEqual(c.body.devices.find((x) => x.id === ids.cam).rois.floor, { x0: 1000, y0: 7500, x1: 9000, y1: 9800 });
 });
 
+test("a flank box (colour picture) is stored and sent; behaviour runs on the colour stream by default", async () => {
+  const eye = { x0: 3000, y0: 3000, x1: 3600, y1: 3600 }, nostril = { x0: 5000, y0: 6200, x1: 6000, y1: 7000 };
+  const floor = { x0: 1000, y0: 7500, x1: 9000, y1: 9800 }, flank = { x0: 4000, y0: 4000, x1: 6000, y1: 5500 };
+  const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, { eye, nostril, floor, flank });
+  assert.equal(r.status, 200, r.raw);
+  const d = (await call("GET", "/edge/config", { token: tokens.edge })).body.devices.find((x) => x.id === ids.cam);
+  assert.deepEqual(d.rois.flank, flank);
+  assert.equal(d.behaviourStream, "visible");
+  assert.deepEqual(d.floorCalib, { urineHalfLifeMin: null, deltaC: null }, "no cooling test yet: the edge default applies");
+  const p = await admin("PATCH", `/api/devices/${ids.cam}`, { behaviourStream: "sideways" });
+  assert.equal(p.status, 400);
+  assert.equal((await admin("PATCH", `/api/devices/${ids.cam}`, { behaviourStream: "thermal" })).status, 200);
+  const d2 = (await call("GET", "/edge/config", { token: tokens.edge })).body.devices.find((x) => x.id === ids.cam);
+  assert.equal(d2.behaviourStream, "thermal");
+  await admin("PATCH", `/api/devices/${ids.cam}`, { behaviourStream: "visible" });
+});
+
+test("floor cooling test: runs against the floor box, stops on request, refuses to save half-measured", async () => {
+  const r = await admin("POST", `/api/devices/${ids.cam}/cooling`, { minutes: 3 });
+  assert.equal(r.status, 202, r.raw);
+  const again = await admin("POST", `/api/devices/${ids.cam}/cooling`, { minutes: 3 });
+  assert.equal(again.body.id, r.body.id, "one test per camera at a time");
+  await new Promise((res) => setTimeout(res, 2500));
+  const g = await admin("GET", `/api/devices/${ids.cam}/cooling/${r.body.id}`);
+  assert.equal(g.status, 200);
+  assert.ok(["baseline", "waiting"].includes(g.body.result.state), g.raw);
+  const s = await admin("POST", `/api/devices/${ids.cam}/cooling/${r.body.id}/stop`);
+  assert.equal(s.body.state, "done");
+  const save = await admin("POST", `/api/devices/${ids.cam}/cooling/${r.body.id}/save`, { as: "urine" });
+  assert.equal(save.status, 409, "nothing cooled: nothing to save");
+  assert.equal((await admin("POST", `/api/devices/${ids.cam}/cooling/${r.body.id}/save`, { as: "water" })).status, 400);
+  assert.equal((await admin("GET", `/api/devices/${ids.cam}/cooling/nope`)).status, 404);
+});
+
 test("the edge box receives the protocol and the ROIs to sample", async () => {
   const c = await call("GET", "/edge/config", { token: tokens.edge });
   const d = c.body.devices.find((x) => x.id === ids.cam);
