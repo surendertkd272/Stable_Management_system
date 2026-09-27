@@ -33,6 +33,7 @@ export const EYE_AREA_IDX = 0, NOSTRIL_IDX = 1, LEGACY_EYE_POINT_IDX = 0;
 const EYE_BOX_MAX = 4000;       // wider than this and the "max" may be a heat lamp, not the eye
 // Readings whose meaning depends on the ROIs being on the eye and nostril.
 const AIMED_METRICS = new Set(["body_temp_c", "nostril_temp_c", "respiratory_rate_bpm"]);
+const VIDEO_SOURCES = new Set(["thermal_video", "visible_video"]);
 
 // Freshness thresholds.
 const EDGE_ONLINE_MS = 3 * 60_000;           // edge heartbeats every 30 s
@@ -325,9 +326,11 @@ export function deviceApi({ store, json, CORS }) {
         if (!r.unit && METRICS[r.metric]) r.unit = METRICS[r.metric].unit;
         if (!r.source && dev.kind === "push_device") r.source = METRICS[r.metric]?.source ?? "push_device";
         if (dev.kind === "thermal_camera") {
-          // Vitals come off the camera's thermometry; behaviour (activity,
-          // stillness, weaving, floor events) off its thermal video.
-          r.source = r.source === "thermal_video" ? "thermal_video" : "thermal_camera";
+          // Vitals come off the camera's thermometry; behaviour off its thermal
+          // or colour video — both prototype sources. Anything else is taken
+          // as thermometry: a behaviour reading must never be relabelled as a
+          // validated measurement (it would then count towards the colic alarm).
+          r.source = VIDEO_SOURCES.has(r.source) ? r.source : "thermal_camera";
           // Only the vitals depend on where the ROIs are aimed.
           if (AIMED_METRICS.has(r.metric) && (!dev.rois || dev.rois.stale)) r.meta.calibrated = false;
         }

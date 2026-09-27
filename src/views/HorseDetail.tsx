@@ -579,7 +579,7 @@ const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digi
 const hmm = (min: number) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, "0")}m`;
 
 function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number | null }) {
-  const any = b.activity || b.inactive || b.urination || b.excretion || b.weaving || b.breathing;
+  const any = b.activity || b.inactive || b.resting || b.urination || b.excretion || b.weaving || b.boxWalking || b.headTossing || b.breathing;
   if (!any) return null;
   const none = <span className="muted">not measured here</span>;
   const reg = b.breathing?.regularity;
@@ -587,9 +587,23 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
     !e ? none : (
       <>
         <b>{e.count24h}</b> in 24 h · last {hm(e.last)}
+        {!!e.baselinePerDay && <span className="muted"> · usual ~{e.baselinePerDay}/day</span>}
         {e.times.length > 0 && <span className="muted"> · {e.times.map(hm).join(", ")}</span>}
+        {e.tier && <><br /><small className="muted">{e.tier} — a warm patch on the floor{e.lastHalfLifeMin != null ? `, cooled to half in ${e.lastHalfLifeMin} min` : ""}; posture not confirmed</small></>}
       </>
     );
+  const vice = (v: HorseBehaviour["weaving"] | undefined, fallback: React.ReactNode) =>
+    !v ? fallback : (
+      <>
+        <b>{v.minutes24h ?? v.count24h}</b> min in 24 h
+        {v.phases24h != null && <span className="muted"> · {v.phases24h} {v.phases24h === 1 ? "episode" : "episodes"}</span>}
+        <span className="muted"> · last {hm(v.last)}</span>
+        {!!v.baselineMinPerDay && !v.isNew && <span className="muted"> · usual ~{v.baselineMinPerDay} min/day</span>}
+        {v.isNew && <span className="pill warn" style={{ marginLeft: 6, fontSize: 10.5 }}>new</span>}
+      </>
+    );
+  const rs = b.resting;
+  const colour = b.stream === "visible_video";
   // Context from open veterinary sources (server/knowledge.mjs, /guide). Only
   // for patterns actually seen; never a diagnosis.
   const meaning: { id: string; text: string }[] = [];
@@ -601,8 +615,19 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
   if (b.weaving && b.weaving.count24h > 0) meaning.push({ id: "weaving", text:
     "Weaving is a stable vice linked to confinement, isolation and feeding routine; it peaks around meals. " +
     "It may help the horse cope, so a sudden stop is not automatically good news." });
+  if (b.resting && b.resting.bouts24h >= 6) meaning.push({ id: "down_up", text:
+    `${b.resting.bouts24h} lie-downs in 24 h. Going down and getting up again and again is a strong colic sign; ` +
+    "adults normally lie in 2–4 bouts, mostly after midnight." });
+  if (b.resting && b.resting.nightsSeen >= 3 && b.resting.lowNights >= 3) meaning.push({ id: "rem_deprivation", text:
+    "Almost no lying on recent nights. Horses need 30+ min lying a day for deep sleep — except in their first 1–4 nights in a new stall." });
+  if (b.headTossing && b.headTossing.count24h > 0) meaning.push({ id: "head_tossing", text:
+    "Rhythmic head tossing can be a stable vice, but head shaking has medical causes too (ears, eyes, airway, pain) — worth a vet's look if it is new." });
+  if (b.boxWalking && b.boxWalking.count24h > 0) meaning.push({ id: "box_walking", text:
+    "Box walking: fast walking with calling means confinement distress; if it happens when a neighbour leaves, separation anxiety." });
+  if (b.breathing?.band === "fast") meaning.push({ id: "resp_rate", text:
+    "Fast breathing at rest. Heat, pain, fever or excitement raise it; 40–50+ breaths/min that does not settle at rest points to heat stress." });
   if (b.excretion && b.excretion.count24h < 4) meaning.push({ id: "manure_frequency", text:
-    `${b.excretion.count24h} droppings seen in 24 h; normal is 4–13 a day and fewer droppings is a colic sign. ` +
+    `${b.excretion.count24h} ${b.excretion.count24h === 1 ? "manure event" : "manure events"} seen in 24 h; normal is 4–13 a day and fewer droppings is a colic sign. ` +
     "The floor detector is a prototype and can miss droppings — check the stall." });
   return (
     <div className="card" style={{ marginBottom: 24 }}>
@@ -613,16 +638,19 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
         </span>
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 12 }}>
-        From the thermal camera&apos;s video and floor temperatures. Shown for context and watch notes only — never used
-        for clinical alarms until validated on horses.
+        {colour ? "Behaviour from the camera's colour video (it sees the whole stall); breathing and floor events from the thermal view."
+          : "From the thermal camera's video and floor temperatures."}{" "}
+        Shown for context and watch notes only — never used for clinical alarms until validated on horses.
       </p>
       <div className="hw-facts">
         <div>
           <span>Respiration pattern</span>
           <b>
             {b.breathing
-              ? <>rhythm {reg == null ? "?" : reg >= 0.75 ? "regular" : reg >= 0.5 ? "somewhat irregular" : "weak"}
+              ? <>{b.breathing.band === "fast" && <span className="pill warn" style={{ marginRight: 6, fontSize: 10.5 }}>fast</span>}
+                  rhythm {reg == null ? "?" : reg >= 0.75 ? "regular" : reg >= 0.5 ? "somewhat irregular" : "irregular"}
                   {reg != null && <span className="muted"> ({reg.toFixed(2)})</span>}
+                  {b.breathing.method && <span className="muted"> · {b.breathing.method}</span>}
                   {nostrilC != null && <span className="muted"> · nostril {nostrilC.toFixed(1)} °C</span>}</>
               : none}
           </b>
@@ -657,16 +685,28 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
             )}
           </b>
         </div>
+        <div>
+          <span>Lying down</span>
+          <b>
+            {!rs ? <span className="muted">not measured yet — needs the lying detector and a few days to learn this stall&apos;s standing and lying shapes</span> : (
+              <>
+                {hmm(rs.lyingTodayMin)} in 24 h · {rs.bouts24h} {rs.bouts24h === 1 ? "bout" : "bouts"}
+                {rs.longestBoutMin != null && <span className="muted"> · longest {rs.longestBoutMin} min</span>}
+                <span className="muted"> · 00–04 h {rs.nightLyingMin} min</span>
+                {rs.lateralTodayMin > 0 && <span className="muted"> · possibly flat on side {rs.lateralTodayMin} min</span>}
+                {rs.rolls24h > 0 && <span className="pill warn" style={{ marginLeft: 6, fontSize: 10.5 }}>{rs.rolls24h} possible {rs.rolls24h === 1 ? "roll" : "rolls"}</span>}
+              </>
+            )}
+          </b>
+        </div>
         <div><span>Urination</span><b>{events(b.urination)}</b></div>
         <div><span>Excretion</span><b>{events(b.excretion)}</b></div>
         <div>
           <span>Weaving</span>
-          <b>
-            {b.weaving ? <><b>{b.weaving.count24h}</b> {b.weaving.count24h === 1 ? "episode" : "episodes"} in 24 h · last {hm(b.weaving.last)}</>
-              : b.activity ? <span className="muted">none seen</span>   /* the video is being analysed */
-              : none}
-          </b>
+          <b>{vice(b.weaving, b.activity ? <span className="muted">none seen</span> : none)}</b>
         </div>
+        {b.boxWalking && <div><span>Box walking</span><b>{vice(b.boxWalking, none)}</b></div>}
+        {b.headTossing && <div><span>Head tossing</span><b>{vice(b.headTossing, none)}</b></div>}
       </div>
       {meaning.length > 0 && (
         <>

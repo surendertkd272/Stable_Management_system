@@ -270,6 +270,20 @@ test("edge readings are attributed by the registry, not by what the edge claims"
   assert.equal(cam.status.state, "online");
 });
 
+test("camera behaviour from the colour or thermal video stays a prototype source; nothing else becomes one", async () => {
+  const r = await call("POST", "/ingest/readings", { token: tokens.edge, body: { readings: [
+    { deviceId: ids.cam, metric: "activity_index", value: 0.9, source: "visible_video", meta: { prototype: true } },
+    { deviceId: ids.cam, metric: "vice_event", value: 1, source: "thermal_video", meta: { kind: "weaving" } },
+    { deviceId: ids.cam, metric: "nostril_temp_c", value: 33, source: "imu" },
+  ] } });
+  assert.equal(r.body.accepted, 3);
+  const horse = (await admin("GET", "/api/horses/zarina")).body;
+  assert.equal(horse.vitals.activity_index.source, "visible_video",
+    "colour-video behaviour must not be relabelled as thermometry (it would count towards the colic alarm)");
+  assert.equal(horse.vitals.vice_event.source, "thermal_video");
+  assert.equal(horse.vitals.nostril_temp_c.source, "thermal_camera");
+});
+
 test("an edge box cannot send readings for a device it isn't assigned", async () => {
   const r = await call("POST", "/ingest/readings", { token: tokens.edgeB, body: { readings: [
     { deviceId: ids.cam, metric: "body_temp_c", value: 39.9 } ] } });

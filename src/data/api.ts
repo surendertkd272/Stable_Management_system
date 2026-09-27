@@ -123,10 +123,26 @@ export const getCoverage = () => get<CoverageRow[]>("/api/coverage");
 export interface HorseBehaviour {
   activity: { now: number; at: string; avg4h: number | null; baseline: number | null; unusual: "high" | "low" | null } | null;
   inactive: { todayMin: number; longestMin: number; periods: { start: string; end: string; minutes: number }[] } | null;
-  urination: { count24h: number; last: string; times: string[] } | null;
-  excretion: { count24h: number; last: string; times: string[] } | null;
-  weaving: { count24h: number; last: string } | null;
-  breathing: { regularity: number | null; method: string | null; at: string } | null;
+  resting?: {
+    lyingTodayMin: number; lateralTodayMin: number; lateralLast90Min: number; nightLyingMin: number;
+    bouts24h: number; getUps24h: number; bouts: { start: string; end: string | null; minutes: number }[];
+    longestBoutMin: number | null; nightsSeen: number; lowNights: number; rolls24h: number;
+    lastRoll: string | null; lastCast: string | null;
+  } | null;
+  stream?: string | null;
+  urination: FloorEvents | null;
+  excretion: FloorEvents | null;
+  weaving: ViceSummary | null;
+  boxWalking?: ViceSummary | null;
+  headTossing?: ViceSummary | null;
+  breathing: { regularity: number | null; method: string | null; band?: string | null; intervalCv?: number | null; at: string } | null;
+}
+export interface FloorEvents {
+  count24h: number; last: string; times: string[];
+  lastConfidence?: number | null; lastHalfLifeMin?: number | null; tier?: string | null; baselinePerDay?: number | null;
+}
+export interface ViceSummary {
+  count24h: number; last: string; minutes24h?: number; phases24h?: number; baselineMinPerDay?: number | null; isNew?: boolean;
 }
 
 // Per-horse live detail (summary + latest vitals + 7-day charts).
@@ -235,6 +251,8 @@ export interface CameraRois {
   nostril: RoiBox;
   /** Optional floor area for the urination/excretion detector. */
   floor?: RoiBox | null;
+  /** Optional, on the COLOUR picture: the flank, for breathing from flank movement. */
+  flank?: RoiBox | null;
   pushedAt?: string;
   /** true = read back and matched; null = the camera does not report coordinates */
   verified?: boolean | null;
@@ -279,6 +297,10 @@ export interface ThermalCamera extends DeviceCommon {
   protocol?: "auto" | "isapi" | "mtrpc";
   /** Keep thermal + visible video on the edge box for labelling. */
   record?: boolean;
+  /** Which picture behaviour is read from: the colour lens sees the whole stall. */
+  behaviourStream?: "visible" | "thermal";
+  /** Floor cooling test results (urine / manure half-lives on this bedding). */
+  floorCalib?: { urine?: FloorCalibEntry; manure?: FloorCalibEntry; deltaC?: number } | null;
   identity: { serial: string; model: string | null; firmware?: string | null; pinnedAt: string } | null;
   /** The last aim check: breathing found by the edge agent's own algorithm,
    *  against a hand count. Applies only while `roisAt` matches rois.pushedAt. */
@@ -354,7 +376,7 @@ export const deviceEvents = (id: string) => call<DeviceEvent[]>("GET", dpath(id,
 /** Camera connection test, or a Modbus test read. `acceptIdentity` confirms a replacement camera. */
 export const probeDevice = (id: string, acceptIdentity = false) =>
   call<CameraProbe | SensorProbe>("POST", dpath(id, "probe") + (acceptIdentity ? "?acceptIdentity=1" : ""), undefined, 45000);
-export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril"> & { floor?: RoiBox | null }) =>
+export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril"> & { floor?: RoiBox | null; flank?: RoiBox | null }) =>
   call<{ ok: true; rois: CameraRois; verify: { verified: boolean | null; detail: string } }>("PUT", dpath(id, "rois"), rois, 30000);
 /** Live ROI temperatures. `parts: "nostril"` is the fast path for the
  *  breathing check; `rois` measures boxes not yet pushed (JSON-RPC cameras
@@ -380,6 +402,21 @@ export const startBreathingCheck = (id: string, nostril: RoiBox, seconds = 60) =
   call<BreathingJob>("POST", dpath(id, "breathing"), { nostril, seconds }, 30000);
 export const breathingCheckStatus = (id: string, job: string) =>
   call<BreathingJob>("GET", `${dpath(id, "breathing")}/${encodeURIComponent(job)}`);
+
+export interface FloorCalibEntry { halfLifeMin: number; peakRiseC: number; areaFrac: number; fill: number; at: string; by: string }
+export interface CoolingJob {
+  id: string; state: "running" | "done" | "error"; error: string | null; minutes: number; elapsedS: number;
+  result: {
+    state: "baseline" | "waiting" | "cooling" | "measured"; note: string;
+    peakRiseC?: number; halfLifeMin?: number | null; areaFrac?: number; fill?: number;
+    series?: { t: number; meanRiseC: number; warmArea: number }[];
+  };
+}
+export const startCoolingTest = (id: string, minutes = 20) => call<CoolingJob>("POST", dpath(id, "cooling"), { minutes }, 30000);
+export const coolingStatus = (id: string, job: string) => call<CoolingJob>("GET", `${dpath(id, "cooling")}/${encodeURIComponent(job)}`);
+export const stopCoolingTest = (id: string, job: string) => call<CoolingJob>("POST", `${dpath(id, "cooling")}/${encodeURIComponent(job)}/stop`);
+export const saveCooling = (id: string, job: string, as: "urine" | "manure") =>
+  call<{ floorCalib: ThermalCamera["floorCalib"]; urineHalfLifeMin: number | null }>("POST", `${dpath(id, "cooling")}/${encodeURIComponent(job)}/save`, { as });
 
 export const saveVerification = (id: string, v: {
   breathing: { bpm: number; periodicity: number; seconds: number; samples: number };

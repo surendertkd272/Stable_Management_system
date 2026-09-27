@@ -32,7 +32,8 @@ import { Modal, Sparkline } from "../components/ui";
 import { useStable, useToast } from "../store";
 import { useAuth } from "../auth";
 
-type Rois = { eye: RoiBox; nostril: RoiBox; floor?: RoiBox | null };
+type Rois = { eye: RoiBox; nostril: RoiBox; floor?: RoiBox | null; flank?: RoiBox | null };
+type RoiMode = "eye" | "nostril" | "floor" | "flank";
 
 // Where the edge agent points ROIs on an uncalibrated camera — frame centre.
 const DEFAULT_ROIS: Rois = { eye: { x0: 4850, y0: 4880, x1: 5150, y1: 5120 }, nostril: { x0: 4200, y0: 5200, x1: 5800, y1: 6400 } };
@@ -856,7 +857,7 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
     case "thermal_camera": return {
       ...common, stall, edgeId, host: "", httpPort: 80, https: false, rtspPort: 554, modbusPort: 502,
       username: "admin", password: "", variant: "640", thermalLens: "13", visibleLens: "4", distanceM: 3.5, emissivity: 0.98,
-      protocol: "auto", record: false,
+      protocol: "auto", record: false, behaviourStream: "visible",
     };
     case "modbus_sensor": return {
       ...common, stall, edgeId, host: "", port: 502, unitId: 1, function: 3, addressing: "zero-based", pollSeconds: 10,
@@ -1015,6 +1016,14 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
                       <option value="mtrpc">JSON-RPC (Sparsh demo unit firmware)</option>
                       <option value="isapi">ISAPI (vendor documentation)</option>
                     </select>
+                  </div>
+                  <div className="field" style={{ marginTop: 10, maxWidth: 360 }}>
+                    <label>Read behaviour from</label>
+                    <select value={s("behaviourStream") || "visible"} onChange={(e) => set("behaviourStream", e.target.value)}>
+                      <option value="visible">Colour picture — sees the whole stall (recommended)</option>
+                      <option value="thermal">Thermal picture — only if it shows the whole horse</option>
+                    </select>
+                    <small className="muted">Activity, lying down, weaving. The 25 mm thermal view is ~1.5 × 1.2 m at 3.5 m — about one horse&apos;s head and neck.</small>
                   </div>
                   <label className="hw-check" style={{ marginTop: 8 }}>
                     <input type="checkbox" checked={Boolean(f.record)} onChange={(e) => set("record", e.target.checked)} /> Record
@@ -1225,8 +1234,8 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
   const [thermal, setThermal] = useState<Snap | null>(null);
   const [visible, setVisible] = useState<Snap | null>(null);
   const [rois, setRois] = useState<Rois>(() =>
-    cam.rois ? { eye: toBox(cam.rois.eye, "eye"), nostril: cam.rois.nostril, floor: cam.rois.floor ?? null } : DEFAULT_ROIS);
-  const [mode, setMode] = useState<"eye" | "nostril" | "floor">("eye");
+    cam.rois ? { eye: toBox(cam.rois.eye, "eye"), nostril: cam.rois.nostril, floor: cam.rois.floor ?? null, flank: cam.rois.flank ?? null } : DEFAULT_ROIS);
+  const [mode, setMode] = useState<RoiMode>("eye");
   const [live, setLive] = useState(true);
   const [busy, setBusy] = useState(false);
   const [pushed, setPushed] = useState<{ at: string; detail: string; verified: boolean | null } | null>(
@@ -1452,13 +1461,22 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
               <button className={mode === "floor" ? "on" : ""} onClick={() => setMode("floor")} title="Optional: for urination and excretion">
                 3 · Floor
               </button>
+              <button className={mode === "flank" ? "on" : ""} onClick={() => setMode("flank")} title="Optional, on the colour picture: breathing from flank movement">
+                4 · Flank
+              </button>
             </div>
             <label className="hw-check" style={{ margin: 0, alignItems: "center" }}>
               <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
               Live{checking ? " · paused for the check" : live && age !== null ? ` · ${age} s ago` : ""}
             </label>
           </div>
-          {!thermal ? (
+          {mode === "flank" ? (
+            !visible?.url ? (
+              <div className="hw-stage-empty">{visible ? `Colour snapshot failed: ${visible.error}` : <Loader2 className="spin" size={22} />}</div>
+            ) : (
+              <RoiStage src={visible.url} rois={rois} mode={mode} onChange={setRois} onDrag={(d) => (dragging.current = d)} hotspot={null} />
+            )
+          ) : !thermal ? (
             <div className="hw-stage-empty">
               <Loader2 className="spin" size={22} />
             </div>
@@ -1486,9 +1504,12 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
               ? "Drag a small box around the eye. The camera reads the hottest pixel inside it — the inner corner of the eye — so it does not have to be exact."
               : mode === "nostril"
                 ? "Drag a tight box over the nostril. Breathing is read from the box's average, so keep coat and background out of it."
-                : "Optional: drag a box over the floor where the horse stands. Fresh urine and manure show as warm patches there (prototype detector). Keep the horse's body out of it if you can."}{" "}
+                : mode === "floor"
+                  ? "Optional: drag a box over the floor where the horse stands. Fresh urine and manure show as warm patches there (prototype detector). Keep the horse's body out of it if you can."
+                  : "Optional, on the COLOUR picture: drag a box over the horse's flank (behind the ribs). Breathing is also read from the flank's rise and fall — a second opinion when the head turns away from the thermal view."}{" "}
             Tip: wait until the horse stands still in the live view before drawing.
           </p>
+          {mode === "floor" && cam.protocol === "mtrpc" && <CoolingTest cam={cam} />}
           {eyeW > EYE_BOX_WARN || eyeH > EYE_BOX_WARN ? (
             <div className="row watch" style={{ marginTop: 8, padding: "8px 12px" }}>
               <Info size={15} style={{ flexShrink: 0 }} />
@@ -1631,6 +1652,82 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
   );
 }
 
+/** Floor cooling test: how fast warm water (urine) and fresh manure cool on
+ *  this stable's bedding. No published data exists, so it is measured here;
+ *  the two half-lives set the camera's urine/manure split. */
+function CoolingTest({ cam }: { cam: ThermalCamera }) {
+  const notify = useToast();
+  const [job, setJob] = useState<api.CoolingJob | null>(null);
+  const [err, setErr] = useState("");
+  const [calib, setCalib] = useState(cam.floorCalib ?? null);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+  const floorSaved = Boolean(cam.rois?.floor && !cam.rois.stale);
+
+  const start = async () => {
+    setErr("");
+    const r = await api.startCoolingTest(cam.id, 30);
+    if (!r.ok) return setErr(r.error);
+    let j = r.data;
+    setJob(j);
+    while (alive.current && j.state === "running") {
+      await sleep(2000);
+      const s = await api.coolingStatus(cam.id, j.id);
+      if (!s.ok) break;
+      j = s.data;
+      setJob(j);
+    }
+  };
+  const stop = async () => { if (job) { const r = await api.stopCoolingTest(cam.id, job.id); if (r.ok) setJob(r.data); } };
+  const save = async (as: "urine" | "manure") => {
+    if (!job) return;
+    const r = await api.saveCooling(cam.id, job.id, as);
+    if (!r.ok) return notify(`Not saved: ${r.error}`);
+    setCalib(r.data.floorCalib ?? null);
+    notify(`Saved as ${as}` + (r.data.urineHalfLifeMin ? ` — urine/manure split now ${r.data.urineHalfLifeMin} min` : ""));
+  };
+  const res = job?.result;
+  const series = res?.series?.map((p) => p.meanRiseC) ?? [];
+  return (
+    <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+      <p className="hw-legend" style={{ marginTop: 0 }}>Floor cooling test</p>
+      <p className="muted" style={{ fontSize: 11.5, marginTop: 0 }}>
+        Tells urine from manure on this bedding. Press Start with the floor box empty, then pour 1–3 L of warm water
+        (~38 °C, like urine) — or place ~2 kg of fresh manure — inside the box. Run it once for each.
+      </p>
+      {!floorSaved ? <p className="muted" style={{ fontSize: 12 }}>Draw the floor box and push the ROIs first.</p> : (
+        <div className="flex gap-sm center wrap">
+          <button className="btn-ghost accent" onClick={start} disabled={job?.state === "running"}>
+            {job?.state === "running" ? <Loader2 size={15} className="spin" /> : <ScanLine size={15} />}
+            {job?.state === "running" ? `Measuring… ${Math.round((job.elapsedS ?? 0) / 60)} min` : "Start (up to 30 min)"}
+          </button>
+          {job?.state === "running" && <button className="btn-ghost" onClick={stop}>Stop</button>}
+        </div>
+      )}
+      {err && <div className="row urgent" style={{ padding: "8px 12px", marginTop: 8 }}><XCircle size={15} /><span style={{ fontSize: 12 }}>{err}</span></div>}
+      {res && (
+        <div style={{ marginTop: 8, fontSize: 12.5 }}>
+          <div>{res.note}{res.peakRiseC != null && <> · peak +{res.peakRiseC} °C</>}{res.halfLifeMin != null && <> · <b>half-life {res.halfLifeMin} min</b></>}
+            {res.areaFrac != null && <span className="muted"> · {Math.round(res.areaFrac * 100)} % of the box</span>}</div>
+          {series.length > 1 && <div style={{ marginTop: 6 }}><Sparkline data={series} w={260} h={40} /></div>}
+          {res.halfLifeMin != null && (
+            <div className="flex gap-sm center wrap" style={{ marginTop: 8 }}>
+              <button className="btn-ghost" onClick={() => save("urine")}>Save as urine (water)</button>
+              <button className="btn-ghost" onClick={() => save("manure")}>Save as manure</button>
+            </div>
+          )}
+        </div>
+      )}
+      {(calib?.urine || calib?.manure) && (
+        <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
+          Saved: {calib?.urine ? `urine half-life ${calib.urine.halfLifeMin} min` : "urine not measured"} ·{" "}
+          {calib?.manure ? `manure half-life ${calib.manure.halfLifeMin} min` : "manure not measured"}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Hint({ children }: { children: ReactNode }) {
   return (
     <div className="row watch" style={{ marginTop: 10, padding: "10px 14px" }}>
@@ -1652,7 +1749,7 @@ function toBox(b: RoiBox | { x: number; y: number }, kind: "eye" | "nostril"): R
  *  hottest-pixel marker. Pointer events, so it works with a finger on a tablet
  *  in the barn as well as a mouse. */
 function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
-  src: string; rois: Rois; mode: "eye" | "nostril" | "floor"; onChange: (r: Rois) => void;
+  src: string; rois: Rois; mode: RoiMode; onChange: (r: Rois) => void;
   onDrag: (dragging: boolean) => void; hotspot: { x: number; y: number } | null;
 }) {
   const stage = useRef<HTMLDivElement>(null);
@@ -1683,7 +1780,7 @@ function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
     const b = rois[mode];
     if (!b) return;
     // A tap without a drag: a usable box centred on the tap.
-    const [minW, hw, hh] = mode === "eye" ? [100, 150, 120] : mode === "nostril" ? [150, 400, 300] : [300, 1500, 800];
+    const [minW, hw, hh] = mode === "eye" ? [100, 150, 120] : mode === "nostril" ? [150, 400, 300] : mode === "flank" ? [200, 900, 600] : [300, 1500, 800];
     if (b.x1 - b.x0 < minW || b.y1 - b.y0 < minW)
       set({ x0: clamp(b.x0 - hw), y0: clamp(b.y0 - hh), x1: clamp(b.x0 + hw), y1: clamp(b.y0 + hh) });
   };
@@ -1692,18 +1789,27 @@ function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
   return (
     <div ref={stage} className="hw-stage" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt="Thermal camera view" draggable={false} />
-      {rois.floor && (
+      <img src={src} alt={mode === "flank" ? "Colour camera view" : "Thermal camera view"} draggable={false} />
+      {mode === "flank" && rois.flank && (
+        <div className="hw-box floor active" style={boxStyle(rois.flank)}>
+          <span>flank · breathing</span>
+        </div>
+      )}
+      {mode !== "flank" && rois.floor && (
         <div className={`hw-box floor ${mode === "floor" ? "active" : ""}`} style={boxStyle(rois.floor)}>
           <span>floor · warm patches</span>
         </div>
       )}
-      <div className={`hw-box ${mode === "nostril" ? "active" : ""}`} style={boxStyle(rois.nostril)}>
-        <span>nostril · average</span>
-      </div>
-      <div className={`hw-box eye ${mode === "eye" ? "active" : ""}`} style={boxStyle(rois.eye)}>
-        <span>eye · hottest</span>
-      </div>
+      {mode !== "flank" && (
+        <>
+          <div className={`hw-box ${mode === "nostril" ? "active" : ""}`} style={boxStyle(rois.nostril)}>
+            <span>nostril · average</span>
+          </div>
+          <div className={`hw-box eye ${mode === "eye" ? "active" : ""}`} style={boxStyle(rois.eye)}>
+            <span>eye · hottest</span>
+          </div>
+        </>
+      )}
       {hotspot && <div className="hw-hot" style={{ left: `${hotspot.x / 100}%`, top: `${hotspot.y / 100}%` }} title="Hottest pixel in the eye box" />}
     </div>
   );
