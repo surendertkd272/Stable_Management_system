@@ -205,6 +205,7 @@ class WindowAnalyzer:
         self.motion = MotionMeter(w=w, h=h, mode=mode, mask=self.mask)
         self.sway = SwayMeter(w, h, fs, mask=self.mask, step=2 * max(1, w // W))
         self.flank_sway = None
+        self.flank_bounds = None
         self.posture = posture
         self.n_frames = 0
         self.reset()
@@ -233,9 +234,14 @@ class WindowAnalyzer:
             self.nref.append(ring_mean(frame, nostril_bounds, ring_bounds(nostril_bounds, self.w, self.h), self.w))
             self.glob.append(sum(frame[i] for i in self.motion.idx[::7]) / len(self.motion.idx[::7]))
         if flank_bounds:
-            if self.flank_sway is None or self.flank_sway.xs[0] != flank_bounds[0]:
+            if self.flank_sway is None or self.flank_bounds != flank_bounds:
+                # A new region (re-aimed, or the horse moved): start a fresh
+                # stretch — samples from two places must not be joined.
                 self.flank_sway = SwayMeter(self.w, self.h, self.fs, bounds=flank_bounds, mean_s=8, step=1)
+                self.flank_bounds, self.flank = flank_bounds, []
             self.flank.append(self.flank_sway.feed(frame)[1])
+        elif self.flank:
+            self.flank_bounds, self.flank = None, []
         if self.posture is not None and self.n_frames % self.POSTURE_EVERY == 0 and self.mode == "thermal":
             self.posture.feed(t, warm_blob_box(frame, self.w, self.h, self.mask), self.recent_motion())
 

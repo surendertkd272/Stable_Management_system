@@ -756,6 +756,8 @@ class MtrpcCameraWorker(CameraWorker):
         self.last_visible = None
         self.boxes_seen = 0
         self.posture = None
+        self.auto_flank = None             # flank bounds from the detector box while the horse stands still
+        self.cfloor, self.cfloor_events = None, []
         self._lock = threading.Lock()
 
     # -- which stream does behaviour ------------------------------------------ #
@@ -824,7 +826,7 @@ class MtrpcCameraWorker(CameraWorker):
 
             def on_visible(frame, t):
                 r = self.dev.get("rois") or {}
-                fb = box_px(r["flank"], vw, vh) if r.get("flank") else None
+                fb = box_px(r["flank"], vw, vh) if r.get("flank") else self.auto_flank
                 with self._lock:
                     self.vanalyzer.feed(frame, flank_bounds=fb, t=t)
                     self.last_visible = (frame, t)
@@ -842,9 +844,16 @@ class MtrpcCameraWorker(CameraWorker):
 
     def _detect_loop(self):
         """The horse's box in the colour picture, once a second, into the
-        posture tracker (standing / lying from the box's shape over time)."""
+        posture tracker (standing / lying from the box's shape over time), the
+        colour floor watcher (urination / manure on the bedding) and, while
+        the horse stands still, the flank region for breathing."""
+        from behaviour import flank_from_box  # noqa
+        from colour_floor import ColourFloorWatcher  # noqa
+        from video_analytics import box_px  # noqa
+        from detector import iou  # noqa
         vw, vh = self.VISIBLE_SIZE
         last = None
+        history = []                      # (t, box) for "standing still"
         while not self.stop_evt.is_set():
             self.stop_evt.wait(self.DETECT_EVERY_S)
             with self._lock:
@@ -863,8 +872,43 @@ class MtrpcCameraWorker(CameraWorker):
             if best:
                 best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
                 self.boxes_seen += 1
+            t = snap[1]
+            history = [(ht, hb) for ht, hb in history if t - ht <= 30] + ([(t, best)] if best else [])
+            still = bool(best) and motion < 0.1 and len(history) >= 20 and all(iou(hb, best) >= 0.85 for _, hb in history)
+            # Breathing from the flank wherever the horse stands still — unless a
+            # flank box was drawn by hand. The region only moves when the horse does.
+            self.auto_flank = flank_from_box(best, vw, vh) if still else None
+            rois = self.dev.get("rois") or {}
+            bounds = box_px(rois["colourFloor"], vw, vh) if rois.get("colourFloor") else None
+            if self.cfloor is None or self.cfloor.bounds != (bounds or self.cfloor.bounds):
+                self.cfloor = ColourFloorWatcher(vw, vh, bounds)
             with self._lock:
-                self.posture.feed(snap[1], best, motion)
+                self.posture.feed(t, best, motion)
+                moving = self.vanalyzer.motion.moving_cells(self.cfloor.bounds, self.cfloor.COLS, self.cfloor.ROWS, 30) \
+                    if self.vanalyzer else set()
+            evs = self.cfloor.feed(snap[0], t, best, still, moving)
+            if evs:
+                with self._lock:
+                    self.cfloor_events += evs
+
+    def _auto_eye(self):
+        """Hottest eye-like point anywhere in the thermal view: a coarse 16×12
+        scan of pixel reads, then a fine 7×7 look around the best cell."""
+        from behaviour import pick_hotspot  # noqa
+        from mtrpc import to_cam, clamp_cam  # noqa
+        cols, rows = 16, 12
+        pts = [{"x": clamp_cam(to_cam((i + 0.5) * 10000 / cols)), "y": clamp_cam(to_cam((j + 0.5) * 10000 / rows))}
+               for j in range(rows) for i in range(cols)]
+        hit = pick_hotspot(self.cam.read_pixels(pts), cols, rows)
+        if hit is None:
+            return None
+        c, r, _ = hit
+        cx, cy = (c + 0.5) * 10000 / cols, (r + 0.5) * 10000 / rows
+        hw, hh = 10000 / cols, 10000 / rows
+        fine = [{"x": clamp_cam(to_cam(cx - hw + 2 * hw * i / 6)), "y": clamp_cam(to_cam(cy - hh + 2 * hh * j / 6))}
+                for j in range(7) for i in range(7)]
+        vals = [v for v in self.cam.read_pixels(fine) if v is not None and v <= 41.0]
+        return max(vals) if vals else hit[2]
 
     def _floor_scan(self, rois, calib, lying_recent):
         from floor import FloorTracker  # noqa
@@ -924,6 +968,15 @@ class MtrpcCameraWorker(CameraWorker):
         if self.posture is not None:
             self._save_posture()
         eye = self.cam.box_max(rois["eye"]) if rois.get("eye") and "x0" in rois["eye"] else None
+        eye_method = "eye box, hottest pixel"
+        if eye is None or eye < 33.0:
+            # The head is not in the eye box: look for it anywhere in the
+            # thermal view (one camera, aimed where the head spends most time).
+            found = self._auto_eye()
+            if found is not None:
+                eye, eye_method = found, "hottest point on the head, anywhere in view (eye box missed)"
+            elif eye is not None and eye < 30.0:
+                eye = None          # coat or wall under the eye box, not an eye: say nothing
         nostril_c = self.cam.box_avg(rois["nostril"])
         calibrated = bool(self.dev.get("calibrated"))
         ts, out = now_iso(), []
@@ -955,7 +1008,8 @@ class MtrpcCameraWorker(CameraWorker):
         vit = {"calibrated": calibrated}
         if head_in_view:                                     # vitals only when the head is in the thermal view
             if eye is not None:
-                add("body_temp_c", eye, "°C", conf=0.95 if calibrated else 0.3, method="eye box, hottest pixel", **vit)
+                add("body_temp_c", eye, "°C", conf=(0.95 if eye_method.startswith("eye box") else 0.7) if calibrated else 0.3,
+                    method=eye_method, **vit)
             if nostril_c is not None:
                 add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
         br = summary.get("breathing") or {} if head_in_view else {}
@@ -1018,6 +1072,22 @@ class MtrpcCameraWorker(CameraWorker):
                 add("posture_event", 1, "event", source=psrc, conf=0.5 if ev["kind"] in ("lie_down", "get_up") else 0.35,
                     at=dt.datetime.fromtimestamp(ev["t"], dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
                     kind=ev["kind"], **pm)
+        # Colour-picture floor events; one also seen by the thermal floor check
+        # within 5 minutes is the same event, now confirmed by both.
+        with self._lock:
+            colour_events, self.cfloor_events = self.cfloor_events, []
+        thermal = [e for e in floor_events if e.get("kind")]
+        for ce in colour_events:
+            twin = next((e for e in thermal if e["kind"] == ce["kind"] and abs(e["start"] - ce["start"]) <= 300), None)
+            if twin:
+                twin["confidence"] = min(0.8, twin["confidence"] + 0.15)
+                twin["tier"] = "thermal + colour"
+                continue
+            add(f"{ce['kind']}_event", 1, "event", source="visible_video", conf=ce["confidence"],
+                at=dt.datetime.fromtimestamp(ce["start"], dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                tier=ce["tier"], area=ce["area"], darkening=ce["darkening"], texture=ce["texture"],
+                horseStoodThere=ce["horseStoodThere"],
+                method="new patch on the bedding in the colour picture (shape and texture)", prototype=True)
         for ev in floor_events:
             if not ev.get("kind"):
                 continue                                     # rejected (a body print) — not an event

@@ -475,3 +475,40 @@ class PostureTracker:
                 and t - self.last_cast >= 1800):
             self.last_cast = t
             self.acc["events"].append({"t": t, "kind": "possible_cast"})
+
+
+# --------------------------------------------------------------------------- #
+# Eye temperature wherever the head is. With one camera the thermal view is
+# aimed where the head spends most time (hay net, door), but the head moves.
+# The inner corner of the eye is normally the warmest spot on a horse's head,
+# so when the fixed eye box misses, the hottest compact point in view is used.
+EYE_MIN_C, EYE_MAX_C = 33.0, 41.0      # a living eye; hotter is a lamp or the sun
+
+
+def pick_hotspot(vals, cols, rows):
+    """(col, row, °C) of the hottest reading on a cols×rows grid that looks like
+    an eye on a head: 33–41 °C, not on the frame edge, with warm body around
+    it. None otherwise."""
+    best = None
+    for k, v in enumerate(vals):
+        if v is None or not (EYE_MIN_C <= v <= EYE_MAX_C):
+            continue
+        c, r = k % cols, k // cols
+        if c in (0, cols - 1) or r in (0, rows - 1):
+            continue                                        # partly out of view
+        around = [vals[(r + dy) * cols + (c + dx)] for dx in (-1, 0, 1) for dy in (-1, 0, 1) if dx or dy]
+        warm = sum(1 for a in around if a is not None and a >= v - 6)
+        if warm < 4:
+            continue                                        # an isolated hot dot, not a head
+        if best is None or v > best[2]:
+            best = (c, r, v)
+    return best
+
+
+def flank_from_box(box, w, h):
+    """The flank region inside a horse box (pixel bounds): the middle of the
+    body, behind the shoulder, where the ribs and belly rise and fall."""
+    bw, bh = box["x1"] - box["x0"], box["y1"] - box["y0"]
+    x0, x1 = box["x0"] + 0.35 * bw, box["x0"] + 0.65 * bw
+    y0, y1 = box["y0"] + 0.35 * bh, box["y0"] + 0.65 * bh
+    return (max(0, int(x0 * w)), max(0, int(y0 * h)), min(w - 1, int(x1 * w)), min(h - 1, int(y1 * h)))
