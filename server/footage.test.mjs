@@ -123,3 +123,55 @@ test("the footage list carries camera names and label counts", async () => {
   assert.equal(r.body.cameras[0].id, "cam1");
   assert.equal((await admin("GET", "/api/footage/labels/meta")).body.find((l) => l.key === "lying").kind, "interval");
 });
+
+test("the queue points at bursts, stillness start/end, floor events and a random sample — only where there is footage", () => {
+  const at = (h, m) => new Date(Date.UTC(2026, 8, 26, h, m)).toISOString();
+  const clips = [{ id: "cam9:a", camera: "cam9", at: at(10, 0), end: at(11, 0) }];
+  const R = (metric, value, h, m, meta = {}) => ({ metric, value, ts: at(h, m), meta: { deviceId: "cam9", ...meta } });
+  const readings = [
+    R("activity_index", 0.8, 10, 5), R("activity_index", 0.9, 10, 7),          // one burst (merged)
+    R("activity_index", 0.9, 12, 0),                                            // outside the footage
+    ...Array.from({ length: 15 }, (_, i) => R("inactive_minutes", 1, 10, 20 + i, { windowMin: 1 })),
+    R("inactive_minutes", 0, 10, 36, { windowMin: 1 }),
+    R("urination_event", 1, 10, 50, { minutes_warm: 4, peak_c: 35.5 }),
+  ];
+  const q = footage.labellingQueue(readings, clips);
+  const kinds = q.map((x) => x.kind);
+  assert.equal(kinds.filter((k) => k === "activity_burst").length, 1, "the burst outside the footage is dropped");
+  assert.ok(kinds.includes("still_start") && kinds.includes("still_end"));
+  const u = q.find((x) => x.kind === "floor_urination");
+  assert.equal(u.at, at(10, 46), "the act was minutes_warm before the report");
+  assert.equal(kinds.filter((k) => k === "random").length, 1, "one random moment per hour of footage");
+  assert.ok(q.every((x) => x.clip === "cam9:a"));
+  assert.deepEqual(footage.labellingQueue(readings, clips).map((x) => x.id), q.map((x) => x.id), "stable between visits");
+});
+
+test("boxes: validated, listed, exported with the clip file and offset, deletable", async () => {
+  const bad = await admin("POST", "/api/footage/boxes", { camera: "cam1", stream: "audio", at: "x", x0: 0.5, y0: 0.5, x1: 0.4, y1: 2, label: "zebra" });
+  assert.equal(bad.status, 400);
+  assert.ok(bad.body.details.length >= 3);
+  const at = new Date("2026-09-26T16:40:30").toISOString();         // 30 s into the 16:40 thermal clip (local time)
+  const ok = await admin("POST", "/api/footage/boxes", { camera: "cam1", clip: "cam1:2026-09-26T16-40-00", stream: "thermal", at, x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.9, label: "horse", horse: "Zarina" });
+  assert.equal(ok.status, 201, ok.raw);
+  await admin("POST", "/api/footage/boxes", { camera: "cam1", stream: "thermal", at, x0: 0.6, y0: 0.5, x1: 0.8, y1: 0.9, label: "foal" });
+  const exp = (await admin("GET", "/api/footage/boxes/export")).body;
+  assert.equal(exp.format, "equicare-boxes-v1");
+  assert.equal(exp.frames.length, 1, "two boxes on the same frame");
+  assert.equal(exp.frames[0].boxes.length, 2);
+  assert.equal(exp.frames[0].file, "cam1/thermal/2026-09-26T16-40-00.mp4");
+  assert.equal(exp.frames[0].offsetSeconds, 30);
+  assert.equal((await admin("DELETE", `/api/footage/boxes/${ok.body.id}`)).status, 200);
+  assert.equal((await admin("GET", "/api/footage/boxes?camera=cam1")).body.length, 1);
+  assert.equal((await call("GET", "/api/footage/boxes", { token: tokens.owner })).status, 404);
+});
+
+test("queue status: mark done / skipped, filter by status", async () => {
+  const q = (await admin("GET", "/api/footage/queue?camera=cam1")).body;
+  assert.ok(q.items.length >= 1, "random samples exist for the recorded hours");
+  const id = q.items[0].id;
+  assert.equal((await admin("POST", `/api/footage/queue/${encodeURIComponent(id)}`, { status: "done" })).status, 200);
+  const after = (await admin("GET", "/api/footage/queue?camera=cam1")).body;
+  assert.ok(!after.items.some((x) => x.id === id), "done items leave the pending list");
+  assert.equal(after.counts.done, 1);
+  assert.equal((await admin("POST", `/api/footage/queue/${encodeURIComponent(id)}`, { status: "maybe" })).status, 400);
+});

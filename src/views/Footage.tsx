@@ -7,9 +7,9 @@
 // what the horse does: lying down, standing, eating, rolling, urinating… The
 // labels are stored with absolute times and exported as CSV for training.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Film, Play, Pause, Download, Trash2, Loader2, Info, Rewind, FastForward, Circle } from "lucide-react";
+import { Film, Play, Pause, Download, Trash2, Loader2, Info, Rewind, FastForward, Circle, Square, ListChecks, Check, SkipForward } from "lucide-react";
 import * as api from "../data/api";
-import type { FootageClip, FootageLabel, LabelDef } from "../data/api";
+import type { FootageBox, FootageClip, FootageLabel, LabelDef, QueueItem } from "../data/api";
 import { useToast } from "../store";
 import { useAuth } from "../auth";
 
@@ -29,6 +29,15 @@ export default function Footage() {
   const [vocab, setVocab] = useState<LabelDef[]>([]);
   const [ticket, setTicket] = useState<string>("");
   const [error, setError] = useState("");
+  const [tab, setTab] = useState<"clips" | "queue">("clips");
+  const [queue, setQueue] = useState<{ items: QueueItem[]; counts: Record<string, number> } | null>(null);
+  const [focus, setFocus] = useState<QueueItem | null>(null);     // the queued moment being labelled
+
+  const loadQueue = useCallback(async (cam: string) => {
+    if (!cam || api.demoMode) return;
+    const r = await api.labellingQueue(cam);
+    if (r.ok) setQueue(r.data);
+  }, []);
 
   const load = useCallback(async () => {
     if (api.demoMode) return setClips([]);
@@ -43,6 +52,9 @@ export default function Footage() {
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    loadQueue(camera);
+  }, [camera, loadQueue]);
 
   if (role === "owner") {
     return <div className="card" style={{ padding: 32 }}><h3>Footage is for the yard&apos;s staff</h3></div>;
@@ -72,9 +84,14 @@ export default function Footage() {
             </select>
           </div>
         </div>
-        <button className="btn-ghost" onClick={async () => notify((await api.exportFootageLabels()) ? "Labels exported" : "Export failed")}>
-          <Download size={15} /> Export labels (CSV)
-        </button>
+        <div className="flex gap-sm wrap">
+          <button className="btn-ghost" onClick={async () => notify((await api.exportFootageLabels()) ? "Labels exported" : "Export failed")}>
+            <Download size={15} /> Export labels (CSV)
+          </button>
+          <button className="btn-ghost" onClick={async () => notify((await api.exportFootageBoxes()) ? "Boxes exported" : "Export failed")}>
+            <Download size={15} /> Export boxes (JSON)
+          </button>
+        </div>
       </div>
 
       {clips && clips.length === 0 && !api.demoMode && (
@@ -91,11 +108,33 @@ export default function Footage() {
       {camClips.length > 0 && (
         <div className="footage-grid">
           <div className="card footage-list">
-            {[...byDay.entries()].map(([d, list]) => (
+            <div className="tabs" style={{ marginBottom: 8, width: "100%" }}>
+              <button className={tab === "clips" ? "on" : ""} onClick={() => setTab("clips")}>Clips</button>
+              <button className={tab === "queue" ? "on" : ""} onClick={() => setTab("queue")}>
+                <ListChecks size={13} /> To label{queue ? ` (${queue.counts.pending ?? 0})` : ""}
+              </button>
+            </div>
+            {tab === "queue" && (
+              <>
+                <p className="muted" style={{ fontSize: 11.5, margin: "2px 4px 8px" }}>
+                  Moments the camera&apos;s own measurements point at, plus a random sample each hour. Open one, label what
+                  you see, then mark it done.{queue?.counts.done ? ` ${queue.counts.done} done so far.` : ""}
+                </p>
+                {queue && queue.items.length === 0 && <p className="muted" style={{ fontSize: 12.5, margin: 6 }}>Nothing waiting.</p>}
+                {queue?.items.map((it) => (
+                  <button key={it.id} className={`footage-clip ${focus?.id === it.id ? "on" : ""}`} style={{ flexDirection: "column", alignItems: "flex-start" }}
+                    onClick={() => { const c = camClips.find((x) => x.id === it.clip); if (c) { setFocus(it); setClip(c); } }}>
+                    <span>{new Date(it.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                    <span className="muted" style={{ fontSize: 11.5 }}>{it.reason}{it.detail ? ` · ${it.detail}` : ""}</span>
+                  </button>
+                ))}
+              </>
+            )}
+            {tab === "clips" && [...byDay.entries()].map(([d, list]) => (
               <div key={d}>
                 <p className="hw-legend" style={{ marginTop: 4 }}>{d}</p>
                 {list.map((c) => (
-                  <button key={c.id} className={`footage-clip ${clip?.id === c.id ? "on" : ""}`} onClick={() => setClip(c)}>
+                  <button key={c.id} className={`footage-clip ${clip?.id === c.id ? "on" : ""}`} onClick={() => { setFocus(null); setClip(c); }}>
                     <span>{new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–{new Date(c.end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                     <span className="muted">
                       {c.recording && <span className="pill alert" style={{ fontSize: 10, padding: "0 6px" }}><Circle size={8} /> rec</span>}{" "}
@@ -111,7 +150,19 @@ export default function Footage() {
             {!clip ? (
               <div className="card muted" style={{ padding: 30 }}>Pick a clip on the left.</div>
             ) : (
-              <ClipLabeller key={clip.id} clip={clip} vocab={vocab} ticket={ticket} onChanged={load} />
+              <ClipLabeller key={`${clip.id}|${focus?.id ?? ""}`} clip={clip} vocab={vocab} ticket={ticket} onChanged={load}
+                focus={focus?.clip === clip.id ? focus : null}
+                onQueueStatus={async (status) => {
+                  if (!focus) return;
+                  const r = await api.setQueueStatus(focus.id, status);
+                  if (!r.ok) return notify(r.error);
+                  notify(status === "done" ? "Marked done" : "Skipped");
+                  const idx = queue?.items.findIndex((x) => x.id === focus.id) ?? -1;
+                  const next = queue?.items[idx + 1];
+                  await loadQueue(camera);
+                  const nc = next && camClips.find((x) => x.id === next.clip);
+                  if (next && nc) { setFocus(next); setClip(nc); } else setFocus(null);
+                }} />
             )}
           </div>
         </div>
@@ -121,8 +172,11 @@ export default function Footage() {
 }
 
 // --------------------------------------------------------------------------- //
-function ClipLabeller({ clip, vocab, ticket, onChanged }: {
+const BOX_LABELS = ["horse", "foal", "person", "other"] as const;
+
+function ClipLabeller({ clip, vocab, ticket, onChanged, focus, onQueueStatus }: {
   clip: FootageClip; vocab: LabelDef[]; ticket: string; onChanged: () => void;
+  focus: QueueItem | null; onQueueStatus: (s: "done" | "skipped") => void;
 }) {
   const notify = useToast();
   const master = useRef<HTMLVideoElement>(null);           // thermal if present
@@ -135,6 +189,12 @@ function ClipLabeller({ clip, vocab, ticket, onChanged }: {
   const [labels, setLabels] = useState<FootageLabel[]>([]);
   const [open, setOpen] = useState<{ def: LabelDef; startAt: string } | null>(null);
   const [note, setNote] = useState("");
+  const [boxes, setBoxes] = useState<FootageBox[]>([]);
+  const [drawing, setDrawing] = useState(false);
+  const [boxLabel, setBoxLabel] = useState<(typeof BOX_LABELS)[number]>("horse");
+  const [boxHorse, setBoxHorse] = useState("");
+  const [drag, setDrag] = useState<{ stream: "thermal" | "visible"; x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const seeked = useRef(false);
 
   const mStream: "thermal" | "visible" = clip.thermal ? "thermal" : "visible";
   const sStream: "thermal" | "visible" | null = clip.thermal && clip.visible ? "visible" : null;
@@ -149,6 +209,13 @@ function ClipLabeller({ clip, vocab, ticket, onChanged }: {
   useEffect(() => {
     loadLabels();
   }, [loadLabels]);
+  const loadBoxes = useCallback(async () => {
+    const r = await api.footageBoxes(clip.camera, clip.at, clip.end);
+    if (r.ok) setBoxes(r.data);
+  }, [clip.camera, clip.at, clip.end]);
+  useEffect(() => {
+    loadBoxes();
+  }, [loadBoxes]);
 
   // Keep the second video in step with the first.
   const sync = () => {
@@ -207,12 +274,27 @@ function ClipLabeller({ clip, vocab, ticket, onChanged }: {
       if (e.key === " ") { e.preventDefault(); toggle(); return; }
       if (e.key === "ArrowLeft") { seek((master.current?.currentTime ?? 0) - 5); return; }
       if (e.key === "ArrowRight") { seek((master.current?.currentTime ?? 0) + 5); return; }
+      if (e.key.toLowerCase() === "b") { e.preventDefault(); master.current?.pause(); setDrawing((d) => !d); return; }
       const def = vocab.find((v) => v.shortcut === e.key.toLowerCase());
       if (def) { e.preventDefault(); press(def); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  // Boxes are tied to the frame's absolute time; one shown on screen within
+  // half a second of the playhead.
+  const nowAt = absAt(pos);
+  const boxesNow = (stream: "thermal" | "visible") =>
+    boxes.filter((b) => b.stream === stream && Math.abs(Date.parse(b.at) - Date.parse(nowAt)) <= 500);
+  const saveBox = async (d: { stream: "thermal" | "visible"; x0: number; y0: number; x1: number; y1: number }) => {
+    const box = { x0: Math.min(d.x0, d.x1), y0: Math.min(d.y0, d.y1), x1: Math.max(d.x0, d.x1), y1: Math.max(d.y0, d.y1) };
+    if (box.x1 - box.x0 < 0.02 || box.y1 - box.y0 < 0.02) return;           // a click, not a box
+    const r = await api.createFootageBox({ camera: clip.camera, clip: clip.id, stream: d.stream, at: absAt(master.current?.currentTime ?? pos),
+      ...box, label: boxLabel, horse: boxHorse.trim() || null });
+    if (!r.ok) return notify(`Box not saved: ${r.details?.join(", ") || r.error}`);
+    loadBoxes();
+  };
 
   const src = (stream: "thermal" | "visible") =>
     api.footageVideoUrl(clip.camera, stream, clip[stream]!.start, ticket, h264[stream]);
@@ -243,12 +325,46 @@ function ClipLabeller({ clip, vocab, ticket, onChanged }: {
               src={ticket ? src(stream) : undefined}
               muted playsInline preload="auto"
               onTimeUpdate={stream === mStream ? sync : undefined}
-              onLoadedMetadata={stream === mStream ? (e) => setDuration((e.target as HTMLVideoElement).duration) : undefined}
+              onLoadedMetadata={stream === mStream ? (e) => {
+                const v = e.target as HTMLVideoElement;
+                setDuration(v.duration);
+                // Opened from the queue: start a little before the moment.
+                if (focus && !seeked.current) {
+                  seeked.current = true;
+                  v.currentTime = Math.max(0, (Date.parse(focus.at) - Date.parse(mRef.at)) / 1000 - 15);
+                  setTimeout(sync, 50);
+                }
+              } : undefined}
               onPlay={stream === mStream ? () => setPlaying(true) : undefined}
               onPause={stream === mStream ? () => setPlaying(false) : undefined}
               onError={onError(stream)}
             />
             <figcaption>{stream}{h264[stream] ? " · converted" : ""}</figcaption>
+            <div className={`footage-boxes ${drawing ? "drawing" : ""}`}
+              onPointerDown={(e) => {
+                if (!drawing) return;
+                const r = e.currentTarget.getBoundingClientRect();
+                const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                setDrag({ stream, x0: x, y0: y, x1: x, y1: y });
+              }}
+              onPointerMove={(e) => {
+                if (!drag || drag.stream !== stream) return;
+                const r = e.currentTarget.getBoundingClientRect();
+                const cl = (v: number) => Math.max(0, Math.min(1, v));
+                setDrag({ ...drag, x1: cl((e.clientX - r.left) / r.width), y1: cl((e.clientY - r.top) / r.height) });
+              }}
+              onPointerUp={() => { if (drag && drag.stream === stream) saveBox(drag); setDrag(null); }}>
+              {boxesNow(stream).map((b) => (
+                <i key={b.id} style={{ left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`, width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%` }}>
+                  <span>{b.label}{b.horse ? ` · ${b.horse}` : ""}</span>
+                </i>
+              ))}
+              {drag && drag.stream === stream && (
+                <i className="live" style={{ left: `${Math.min(drag.x0, drag.x1) * 100}%`, top: `${Math.min(drag.y0, drag.y1) * 100}%`,
+                  width: `${Math.abs(drag.x1 - drag.x0) * 100}%`, height: `${Math.abs(drag.y1 - drag.y0) * 100}%` }} />
+              )}
+            </div>
           </figure>
         ))}
       </div>
@@ -274,6 +390,27 @@ function ClipLabeller({ clip, vocab, ticket, onChanged }: {
           {SPEEDS.map((s) => <button key={s} className={speed === s ? "on" : ""} onClick={() => setSpeed(s)}>{s}×</button>)}
         </div>
         <span className="muted" style={{ fontSize: 12 }}>{dur(pos)} / {dur(span)}</span>
+      </div>
+
+      {focus && (
+        <div className="row calm" style={{ padding: "8px 12px", marginBottom: 10 }}>
+          <ListChecks size={15} style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: 12.5, flex: 1 }}><b>{focus.reason}</b> at {t(focus.at)}{focus.detail ? ` · ${focus.detail}` : ""} — label what you see.</span>
+          <button className="btn-ghost accent" onClick={() => onQueueStatus("done")}><Check size={14} /> Done</button>
+          <button className="btn-ghost" onClick={() => onQueueStatus("skipped")}><SkipForward size={14} /> Skip</button>
+        </div>
+      )}
+
+      <p className="hw-legend" style={{ marginTop: 0 }}>Boxes around each animal (for the detector)</p>
+      <div className="flex gap-sm center wrap" style={{ marginBottom: 12 }}>
+        <button className={`btn-ghost ${drawing ? "accent" : ""}`} onClick={() => { master.current?.pause(); setDrawing(!drawing); }} title="Draw boxes (b)">
+          <Square size={14} /> {drawing ? "Drawing — drag over the animal" : "Draw boxes"} <kbd className="footage-kbd">b</kbd>
+        </button>
+        <div className="tabs">
+          {BOX_LABELS.map((l) => <button key={l} className={boxLabel === l ? "on" : ""} onClick={() => setBoxLabel(l)}>{l}</button>)}
+        </div>
+        <input className="footage-horse" value={boxHorse} onChange={(e) => setBoxHorse(e.target.value)} placeholder="which horse (optional)" />
+        <span className="muted" style={{ fontSize: 12 }}>{boxes.length} box{boxes.length === 1 ? "" : "es"} in this clip</span>
       </div>
 
       <p className="hw-legend" style={{ marginTop: 0 }}>Mark what the horse does</p>
@@ -316,6 +453,30 @@ function ClipLabeller({ clip, vocab, ticket, onChanged }: {
             </li>
           ))}
         </ul>
+      )}
+
+      {boxes.length > 0 && (
+        <>
+          <p className="hw-legend">Boxes in this clip</p>
+          <ul className="hw-steps">
+            {boxes.map((b) => (
+              <li key={b.id} className="ok" style={{ cursor: "pointer" }} onClick={() => seek(rel(b.at))}>
+                <Square size={15} />
+                <div>
+                  <b>{b.label}{b.horse ? ` · ${b.horse}` : ""}</b>
+                  <span>{t(b.at)} · {b.stream} · by {b.by}</span>
+                </div>
+                <em>
+                  <button className="btn-ghost" title="Delete" onClick={async (e) => {
+                    e.stopPropagation();
+                    const r = await api.deleteFootageBox(b.id);
+                    if (r.ok) loadBoxes(); else notify(r.error);
+                  }}><Trash2 size={13} /></button>
+                </em>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );

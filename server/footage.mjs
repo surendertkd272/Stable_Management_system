@@ -181,3 +181,127 @@ export function labelsCsv(labels) {
     l.endAt ? Math.round((Date.parse(l.endAt) - Date.parse(l.startAt)) / 1000) : "", l.clip, l.note, l.by, l.createdAt].map(esc).join(","));
   return [cols.join(","), ...rows].join("\n") + "\n";
 }
+
+// --------------------------------------------------------------------------- //
+// Boxes around the horse — what a detector learns from ("where is the horse
+// in this frame"). A posture model trained on zebras failed on a stall camera
+// largely because KABR's frames were centred on one animal while a stall
+// camera sees the whole pen; the plan is detect-then-classify, and the
+// detector needs these.
+// --------------------------------------------------------------------------- //
+export const BOX_LABELS = ["horse", "foal", "person", "other"];
+
+export function validateBox(body) {
+  const errs = [];
+  const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
+  const box = {
+    camera: String(body.camera || ""), clip: String(body.clip || ""),
+    stream: body.stream === "visible" ? "visible" : body.stream === "thermal" ? "thermal" : "",
+    at: typeof body.at === "string" && !Number.isNaN(Date.parse(body.at)) ? new Date(body.at).toISOString() : null,
+    // fractions of the frame, 0–1, so they survive any resolution
+    x0: n(body.x0), y0: n(body.y0), x1: n(body.x1), y1: n(body.y1),
+    label: String(body.label || "horse"),
+    horse: body.horse ? String(body.horse).slice(0, 80) : null,
+  };
+  if (!SAFE_ID.test(box.camera)) errs.push("camera is required");
+  if (!box.stream) errs.push("stream must be thermal or visible");
+  if (!box.at) errs.push("at must be the frame's time");
+  if (![box.x0, box.y0, box.x1, box.y1].every((v) => v >= 0 && v <= 1)) errs.push("box corners must be fractions 0–1");
+  else if (box.x1 - box.x0 < 0.01 || box.y1 - box.y0 < 0.01) errs.push("the box is too small");
+  if (!BOX_LABELS.includes(box.label)) errs.push(`label must be one of ${BOX_LABELS.join(", ")}`);
+  for (const k of ["x0", "y0", "x1", "y1"]) if (Number.isFinite(box[k])) box[k] = Math.round(box[k] * 10000) / 10000;
+  return { box, errs };
+}
+
+/** Boxes for training: per frame, which clip file and how many seconds in —
+ *  enough to cut the frame out with ffmpeg and pair it with its boxes. */
+export function boxesExport(boxes, clips) {
+  const frames = new Map();
+  for (const b of boxes) {
+    const clip = clips.find((c) => c.camera === b.camera && b.at >= c.at && b.at < c.end && c[b.stream]);
+    const file = clip ? `${b.camera}/${b.stream}/${clip[b.stream].start}.mp4` : null;
+    const key = `${b.camera}|${b.stream}|${b.at}`;
+    if (!frames.has(key)) frames.set(key, {
+      camera: b.camera, stream: b.stream, at: b.at, file,
+      offsetSeconds: clip ? Math.round((Date.parse(b.at) - Date.parse(clip[b.stream].at)) / 10) / 100 : null,
+      boxes: [],
+    });
+    frames.get(key).boxes.push({ label: b.label, horse: b.horse, x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, by: b.by });
+  }
+  return { format: "equicare-boxes-v1", coordinates: "fractions of the frame, origin top-left", labels: BOX_LABELS,
+    frames: [...frames.values()].sort((a, b) => a.at.localeCompare(b.at)) };
+}
+
+// --------------------------------------------------------------------------- //
+// Moments worth labelling. Nobody can watch 100+ hours; the edge agent's own
+// measurements point at the moments most likely to hold the behaviours we
+// need, and a random sample keeps the set honest (a model trained only on
+// "interesting" moments learns a skewed picture, and needs unbiased test data).
+// --------------------------------------------------------------------------- //
+const QUEUE_KINDS = {
+  activity_burst: "Burst of movement — rolling, pawing, restlessness?",
+  still_start: "Long stillness begins — lying down? dozing?",
+  still_end: "Long stillness ends — getting up?",
+  floor_urination: "Warm patch on the floor, cooled fast — urination?",
+  floor_excretion: "Warm patch on the floor, stayed warm — defecation?",
+  weaving: "Side-to-side sway detected — weaving?",
+  random: "Random sample (for an unbiased training and test set)",
+};
+
+/** readings: this camera's readings (any order). clips: listClips() for the camera. */
+export function labellingQueue(readings, clips, { randomPerHour = 1 } = {}) {
+  const items = [];
+  const push = (kind, atMs, detail = "") => items.push({ kind, at: new Date(atMs).toISOString(), reason: QUEUE_KINDS[kind], detail });
+  const of = (m) => readings.filter((r) => r.metric === m).sort((a, b) => a.ts.localeCompare(b.ts));
+
+  // Bursts: activity ≥ 0.5, merged when within 5 minutes.
+  let lastBurst = -Infinity;
+  for (const r of of("activity_index")) {
+    const t = Date.parse(r.ts);
+    if (r.value >= 0.5 && t - lastBurst > 5 * 60000) push("activity_burst", t - 60000, `activity ${r.value.toFixed(2)}`);
+    if (r.value >= 0.5) lastBurst = t;
+  }
+  // Stillness runs of 10+ minutes: their start and end.
+  let run = null;
+  const closeRun = () => {
+    if (run && run.minutes >= 10) {
+      push("still_start", run.startMs, `${Math.round(run.minutes)} min still`);
+      push("still_end", run.endMs, `after ${Math.round(run.minutes)} min still`);
+    }
+    run = null;
+  };
+  for (const r of of("inactive_minutes")) {
+    const w = r.meta?.windowMin ?? 1, t = Date.parse(r.ts);
+    if (r.value >= 0.75 * w) {
+      if (run && t - run.endMs <= (w * 60 + 90) * 1000) { run.endMs = t; run.minutes += r.value; }
+      else { closeRun(); run = { startMs: t - w * 60000, endMs: t, minutes: r.value }; }
+    } else closeRun();
+  }
+  closeRun();
+  // Floor events are reported when the patch fades; the act was minutes_warm earlier.
+  for (const [m, kind] of [["urination_event", "floor_urination"], ["excretion_event", "floor_excretion"]])
+    for (const r of of(m)) push(kind, Date.parse(r.ts) - (r.meta?.minutes_warm ?? 0) * 60000, `${r.meta?.peak_c ?? "?"} °C patch`);
+  for (const r of of("vice_event")) if ((r.meta?.kind || "weaving") === "weaving") push("weaving", Date.parse(r.ts) - 60000);
+
+  // Random sample: a fixed point per hour of footage (deterministic, so the
+  // list does not reshuffle between visits).
+  for (const c of clips) {
+    const a = Date.parse(c.at), b = Date.parse(c.end);
+    for (let h = Math.floor(a / 3600000); h * 3600000 < b; h++) {
+      for (let k = 0; k < randomPerHour; k++) {
+        const t = h * 3600000 + ((h * 7919 + k * 104729) % 3600) * 1000;
+        if (t >= a && t < b) push("random", t);
+      }
+    }
+  }
+  // Only moments we have footage of; attach the clip.
+  const out = [];
+  for (const it of items) {
+    const t = it.at;
+    const clip = clips.find((c) => t >= c.at && t < c.end);
+    if (!clip) continue;
+    out.push({ ...it, id: `${clip.camera}:${it.kind}:${t}`, camera: clip.camera, clip: clip.id });
+  }
+  const seen = new Set();
+  return out.filter((x) => (seen.has(x.id) ? false : seen.add(x.id))).sort((a, b) => b.at.localeCompare(a.at));
+}

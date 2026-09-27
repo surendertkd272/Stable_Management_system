@@ -451,3 +451,44 @@ export async function exportFootageLabels(): Promise<boolean> {
     return false;
   }
 }
+
+/** A box around a horse on one frame (fractions of the frame, 0–1). */
+export interface FootageBox {
+  id: string; camera: string; clip: string; stream: "thermal" | "visible"; at: string;
+  x0: number; y0: number; x1: number; y1: number; label: string; horse: string | null; by: string;
+}
+export interface QueueItem {
+  id: string; kind: string; at: string; reason: string; detail: string; camera: string; clip: string;
+  status: "pending" | "done" | "skipped"; by: string | null;
+}
+export const footageBoxes = (camera: string, from?: string, to?: string) => {
+  const q = new URLSearchParams({ camera });
+  if (from) q.set("from", from);
+  if (to) q.set("to", to);
+  return call<FootageBox[]>("GET", `/api/footage/boxes?${q}`);
+};
+export const createFootageBox = (b: Omit<FootageBox, "id" | "by">) => call<FootageBox>("POST", "/api/footage/boxes", b);
+export const deleteFootageBox = (id: string) => call<{ ok: true }>("DELETE", `/api/footage/boxes/${encodeURIComponent(id)}`);
+export const labellingQueue = (camera: string, status: "pending" | "done" | "skipped" | "all" = "pending") =>
+  call<{ items: QueueItem[]; counts: Record<string, number> }>("GET", `/api/footage/queue?camera=${encodeURIComponent(camera)}&status=${status}`);
+export const setQueueStatus = (id: string, status: "done" | "skipped" | "pending") =>
+  call<{ ok: true }>("POST", `/api/footage/queue/${encodeURIComponent(id)}`, { status });
+/** Download all boxes as JSON (frames with their clip file and offset). */
+export async function exportFootageBoxes(): Promise<boolean> {
+  if (!apiConfigured) return false;
+  try {
+    const res = await fetch(`${BASE}/api/footage/boxes/export`, { headers: authHeaders() });
+    if (!res.ok) return false;
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `equicare-boxes-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}

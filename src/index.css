@@ -1495,3 +1495,13 @@ button {
   display: inline-block; min-width: 16px; padding: 0 4px; margin-right: 4px; border-radius: 4px; font-size: 10.5px;
   background: var(--surface-muted); color: var(--text-secondary); text-align: center; font-family: inherit;
 }
+.footage-boxes { position: absolute; inset: 0; }
+.footage-boxes.drawing { cursor: crosshair; touch-action: none; background: rgba(255,255,255,.04); }
+.footage-boxes i { position: absolute; border: 2px solid #22d3ee; box-shadow: 0 0 0 1px rgba(0,0,0,.5); pointer-events: none; }
+.footage-boxes i.live { border-style: dashed; border-color: #fde047; }
+.footage-boxes i span { position: absolute; left: -2px; top: -18px; font-size: 10.5px; color: #fff; background: rgba(8,80,95,.85); padding: 0 5px; border-radius: 4px; white-space: nowrap; }
+.footage-kbd { margin-left: 4px; }
+.footage-horse {
+  max-width: 190px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--border, transparent);
+  background: var(--surface-muted); color: var(--ink); font: inherit; font-size: 12.5px;
+}

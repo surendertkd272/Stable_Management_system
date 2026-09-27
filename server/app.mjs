@@ -20,7 +20,8 @@ import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
 import {
   summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries, behaviourForHorse,
 } from "./rollup.mjs";
-import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labelsCsv } from "./footage.mjs";
+import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labelsCsv,
+  BOX_LABELS, validateBox, boxesExport, labellingQueue } from "./footage.mjs";
 import { randomBytes as footageRandom } from "node:crypto";
 import { SC_IT6420_HB_V2 } from "./hardware-spec.mjs";
 import { deviceApi } from "./devices.mjs";
@@ -422,6 +423,54 @@ export async function handle(req) {
         const horse = label.horse || roster().find((h) => cam?.stall && h.stall === cam.stall)?.name || null;
         return json(201, store.create("footage_labels", { ...label, horse, stall: cam?.stall ?? null, by: actor, createdAt: new Date().toISOString() }));
       }
+      // ---- boxes around the horse (detector training) ----
+      if (path === "/api/footage/boxes" && method === "GET") {
+        const cam = url.searchParams.get("camera"), from = url.searchParams.get("from"), to = url.searchParams.get("to");
+        return json(200, store.list("footage_boxes").filter((b) => (!cam || b.camera === cam) && (!from || b.at >= from) && (!to || b.at < to))
+          .sort((a, b) => a.at.localeCompare(b.at)));
+      }
+      if (path === "/api/footage/boxes/export" && method === "GET")
+        return json(200, boxesExport(store.list("footage_boxes"), listClips()));
+      if (path === "/api/footage/boxes" && method === "POST") {
+        let body;
+        try { body = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
+        const { box, errs } = validateBox(body);
+        if (errs.length) return json(400, { error: "invalid box", details: errs });
+        return json(201, store.create("footage_boxes", { ...box, by: actor, createdAt: new Date().toISOString() }));
+      }
+      const delBox = path.match(/^\/api\/footage\/boxes\/([^/]+)$/);
+      if (delBox && method === "DELETE") {
+        const id = decodeURIComponent(delBox[1]);
+        if (!store.list("footage_boxes").some((b) => b.id === id)) return json(404, { error: "unknown box" });
+        store.remove("footage_boxes", id);
+        return json(200, { ok: true });
+      }
+      if (path === "/api/footage/boxes/meta" && method === "GET") return json(200, BOX_LABELS);
+
+      // ---- moments worth labelling ----
+      if (path === "/api/footage/queue" && method === "GET") {
+        const cam = url.searchParams.get("camera");
+        if (!cam) return json(400, { error: "camera is required" });
+        const clips = listClips().filter((c) => c.camera === cam);
+        const readings = store.allReadings().filter((r) => r.meta?.deviceId === cam);
+        const status = new Map(store.list("footage_queue").map((q) => [q.itemId, q]));
+        const want = url.searchParams.get("status") || "pending";
+        const items = labellingQueue(readings, clips).map((it) => ({ ...it, status: status.get(it.id)?.status ?? "pending", by: status.get(it.id)?.by ?? null }));
+        const counts = items.reduce((a, it) => ((a[it.status] = (a[it.status] || 0) + 1), a), {});
+        return json(200, { items: want === "all" ? items : items.filter((it) => it.status === want), counts });
+      }
+      const qi = path.match(/^\/api\/footage\/queue\/(.+)$/);
+      if (qi && method === "POST") {
+        let body;
+        try { body = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
+        if (!["done", "skipped", "pending"].includes(body.status)) return json(400, { error: "status must be done, skipped or pending" });
+        const itemId = decodeURIComponent(qi[1]);
+        const cur = store.list("footage_queue").find((q) => q.itemId === itemId);
+        const row = cur ? store.update("footage_queue", cur.id, { status: body.status, by: actor, at: new Date().toISOString() })
+          : store.create("footage_queue", { itemId, status: body.status, by: actor, at: new Date().toISOString() });
+        return json(200, row);
+      }
+
       const del = path.match(/^\/api\/footage\/labels\/([^/]+)$/);
       if (del && method === "DELETE") {
         const id = decodeURIComponent(del[1]);
