@@ -252,9 +252,19 @@ svg{width:100%;height:auto;display:block;overflow:visible}.grid{stroke:var(--gri
 .foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px;margin-top:22px;padding:0 6px}
 #tip{position:fixed;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--ring);box-shadow:0 6px 20px rgba(0,0,0,.15);border-radius:8px;padding:6px 10px;font-size:12.5px;display:none;z-index:9}
 tr.dim td{color:var(--muted)}
-@page{size:A4;margin:12mm}
-@media print{body{background:#fff}main{padding:0;max-width:none}section.card,.kpi{break-inside:avoid;box-shadow:none}.cover{-webkit-print-color-adjust:exact;print-color-adjust:exact}#tip{display:none!important}}
+@page{size:A4;margin:10mm}
 @media (max-width:820px){.exec,.obs{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr);margin:-56px 10px 0}.stats{grid-template-columns:repeat(2,1fr)}.cover h1{font-size:30px}.cover{padding:24px 22px 80px}}
+@media print{
+*{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{background:#fff;font-size:11.5px;line-height:1.5}main{padding:0;max-width:none}#tip{display:none!important}
+.cover{padding:20px 24px 64px;border-radius:14px}.cover h1{font-size:28px;margin-top:14px}.cover .meta{font-size:11.5px}
+.kpis{grid-template-columns:repeat(4,1fr)!important;margin:-46px 14px 0!important;gap:10px}.kpi{padding:10px 12px;box-shadow:none}.kpi b{font-size:20px}.kpi span{font-size:11px}
+section.card{padding:16px 18px;margin-top:12px;border-radius:12px}.sh h2{font-size:15.5px}.sub{font-size:11.5px}
+.exec,.obs{grid-template-columns:1.15fr 1fr!important;gap:18px}.exec p.lead{font-size:12.5px;margin:6px 0 10px}.find{padding:7px 0}.find span{font-size:11px}
+.photo img{aspect-ratio:4/3}.stats{grid-template-columns:repeat(4,1fr)!important}.stat b{font-size:15px}
+table{font-size:11px}td{padding:7px 8px}th{padding:6px 8px}.pt-val{font-size:13px}.pt-note{font-size:10.5px}
+.legend,.dlegend{font-size:10.5px}.rec li{padding:7px 0}
+section.card,.kpi,tr{break-inside:avoid}}
 </style></head><body><main>
 <header class="cover">
 <div class="top"><span class="logo"><i>E</i>EquiCare</span><span>Monitoring session report</span></div>
