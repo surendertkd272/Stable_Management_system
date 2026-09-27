@@ -253,6 +253,8 @@ export interface CameraRois {
   floor?: RoiBox | null;
   /** Optional, on the COLOUR picture: the flank, for breathing from flank movement. */
   flank?: RoiBox | null;
+  /** Optional, on the COLOUR picture: the floor watched for manure piles and wet bedding. */
+  colourFloor?: RoiBox | null;
   pushedAt?: string;
   /** true = read back and matched; null = the camera does not report coordinates */
   verified?: boolean | null;
@@ -376,7 +378,7 @@ export const deviceEvents = (id: string) => call<DeviceEvent[]>("GET", dpath(id,
 /** Camera connection test, or a Modbus test read. `acceptIdentity` confirms a replacement camera. */
 export const probeDevice = (id: string, acceptIdentity = false) =>
   call<CameraProbe | SensorProbe>("POST", dpath(id, "probe") + (acceptIdentity ? "?acceptIdentity=1" : ""), undefined, 45000);
-export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril"> & { floor?: RoiBox | null; flank?: RoiBox | null }) =>
+export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril"> & { floor?: RoiBox | null; flank?: RoiBox | null; colourFloor?: RoiBox | null }) =>
   call<{ ok: true; rois: CameraRois; verify: { verified: boolean | null; detail: string } }>("PUT", dpath(id, "rois"), rois, 30000);
 /** Live ROI temperatures. `parts: "nostril"` is the fast path for the
  *  breathing check; `rois` measures boxes not yet pushed (JSON-RPC cameras

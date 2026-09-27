@@ -124,10 +124,12 @@ test("an optional floor box is stored and sent to the edge box; a tiny one is re
 test("a flank box (colour picture) is stored and sent; behaviour runs on the colour stream by default", async () => {
   const eye = { x0: 3000, y0: 3000, x1: 3600, y1: 3600 }, nostril = { x0: 5000, y0: 6200, x1: 6000, y1: 7000 };
   const floor = { x0: 1000, y0: 7500, x1: 9000, y1: 9800 }, flank = { x0: 4000, y0: 4000, x1: 6000, y1: 5500 };
-  const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, { eye, nostril, floor, flank });
+  const colourFloor = { x0: 0, y0: 4000, x1: 10000, y1: 10000 };
+  const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, { eye, nostril, floor, flank, colourFloor });
   assert.equal(r.status, 200, r.raw);
   const d = (await call("GET", "/edge/config", { token: tokens.edge })).body.devices.find((x) => x.id === ids.cam);
   assert.deepEqual(d.rois.flank, flank);
+  assert.deepEqual(d.rois.colourFloor, colourFloor, "one camera: the colour picture watches the floor");
   assert.equal(d.behaviourStream, "visible");
   assert.deepEqual(d.floorCalib, { urineHalfLifeMin: null, deltaC: null }, "no cooling test yet: the edge default applies");
   const p = await admin("PATCH", `/api/devices/${ids.cam}`, { behaviourStream: "sideways" });

@@ -36,12 +36,38 @@ The infrared lamp is 850 nm and glows faintly red at night.
 
 **What each picture sees.** The 25 mm thermal view is only ~25° × 19°:
 about **1.5 m × 1.2 m at 3.5 m** — one horse's head and neck. The colour
-lens (4 mm) sees the whole stall. So temperature and breathing come from the
-thermal view aimed at the head, while activity, lying down and vices are read
-from the colour picture (Hardware → edit camera → *Read behaviour from*).
-Urination/manure need **floor inside the thermal view** — with the head
-filling it that is usually not possible with one camera; say so, or aim a
-second camera at the floor.
+lens (4 mm) is much wider: about 68° × 41°, roughly **4.7 m × 2.6 m at
+3.5 m** (estimated from the sensor size) — the whole stall, day and night.
+
+### One camera for all 8 points
+
+The two pictures share the work:
+
+| Point | Picture | How |
+|---|---|---|
+| Temperature | thermal | eye box — or, when the head is elsewhere in the thermal view, its hottest point (the inner eye corner) |
+| Breathing rate + pattern | thermal + colour | nostril box; and the flank of the horse wherever it stands still (found from the detector's box) |
+| Activity, lying, vices | colour | movement, the horse's box over time |
+| Urination, manure | colour (+ thermal where the floor is in view) | new manure pile / wet (darker) bedding after the horse moves away |
+
+**Where to hang it:** high (2.5–3 m) in a front corner, looking diagonally
+across the stall, **3.5–4 m from where the head spends most time** — the
+hay net or manger (stabled horses eat for hours a day) or the door. The
+thermal view then catches the head for much of the day; temperature and
+breathing are read whenever it is there. The colour picture, looking down
+across the stall, sees the horse whole and the bedding.
+
+In the calibrator's live view, check: the eye in the thermal picture at the
+hay net; in the colour picture, the whole horse and as much bedding as
+possible. Draw **5 · Floor (colour)** over the visible bedding. Colour floor
+events and lying need the detector (`scripts/demo.sh --setup-detector`,
+already done on the demo Mac).
+
+**Honest limits:** temperature and breathing are only measured while the
+head is in the thermal view (the page shows when they were last read);
+urine shows well on shavings, poorly on straw; manure behind the horse, out
+of the colour picture, is missed. All of it is prototype until checked
+against someone watching.
 
 ## Start
 
@@ -83,8 +109,9 @@ readings persist in `~/EquiCare-demo`.
    same 60 s. Enter the count; it should say *agrees*. **Save this check.**
 8. Optional: **4 · Flank** — on the colour picture, a box over the flank
    behind the ribs: breathing is also read from the flank's rise and fall.
-9. Optional: **3 · Floor** + **Floor cooling test** — if the floor is in the
-   thermal view: box the floor, push, press *Start*, pour 1–3 L of ~38 °C
+9. **5 · Floor (colour)** — box the bedding in the colour picture (one-camera
+   urination/manure). Optional: **3 · Floor (thermal)** + **Floor cooling
+   test** — only if some floor is in the thermal view: box the floor, push, press *Start*, pour 1–3 L of ~38 °C
    water inside the box, wait until it says *measured*, **Save as urine**.
    Repeat with ~2 kg of fresh manure → **Save as manure**. This sets how the
    camera tells the two apart on this bedding (no published data exists).

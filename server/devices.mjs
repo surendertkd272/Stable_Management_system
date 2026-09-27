@@ -520,7 +520,7 @@ export function deviceApi({ store, json, CORS }) {
             floorCalib: { urineHalfLifeMin: splitFromCalib(d.floorCalib), deltaC: d.floorCalib?.deltaC ?? null },
             // JSON-RPC cameras are measured by the edge box sampling these.
             // flank is on the COLOUR picture (breathing from flank movement).
-            rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null, flank: d.rois.flank ?? null } : null,
+            rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null, flank: d.rois.flank ?? null, colourFloor: d.rois.colourFloor ?? null } : null,
           };
         }
         return {
@@ -744,8 +744,11 @@ export function deviceApi({ store, json, CORS }) {
       // Optional, on the COLOUR picture: the horse's flank, for breathing
       // from flank movement (a second opinion to the nostril).
       const flank = body.flank ?? null;
+      // Optional, on the COLOUR picture: the floor the colour camera watches
+      // for manure piles and wet bedding (one camera covering the floor).
+      const colourFloor = body.colourFloor ?? null;
       const why = badBox(eye, "eye", EYE_BOX_MAX) || badBox(n, "nostril") || (floor ? badBox(floor, "floor") : null)
-        || (flank ? badBox(flank, "flank") : null);
+        || (flank ? badBox(flank, "flank") : null) || (colourFloor ? badBox(colourFloor, "colour floor") : null);
       if (why) return json(400, { error: why });
       const box = (b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
       if (await protocolOf(dev) === "mtrpc") {
@@ -760,7 +763,7 @@ export function deviceApi({ store, json, CORS }) {
           if (e instanceof IdentityMismatch) return json(409, { error: e.message, code: e.code });
           verify = { verified: null, detail: `stored in EquiCare; the camera's own rule display was not updated (${e.message})` };
         }
-        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), ...(flank ? { flank: box(flank) } : {}), pushedAt: now(), verified: verify.verified };
+        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), ...(flank ? { flank: box(flank) } : {}), ...(colourFloor ? { colourFloor: box(colourFloor) } : {}), pushedAt: now(), verified: verify.verified };
         store.update("devices", dev.id, { rois, verification: null });
         event(dev, actorOf(who), "calibrated",
           `eye box (${eye.x0}, ${eye.y0})–(${eye.x1}, ${eye.y1}), nostril (${n.x0}, ${n.y0})–(${n.x1}, ${n.y1}); ${verify.detail}`);
@@ -790,7 +793,7 @@ export function deviceApi({ store, json, CORS }) {
           event(dev, actorOf(who), "calibration not confirmed", out.verify.detail);
           return json(502, { error: `ROIs sent, but ${out.verify.detail}`, results, verify: out.verify });
         }
-        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), ...(flank ? { flank: box(flank) } : {}), pushedAt: now(), verified: out.verify.verified };
+        const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), ...(flank ? { flank: box(flank) } : {}), ...(colourFloor ? { colourFloor: box(colourFloor) } : {}), pushedAt: now(), verified: out.verify.verified };
         // A new aim has not been checked yet: any earlier verification was of
         // the old ROIs.
         store.update("devices", dev.id, { rois, verification: null });
