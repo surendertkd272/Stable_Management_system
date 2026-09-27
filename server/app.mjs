@@ -14,11 +14,12 @@
 
 import { isKnownMetric, coverage } from "./contract.mjs";
 import { createStore } from "./store.mjs";
-import { dispatch, notifyStatus } from "./notify.mjs";
+import { dispatch, notifyStatus, tick } from "./notify.mjs";
+import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
 import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
          verifyPassword, hashPassword, publicUser, ROLES } from "./auth.mjs";
 import {
-  summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries, behaviourForHorse,
+  summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries, behaviourForHorse, configureRollup,
 } from "./rollup.mjs";
 import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labelsCsv,
   BOX_LABELS, validateBox, boxesExport, labellingQueue } from "./footage.mjs";
@@ -48,6 +49,20 @@ async function ready() {
     ensureAdmin(s);   // first boot only; prints a generated password once
     G.devices = deviceApi({ store: s, json, CORS });
     G.devices.migrate();           // camera-only records from the first hardware version
+    configureRollup({ activity: activityBands(currentSettings(s).sensitivity) });
+    // Escalation and the daily digest must run with nobody's browser open:
+    // a server tick, once a minute (EQUICARE_NOTIFY_TICK_MS=0 turns it off).
+    const every = Number(process.env.EQUICARE_NOTIFY_TICK_MS ?? 60000);
+    if (every > 0 && !G.notifyTimer) {
+      G.notifyTimer = setInterval(() => {
+        const all = s.allReadings(), horses = s.list("horses");
+        const alerts = buildAlerts(horses, all, s.isAcked);
+        if (G.devices?.deviceAlerts) alerts.push(...G.devices.deviceAlerts(s.isAcked));
+        tick({ alerts, horses: horses.map((h) => ({ name: h.name, ...summarizeHorse(h, all) })), settings: currentSettings(s) })
+          .catch((e) => console.error("[notify]", e.message));
+      }, every);
+      G.notifyTimer.unref?.();
+    }
     const st = s.statsSummary();
     console.log(`[equicare] store=${st.backend} auth=${API_TOKEN ? "token+sessions" : "sessions"} roster=${s.list("horses").length}`);
     return s;
@@ -318,6 +333,7 @@ export async function handle(req) {
           // null stays null: a day without data is not 0 hours of rest.
           rest_hours: metricSeries(rd, "rest_minutes", 7, "sum").map((m) => (m === null ? null : +(m / 60).toFixed(1))),
           inactive_hours: metricSeries(rd, "inactive_minutes", 7, "sum").map((m) => (m === null ? null : +(m / 60).toFixed(1))),
+          lying_hours: metricSeries(rd, "lying_minutes", 7, "sum").map((m) => (m === null ? null : +(m / 60).toFixed(1))),
           activity_index: metricSeries(rd, "activity_index", 7, "avg"),
           feed_intake_g: metricSeries(rd, "feed_intake_g", 7, "sum"),
           feed_refusal_g: metricSeries(rd, "feed_refusal_g", 7, "sum"),
@@ -331,7 +347,7 @@ export async function handle(req) {
       // Hardware that stopped working, for the people who can fix it.
       if (who?.role !== "owner" && devices?.deviceAlerts)
         alerts.push(...devices.deviceAlerts(store.isAcked));
-      dispatch(alerts).catch((e) => console.error("[notify]", e.message));
+      dispatch(alerts, currentSettings(store)).catch((e) => console.error("[notify]", e.message));
       return json(200, alerts);
     }
 
@@ -345,6 +361,22 @@ export async function handle(req) {
 
     if (path === "/api/notify/status" && method === "GET")
       return json(200, notifyStatus());
+
+    // ---- site settings (what the Settings page switches really do) -------- //
+    if (path === "/api/settings") {
+      // Recipients' numbers are staff business, not owners'.
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      if (method === "GET") return json(200, { ...currentSettings(store), notify: notifyStatus() });
+      if (method === "PATCH") {
+        if (who && who.role !== "admin") return json(403, { error: "admin only" });
+        let body;
+        try { body = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
+        const next = saveSettings(store, mergeSettings(currentSettings(store), body, who?.name || who?.username));
+        configureRollup({ activity: activityBands(next.sensitivity) });
+        return json(200, { ...next, notify: notifyStatus() });
+      }
+      return json(405, { error: "method not allowed" });
+    }
 
     // ---- CSV export ------------------------------------------------------ //
     // GET /api/export/readings.csv?horse=<id>&days=N&metric=<m>

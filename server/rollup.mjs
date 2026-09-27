@@ -27,7 +27,13 @@ const WATER_LOW_FRAC = 0.55;                        // < 55% of own baseline
 // Camera-behaviour watch notes (prototype detectors). Starting points for a
 // vet to confirm — they raise "watch" notes, never alarms.
 const NO_URINE_H = 8, NO_MANURE_H = 12;             // hours without an event
-const ACT_UNUSUAL_HI = 2.0, ACT_UNUSUAL_LO = 0.4;   // x the horse's own 7-day activity
+let ACT_UNUSUAL_HI = 2.0, ACT_UNUSUAL_LO = 0.4;     // x the horse's own 7-day activity (Settings sensitivity moves these)
+
+/** Site settings that tune prototype watch notes (never clinical thresholds). */
+export function configureRollup({ activity } = {}) {
+  if (activity?.hi) ACT_UNUSUAL_HI = activity.hi;
+  if (activity?.lo) ACT_UNUSUAL_LO = activity.lo;
+}
 const ACT_BASELINE_DAYS = 3;                        // days of activity needed before judging
 // Posture and vices from the camera (prototype). No published thresholds
 // exist for any of these (research 27 Sep): each is our rule, stated as such.

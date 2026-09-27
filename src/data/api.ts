@@ -531,3 +531,17 @@ export async function exportFootageBoxes(): Promise<boolean> {
     return false;
   }
 }
+
+// ---- site settings (server-side; what the Settings page switches do) ------ //
+export interface SiteSettings {
+  delivery: {
+    instant: boolean; digest: boolean; digestHour: number; escalation: boolean; escalateAfterMin: number;
+    recipients: { manager: string; onCall: string; vet: string };
+  };
+  send: Record<"temperature" | "breathing" | "colic" | "casting" | "activity" | "vices" | "sleep" | "elimination" | "lameness" | "water" | "monitoring", boolean>;
+  sensitivity: number;
+  privacy: { consentAt: string | null; consentBy: string | null };
+  notify: { transport: "webhook" | "log-only"; minSeverity: string; disabled: boolean; notified: number; escalated: number; digests: number; failed: number };
+}
+export const getSettings = () => call<SiteSettings>("GET", "/api/settings");
+export const patchSettings = (patch: unknown) => call<SiteSettings>("PATCH", "/api/settings", patch);
