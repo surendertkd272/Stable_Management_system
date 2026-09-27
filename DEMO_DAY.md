@@ -34,6 +34,15 @@ is fixed at 3.5 m; figures from Sparsh):
 3.5 m), level with the head, out of direct sun (the camera's limit is 50 °C).
 The infrared lamp is 850 nm and glows faintly red at night.
 
+**What each picture sees.** The 25 mm thermal view is only ~25° × 19°:
+about **1.5 m × 1.2 m at 3.5 m** — one horse's head and neck. The colour
+lens (4 mm) sees the whole stall. So temperature and breathing come from the
+thermal view aimed at the head, while activity, lying down and vices are read
+from the colour picture (Hardware → edit camera → *Read behaviour from*).
+Urination/manure need **floor inside the thermal view** — with the head
+filling it that is usually not possible with one camera; say so, or aim a
+second camera at the floor.
+
 ## Start
 
 ```bash
@@ -56,6 +65,10 @@ readings persist in `~/EquiCare-demo`.
 2. **Test connection** — every step green; the serial number is pinned.
 3. Rehearse on a person: eye box on the inner corner of their eye (35–37 °C),
    nostril box under the nose, breathing check against a hand count.
+4. **Lying-down detection** (optional, needs internet once, ~70 MB):
+   `scripts/demo.sh --setup-detector`. It puts numpy, onnxruntime and the
+   YOLOX-tiny model (Apache-2.0) in `~/EquiCare-demo`; from then on the edge
+   agent uses it. Without it, lying is shown as "not measured".
 
 ## At the stall (5–10 minutes)
 
@@ -68,8 +81,16 @@ readings persist in `~/EquiCare-demo`.
 6. **Push ROIs to camera** — it reads them back to confirm.
 7. **Breathing check (60 s)** — meanwhile someone counts flank rises for the
    same 60 s. Enter the count; it should say *agrees*. **Save this check.**
-8. Open the horse's page: body temperature and breathing arrive within a
-   minute and update every minute.
+8. Optional: **4 · Flank** — on the colour picture, a box over the flank
+   behind the ribs: breathing is also read from the flank's rise and fall.
+9. Optional: **3 · Floor** + **Floor cooling test** — if the floor is in the
+   thermal view: box the floor, push, press *Start*, pour 1–3 L of ~38 °C
+   water inside the box, wait until it says *measured*, **Save as urine**.
+   Repeat with ~2 kg of fresh manure → **Save as manure**. This sets how the
+   camera tells the two apart on this bedding (no published data exists).
+10. Open the horse's page: body temperature and breathing arrive within a
+   minute and update every minute. Lying down needs a few hours of the horse
+   both standing and lying before it is learned for that stall.
 
 ## Recording footage for training
 
@@ -116,6 +137,33 @@ Ask the stable's permission before recording, and switch it off when not needed.
   wrong here — posture (head down eating / head up / lying) needs hours of
   labelled footage from OUR camera: record at the demos and label it.
 
+## How each of the 8 points is read (built 27 Sep, from the research)
+
+Nothing published does thermal-camera behaviour for horses with measured
+accuracy, and no video system has published colic accuracy — every colic
+figure comes from worn sensors. We copied methods proven elsewhere:
+
+| Point | How | Proven where |
+|---|---|---|
+| Body temperature | Eye box hottest pixel, vs the horse's own 7-day baseline | Eye IR ≈ 2 °C below rectal, trend only |
+| Respiration pattern | Breath-to-breath regularity; "fast" when panting | — (heaves detection NOT claimed) |
+| Respiratory rate | Nostril box vs the skin around it, only 30 s+ with the head still, rate must agree with a breath count; optional flank box | Calves/cattle thermal (≈3 % error) |
+| Activity | Movement on the colour picture vs own 7-day level | Our zebra check: 80 % |
+| Resting / lying | Horse box shape over time, learned per stall (detector) | Dairy cows: 92 % get-ups, 80–87 % lie-downs |
+| Stable vices | Regular sideways sway (weaving), laps (box walking), regular nodding | Zoo pacing detector: 96.7 % precision |
+| Urination / excretion | New warm floor patch, confirmed after the horse steps off, split by cooling | Mouse thermal system: F1 0.88 / 0.90 |
+
+**Detector test on 60 open photos (greyscale, 27 Sep):** YOLOX-tiny found
+whole horses standing in stalls 7/7, lying on the chest 13/14, **flat on the
+side 0/4**. So a lying horse the detector loses is counted as "possibly flat
+on the side". All of it is untested on a live horse at night — label footage.
+
+**All the new watch notes are ours** (no published thresholds): 3+ lie-downs
+in an hour, possibly cast (down 10+ min with repeated struggling), possible
+rolling, 60 min flat on the side, <10 min lying on 3 nights, a new vice, a
+vice up 1.5× on its usual, manure under half its usual count. They are
+watch notes, never alarms, and each says why it matters.
+
 ## What behaviour patterns mean (Behaviour guide)
 
 The **Behaviour guide** page lists 37 patterns from 48 open-access sources
@@ -144,8 +192,10 @@ confuse it with, and whether EquiCare observes it today. Points worth saying:
 - Breathing rate comes from the nostril's warm/cool cycle. When there is no
   clear rhythm (head turned away) it reports nothing rather than a guess.
 - Before calibration readings are greyed and never raise alerts.
-- The camera covers temperature and breathing. Steps, feed, water and stable
-  vices need the sensors in the RFIs — the dashboard shows them as not measured.
+- The camera measures temperature and breathing; activity, lying, vices and
+  floor events are **prototype** camera measures (shown, used for watch notes,
+  never alarms). Steps, feed and water need the sensors in the RFIs — the
+  dashboard shows them as not measured.
 
 ## If something is wrong
 
