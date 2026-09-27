@@ -1505,3 +1505,11 @@ button {
   max-width: 190px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--border, transparent);
   background: var(--surface-muted); color: var(--ink); font: inherit; font-size: 12.5px;
 }
+
+/* ---------- print (session report, vet report) ---------- */
+@media print {
+  .rail, .topbar, .no-print, .mobile-bar { display: none !important; }
+  body { background: #fff !important; }
+  .card { box-shadow: none !important; break-inside: avoid; border: 1px solid #ccc; }
+  main, .main { margin: 0 !important; padding: 0 !important; }
+}

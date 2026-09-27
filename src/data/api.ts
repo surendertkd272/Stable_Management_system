@@ -545,3 +545,27 @@ export interface SiteSettings {
 }
 export const getSettings = () => call<SiteSettings>("GET", "/api/settings");
 export const patchSettings = (patch: unknown) => call<SiteSettings>("PATCH", "/api/settings", patch);
+
+// ---- session report (the 8 points over a window) -------------------------- //
+export interface SessionPoint {
+  n: number; label: string; status: "measured" | "prototype" | "learning" | "none seen" | "not measured" | "uncalibrated";
+  summary: string; notes?: string[];
+  stats?: { n: number; min: number; median: number; max: number; last: number; lastAt: string };
+  methods?: Record<string, number>; series?: { at: string; avg: number | null }[];
+}
+export interface SessionReport {
+  horse: { id: string; name: string; stall: string } | null;
+  window: { from: string; to: string; minutes: number };
+  coverage: { minutesWithData: number; percent: number; readings: number; gaps: { from: string; to: string; minutes: number }[] };
+  points: SessionPoint[]; measured: number;
+  timeline: { at: string; what: string }[];
+  alerts: { type: string; severity: string; detail: string; time: string }[];
+  footage: { clips: number; megabytes: number; first: string | null; last: string | null };
+  verify: string[];
+}
+export const getSession = (horse: string, from?: string, to?: string) => {
+  const q = new URLSearchParams({ horse });
+  if (from) q.set("from", from);
+  if (to) q.set("to", to);
+  return call<SessionReport>("GET", `/api/session?${q}`);
+};

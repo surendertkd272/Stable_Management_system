@@ -16,6 +16,7 @@ import { isKnownMetric, coverage } from "./contract.mjs";
 import { createStore } from "./store.mjs";
 import { dispatch, notifyStatus, tick } from "./notify.mjs";
 import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
+import { sessionReport } from "./session.mjs";
 import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
          verifyPassword, hashPassword, publicUser, ROLES } from "./auth.mjs";
 import {
@@ -361,6 +362,21 @@ export async function handle(req) {
 
     if (path === "/api/notify/status" && method === "GET")
       return json(200, notifyStatus());
+
+    // ---- session report: the 8 points over a window (a practice demo, a night) --- //
+    if (path === "/api/session" && method === "GET") {
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      const bio = roster().find((h) => h.id === url.searchParams.get("horse"));
+      if (!bio) return json(400, { error: "choose a horse" });
+      const to = Date.parse(url.searchParams.get("to") || "") || Date.now();
+      const from = Date.parse(url.searchParams.get("from") || "") || to - 60 * 60000;
+      if (!(from < to) || to - from > 7 * 24 * 3600 * 1000) return json(400, { error: "the window must be between a minute and 7 days" });
+      const rd = store.readingsForHorse(bio.id);
+      const cams = new Set(rd.map((r) => r.meta?.deviceId).filter(Boolean));
+      const clips = listClips().filter((c) => cams.has(c.camera));
+      const alerts = buildAlerts([bio], store.allReadings(), store.isAcked);
+      return json(200, sessionReport({ readings: rd, from, to, clips, alerts, horse: { id: bio.id, name: bio.name, stall: bio.stall } }));
+    }
 
     // ---- site settings (what the Settings page switches really do) -------- //
     if (path === "/api/settings") {

@@ -121,6 +121,25 @@ if [ ! -s "$TOKEN_FILE" ]; then
     *) say "that is not an edge-box token (they start with eqd_) — continuing without the edge agent" ;;
   esac
 fi
+# The camera's link-local address includes the adapter's name (%en8), which
+# changes if the adapter moves to another port: keep the camera record in step.
+if [ -n "$CAM_ADDR" ] && [ -f "$HOME_DIR/admin-password.txt" ]; then
+  ADMIN_PW="$(sed -n "s/.*password: //p" "$HOME_DIR/admin-password.txt" | head -1)"
+  CAM_ADDR="$CAM_ADDR" ADMIN_PW="$ADMIN_PW" URL="$URL" node -e '
+    const { URL: u, ADMIN_PW: pw, CAM_ADDR: addr } = process.env;
+    (async () => {
+      const login = await (await fetch(u + "/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "admin", password: pw }) })).json();
+      if (!login.token) return;
+      const h = { Authorization: "Bearer " + login.token, "Content-Type": "application/json" };
+      const cams = (await (await fetch(u + "/api/devices", { headers: h })).json()).filter((d) => d.kind === "thermal_camera");
+      for (const c of cams) if (c.host !== addr && c.host.startsWith("fe80::")) {
+        await fetch(u + "/api/devices/" + c.id, { method: "PATCH", headers: h, body: JSON.stringify({ host: addr }) });
+        console.log("[demo] camera \"" + c.name + "\" now at " + addr + " (re-aim it in Calibrate if the boxes are off)");
+      }
+    })().catch(() => {});' 2>/dev/null
+fi
+
 if [ -s "$TOKEN_FILE" ]; then
   if [ "$PY" = python3 ]; then
     say "lying-down detection is off (run scripts/demo.sh --setup-detector once to turn it on)"
@@ -131,7 +150,10 @@ if [ -s "$TOKEN_FILE" ]; then
   AGENT=$!
 fi
 
-say "ready → $URL   (Ctrl-C to stop)"
+# Keep the Mac awake while the demo runs (a sleeping Mac records nothing).
+# Closing the lid still sleeps it: keep it open and on the charger.
+caffeinate -ims -w $$ &
+say "ready → $URL   (Ctrl-C to stop) — keep the lid open and the charger in; live view: $URL/live"
 open "$URL/hardware" 2>/dev/null
 # Show the edge agent's problems as they happen; a healthy agent is quiet.
 if [ -n "$AGENT" ]; then

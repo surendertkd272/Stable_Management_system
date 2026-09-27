@@ -16,7 +16,7 @@ const HI: Record<string, string> = {
   Dashboard: "डैशबोर्ड", Horses: "घोड़े", Alerts: "अलर्ट", "Yard View": "यार्ड दृश्य", Breeding: "प्रजनन",
   Reports: "रिपोर्ट", "Care Diary": "देखभाल डायरी", "Behaviour guide": "व्यवहार गाइड",
   "Health Scheduling": "स्वास्थ्य कार्यक्रम", "Feed & Nutrition": "चारा और पोषण", Billing: "बिलिंग",
-  "Owner Portal": "मालिक पोर्टल", Hardware: "हार्डवेयर", "Footage & labels": "फुटेज और लेबल", Settings: "सेटिंग्स",
+  "Owner Portal": "मालिक पोर्टल", "Live view": "लाइव दृश्य", "Session report": "सत्र रिपोर्ट", Hardware: "हार्डवेयर", "Footage & labels": "फुटेज और लेबल", Settings: "सेटिंग्स",
   // top bar
   "Add horse": "घोड़ा जोड़ें", "Search horses": "घोड़े खोजें", Notifications: "सूचनाएँ", "Sign out": "साइन आउट",
   Light: "हल्का", Dark: "गहरा", Back: "वापस", Close: "बंद करें", Save: "सहेजें", Cancel: "रद्द करें",

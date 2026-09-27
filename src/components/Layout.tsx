@@ -11,6 +11,8 @@ import {
   FileText,
   NotebookPen,
   BookOpen,
+  Video,
+  ClipboardList,
   Settings,
   Sparkles,
   Search,
@@ -42,6 +44,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
     title: "Monitoring",
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+      { to: "/live", label: "Live view", icon: Video, adminOnly: true },
       { to: "/horses", label: "Horses", icon: Heart },
       { to: "/alerts", label: "Alerts", icon: Bell },
       { to: "/yard", label: "Yard View", icon: Map },
@@ -54,6 +57,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/reports", label: "Reports", icon: FileText },
       { to: "/diary", label: "Care Diary", icon: NotebookPen },
       { to: "/guide", label: "Behaviour guide", icon: BookOpen },
+      { to: "/session", label: "Session report", icon: ClipboardList, staffOnly: true },
     ],
   },
   {
@@ -246,6 +250,8 @@ function TopBar() {
     "/portal": { h1: "Owner Portal", p: "Scoped read-only view of each owner's horses" },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
     "/hardware": { h1: "Hardware", p: "Edge boxes, cameras and sensors — connect, test and calibrate" },
+    "/live": { h1: "Live view", p: "The camera's pictures and what the system reads from them, now" },
+    "/session": { h1: "Session report", p: "The 8 points over a window — a practice demo, a night" },
     "/guide": { h1: "Behaviour guide", p: "What horse behaviour patterns may mean — from open veterinary sources" },
     "/footage": { h1: "Footage & labels", p: "Recorded camera video — mark what the horse does, for training" },
   };
