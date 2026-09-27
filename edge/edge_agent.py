@@ -597,7 +597,12 @@ class Worker(threading.Thread):
         # This used to be reported as an error "starting", so every device on a
         # freshly started edge box showed red while it was working fine.
         return {"id": self.dev["id"], "ok": self.ok, "code": self.code if self.ok is False else None,
-                "error": self.error if self.ok is False else None, "lastReadingAt": self.last_reading_at}
+                "error": self.error if self.ok is False else None, "lastReadingAt": self.last_reading_at,
+                "warnings": self.warnings()}
+
+    def warnings(self):
+        """Working, but part of it is not (a video stream, the detector)."""
+        return []
 
     def emit(self, readings):
         if readings:
@@ -806,6 +811,7 @@ class MtrpcCameraWorker(CameraWorker):
             self._load_posture()
         d = self.dev
         thermal_posture = self.posture if self.behaviour_stream() == "thermal" else None
+        self._video_started = getattr(self, "_video_started", None) or time.time()
         if self.video is None or not self.video.is_alive():
             self.analyzer = WindowAnalyzer(mode="thermal", posture=thermal_posture)
 
@@ -910,6 +916,30 @@ class MtrpcCameraWorker(CameraWorker):
         vals = [v for v in self.cam.read_pixels(fine) if v is not None and v <= 41.0]
         return max(vals) if vals else hit[2]
 
+    def warnings(self):
+        out = []
+        for name, v in (("thermal video", self.video), ("colour video", self.vvideo)):
+            if name == "colour video" and v is None and self.behaviour_stream() != "visible":
+                continue
+            if v is None:
+                out.append(f"{name} not started")
+            elif v.error:
+                out.append(f"{name}: {v.error}")
+            elif v.is_alive() and getattr(v, "frames", 1) == 0 and time.time() - getattr(self, "_video_started", time.time()) > 30:
+                out.append(f"{name}: connected but no frames yet")
+        if self.behaviour_stream() == "visible" and self.detector_note:
+            out.append(f"lying and colour floor not measured — {self.detector_note}")
+        return out[:4]
+
+    def _log_warnings(self):
+        w = self.warnings()
+        if w != getattr(self, "_last_warnings", None):
+            for line in w:
+                print(f"[edge] {self.name}: {line}")
+            if not w and getattr(self, "_last_warnings", None):
+                print(f"[edge] {self.name}: video and detector OK again")
+            self._last_warnings = w
+
     def _floor_scan(self, rois, calib, lying_recent):
         from floor import FloorTracker  # noqa
         from video_analytics import box_px  # noqa
@@ -939,6 +969,7 @@ class MtrpcCameraWorker(CameraWorker):
             self._start_video()                              # a stream may have died, or a flank box was added
         video_ok = self.video is not None and self.video.is_alive() and not self.video.error
         vis_ok = self.vvideo is not None and self.vvideo.is_alive() and not self.vvideo.error
+        self._log_warnings()
         with self._lock:
             self.analyzer.reset()
             if self.vanalyzer:

@@ -127,9 +127,10 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
   // 7 · urination, 8 · excretion
   for (const [n, metric, label] of [[7, "urination_event", "Urination"], [8, "excretion_event", "Excretion"]]) {
     const ev = of(metric);
-    add(n, label, ev.length ? "prototype" : "none seen",
+    add(n, label, ev.length ? "prototype" : as ? "none seen" : "not measured",
       ev.length ? `${ev.length} seen: ` + ev.map((r) => `${hhmm(r.ts)} (${r.meta?.tier ?? "?"}, confidence ${Math.round((r.confidence ?? 0) * 100)} %)`).join(", ") + "."
-        : "None seen. The floor is learned in the first ~5 minutes; events are only counted after the horse has moved away.",
+        : as ? "None seen. The floor is learned in the first ~5 minutes; events are only counted after the horse has moved away."
+          : "Not measured — the floor is watched in the video, which was not running.",
       { events: ev.map((r) => ({ at: r.ts, tier: r.meta?.tier ?? null, confidence: r.confidence, source: r.source })),
         notes: ["Urine shows well on shavings, poorly on straw. Deposits outside the colour picture are missed."] });
   }

@@ -227,7 +227,8 @@ export function deviceStatus(d, all = []) {
       return { state: "error", detail: d.health.error };
     return { state: "error", detail: d.health.error || "the edge box reports an error" };
   }
-  if (d.lastSeen && age(d.lastSeen) < DEVICE_ONLINE_MS) return { state: "online", detail: "reporting" };
+  if (d.lastSeen && age(d.lastSeen) < DEVICE_ONLINE_MS)
+    return { state: "online", detail: "reporting", ...(d.health?.warnings?.length ? { warnings: d.health.warnings } : {}) };
   return { state: d.lastSeen ? "stale" : "waiting", detail: d.lastSeen ? `last reading ${d.lastSeen}` : "waiting for the edge box's first reading" };
 }
 
@@ -551,6 +552,8 @@ export function deviceApi({ store, json, CORS }) {
                 at: stamp, ok: Boolean(h.ok),
                 error: h.ok ? null : String(h.error ?? "unknown error").slice(0, 300),
                 code: h.ok ? null : (typeof h.code === "string" ? h.code.slice(0, 40) : null),
+                // Working, but part of it is not (a video stream, the detector).
+                warnings: Array.isArray(h.warnings) ? h.warnings.slice(0, 4).map((w) => String(w).slice(0, 200)) : [],
               },
         });
         updated++;

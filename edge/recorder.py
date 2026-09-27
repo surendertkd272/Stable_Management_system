@@ -27,7 +27,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from video_analytics import local_relay
+from video_analytics import clean_ffmpeg_error, local_relay
 
 STREAMS = {"thermal": "/media/live/202", "visible": "/media/live/102"}
 CLIP_SECONDS = 600
@@ -109,7 +109,7 @@ class StreamRecorder(threading.Thread):
             _, err = self.proc.communicate()
             if self.stop_evt.is_set():
                 break
-            self.error = f"recording stopped: {(err or b'').decode(errors='replace').strip()[-200:] or 'stream ended'} — reconnecting"
+            self.error = f"recording stopped: {clean_ffmpeg_error((err or b'').decode(errors='replace')) or 'stream ended'} — reconnecting"
             print(f"[edge] {self.name}: {self.error}")
             self.stop_evt.wait(5)
 

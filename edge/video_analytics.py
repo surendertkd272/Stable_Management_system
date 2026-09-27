@@ -335,6 +335,17 @@ class WindowAnalyzer:
         return out
 
 
+def clean_ffmpeg_error(err):
+    """ffmpeg's complaint, safe to log and show: no credentials (the RTSP URL
+    carries the camera password), no changing relay port, the last line only."""
+    import re
+    lines = [l.strip() for l in (err or "").splitlines() if l.strip()]
+    text = lines[-1] if lines else ""
+    text = re.sub(r"rtsp://[^@\s/]+@", "rtsp://", text)
+    text = re.sub(r"127\.0\.0\.1:\d+", "camera", text)
+    return text[-160:]
+
+
 def local_relay(host, port, stop_evt):
     """A 127.0.0.1 TCP port that forwards to host:port, until stop_evt. ffmpeg
     cannot use an IPv6 zone (fe80::…%en8) in a URL; this lets it reach a
@@ -422,9 +433,9 @@ class VideoStream(threading.Thread):
                 self.on_frame(chunk, time.time())
             if self.proc.poll() is None:
                 self.proc.kill()
-            err = (self.proc.stderr.read() or b"").decode(errors="replace").strip()
+            err = clean_ffmpeg_error((self.proc.stderr.read() or b"").decode(errors="replace"))
             if not self.stop_evt.is_set():
-                self.error = f"video {self.path} stopped: {err[-200:] or 'stream ended'} — reconnecting"
+                self.error = f"video {self.path} stopped: {err or 'stream ended'} — reconnecting"
                 self.stop_evt.wait(5)
 
     def stop(self):

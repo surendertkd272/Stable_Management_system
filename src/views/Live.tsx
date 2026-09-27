@@ -120,6 +120,9 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
             {" · "}{cam.record ? "recording video for the report" : "NOT recording (Hardware → edit camera → Record video)"}
             {" · "}behaviour from the {cam.behaviourStream === "thermal" ? "thermal" : "colour"} picture
           </div>
+          {status?.warnings?.map((w) => (
+            <div key={w} style={{ fontSize: 12.5, color: "var(--warn)", marginTop: 2 }}>⚠ {w}</div>
+          ))}
         </div>
         {start ? (
           <>

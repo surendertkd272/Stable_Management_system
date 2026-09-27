@@ -38,6 +38,6 @@ test("an hour with readings: every point summarised, coverage and gaps reported"
 test("an hour with nothing: says not measured, never zero", () => {
   const rep = sessionReport({ readings: [], from, to });
   assert.equal(rep.coverage.readings, 0);
-  for (const n of [1, 3, 4, 5]) assert.equal(rep.points.find((x) => x.n === n).status, "not measured");
+  for (const n of [1, 3, 4, 5, 7, 8]) assert.equal(rep.points.find((x) => x.n === n).status, "not measured");
   assert.deepEqual(rep.coverage.gaps.map((g) => g.minutes), [60]);
 });

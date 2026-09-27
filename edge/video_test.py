@@ -128,5 +128,10 @@ close = [33.0 + rng.gauss(0, 0.3) for _ in range(48)]      # head fills the fram
 check("head filling the frame: present via the eye box", horse_present(close, eye_max_c=35.2)[0] is True)
 check("no readings: cannot tell", horse_present([None] * 48)[0] is None)
 
+# ffmpeg errors are logged and shown in the portal: never with the password.
+from video_analytics import clean_ffmpeg_error  # noqa: E402
+msg = clean_ffmpeg_error("Error opening input file rtsp://admin:Admin%40123@127.0.0.1:61952/media/live/102.\n")
+check("camera password never appears in a video error", "Admin" not in msg and "@" not in msg and "61952" not in msg, msg)
+
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

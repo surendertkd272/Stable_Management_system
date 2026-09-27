@@ -241,7 +241,7 @@ export type DeviceKind = "edge_box" | "thermal_camera" | "modbus_sensor" | "push
 export type DeviceState =
   | "online" | "offline" | "never" | "disabled" | "unassigned" | "edge-offline"
   | "needs-calibration" | "error" | "stale" | "waiting" | "silent";
-export interface DeviceStatus { state: DeviceState; detail: string }
+export interface DeviceStatus { state: DeviceState; detail: string; warnings?: string[] }
 export interface DeviceHealth { at: string; ok: boolean | null; error: string | null; code: string | null }
 
 export interface RoiBox { x0: number; y0: number; x1: number; y1: number }
