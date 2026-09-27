@@ -70,7 +70,7 @@ test("data 8h old -> ALERT (horse is not being monitored) and downstream rules s
 });
 
 // ---- point 2: body temperature -------------------------------------------- //
-test("fever >= 38.6 C -> urgent alert", () => {
+test("contact thermometer: fever >= 38.6 C -> urgent alert", () => {
   const rd = [...healthy(), R("body_temp_c", 38.9, 0)];
   assert.equal(statusOf(rd), "urgent");
   assert.ok(types(rd).includes("Elevated body temperature"));
@@ -82,7 +82,7 @@ test("38.4 C -> watch (rising), not urgent", () => {
   assert.ok(types(rd).includes("Body temperature rising"));
 });
 
-test("hypothermia <= 37.0 C -> urgent alert", () => {
+test("contact thermometer: hypothermia <= 37.0 C -> urgent alert", () => {
   const rd = [...healthy(), R("body_temp_c", 36.8, 0)];
   assert.equal(statusOf(rd), "urgent");
   assert.ok(types(rd).includes("Low body temperature"));
@@ -90,6 +90,56 @@ test("hypothermia <= 37.0 C -> urgent alert", () => {
 
 test("37.6 C sits inside the normal band", () => {
   assert.equal(statusOf([...healthy(), R("body_temp_c", 37.6, 0)]), "calm");
+});
+
+// ---- eye temperature (thermal camera) is judged against the horse's own baseline -- //
+// Infrared eye temperature sits ~2 C below rectal; the rectal band would call a
+// healthy horse hypothermic all day.
+const EYE = { source: "thermal_camera", meta: { calibrated: true } };
+function eyeHistory(value = 35.0, days = 4) {
+  const rd = healthy().filter((r) => r.metric !== "body_temp_c");
+  for (let h = 7; h < days * 24; h += 3) rd.push(R("body_temp_c", value, h, EYE));
+  return rd;
+}
+
+test("a healthy 35 C eye reading raises no low-temperature alarm", () => {
+  const withBase = [...eyeHistory(), R("body_temp_c", 35.1, 0, EYE)];
+  assert.deepEqual(types(withBase), []);
+  const noBase = [...healthy().filter((r) => r.metric !== "body_temp_c"), R("body_temp_c", 34.8, 0, EYE)];
+  assert.deepEqual(types(noBase), [], "no baseline yet: an eye reading cannot be called low");
+});
+
+test("eye +1.0 C over own baseline -> watch; +1.5 C -> urgent", () => {
+  const warn = [...eyeHistory(), R("body_temp_c", 36.1, 0, EYE)];
+  assert.equal(statusOf(warn), "watch");
+  assert.ok(types(warn).includes("Body temperature rising"));
+  const alert = [...eyeHistory(), R("body_temp_c", 36.6, 0, EYE)];
+  assert.equal(statusOf(alert), "urgent");
+  assert.ok(types(alert).includes("Elevated body temperature"));
+});
+
+test("eye 1.5 C below own baseline -> a check-the-horse note, not a hypothermia alarm", () => {
+  const rd = [...eyeHistory(), R("body_temp_c", 33.4, 0, EYE)];
+  assert.equal(statusOf(rd), "watch");
+  assert.ok(types(rd).includes("Eye temperature below usual"));
+  assert.ok(!types(rd).includes("Low body temperature"));
+});
+
+test("fewer than 3 days of eye history is not a baseline", () => {
+  const rd = [...eyeHistory(35.0, 2), R("body_temp_c", 36.6, 0, EYE)];
+  assert.deepEqual(types(rd), [], "1.6 C over two days of data is not judged");
+});
+
+test("an eye reading at the rectal fever line alerts even without a baseline", () => {
+  const rd = [...healthy().filter((r) => r.metric !== "body_temp_c"), R("body_temp_c", 38.7, 0, EYE)];
+  assert.ok(types(rd).includes("Elevated body temperature"), "the eye is cooler than the core, so this is a fever");
+});
+
+test("a fever building in the last 6 h does not raise its own baseline", () => {
+  const rd = eyeHistory();
+  for (let h = 0; h < 6; h++) rd.push(R("body_temp_c", 36.4 + h * 0.05, h, EYE));
+  rd.push(R("body_temp_c", 36.6, 0, EYE));
+  assert.ok(types(rd).includes("Elevated body temperature"));
 });
 
 // ---- point 4: respiratory rate -------------------------------------------- //

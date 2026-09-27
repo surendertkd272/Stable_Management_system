@@ -9,7 +9,17 @@ const DAY_MS = 24 * 3600 * 1000;
 const BASELINE_TARGET_DAYS = 14;
 
 // ---- resting-horse reference ranges (screening) --------------------------- //
+// Contact (rectal) thermometer. Normal adult 37.2–38.6 C (Merck Vet Manual).
 const TEMP_FEVER = 38.6, TEMP_WATCH_HI = 38.3, TEMP_LOW = 37.0;
+// Eye surface (thermal camera). Infrared eye temperature averages ~35 C, about
+// 2 C below rectal, and one study found no significant correlation with rectal
+// temperature — so the rectal band would call a healthy horse hypothermic all
+// day. An eye reading is judged against the horse's OWN baseline. The deltas
+// are our operational choice (no published threshold exists); tune with a vet.
+// Without a baseline only a fever can be called: the eye surface is cooler than
+// the core, so an eye at >= TEMP_FEVER means the core is at least that hot.
+const EYE_RISE_WARN = 1.0, EYE_RISE_ALERT = 1.5, EYE_DROP_WARN = 1.5;   // C vs own baseline
+const EYE_BASELINE_DAYS = 3;                        // distinct days before judging
 const RESP_ALERT = 24, RESP_WATCH = 20;             // bpm, at rest
 const GAIT_WATCH = 0.35;                            // asymmetry 0..1
 const REST_MIN_LOW = 180;                           // < 3h lying/day
@@ -88,6 +98,17 @@ export const uncalibrated = (r) => r?.meta?.calibrated === false;
  *  which was enough to raise "colic pattern" before this rule. */
 export const prototype = (r) => r?.meta?.prototype === true || SOURCE_STATUS[r?.source] === "prototype";
 
+/** This horse's usual eye temperature: the mean of calibrated camera readings
+ *  from the last 7 days, excluding the last 6 h (so a fever building now does
+ *  not raise its own baseline). Null until EYE_BASELINE_DAYS distinct days. */
+export function eyeBaseline(rd, cur) {
+  const cutoff = Date.parse(cur.ts) - 6 * 3600 * 1000;
+  const rows = rd.filter((r) => r.metric === "body_temp_c" && r.source === cur.source && !uncalibrated(r)
+    && Date.parse(r.ts) < cutoff && within(r, 7 * DAY_MS));
+  if (new Set(rows.map((r) => dayKey(r.ts))).size < EYE_BASELINE_DAYS) return null;
+  return rows.reduce((a, r) => a + r.value, 0) / rows.length;
+}
+
 /** Evaluate all rule checks for one horse -> list of {type, severity, detail, ts}. */
 function evaluate(bio, rd) {
   const out = [];
@@ -124,12 +145,26 @@ function evaluate(bio, rd) {
       (temp || resp).ts);
   }
   if (temp && !uncalibrated(temp)) {
-    if (temp.value >= TEMP_FEVER) push("Elevated body temperature", "alert",
-      `Eye-region temperature ${temp.value.toFixed(1)} C — above fever threshold (${TEMP_FEVER} C). Screening-grade; confirm with a contact thermometer.`, temp.ts);
-    else if (temp.value <= TEMP_LOW) push("Low body temperature", "alert",
-      `Eye-region temperature ${temp.value.toFixed(1)} C — below ${TEMP_LOW} C.`, temp.ts);
-    else if (temp.value >= TEMP_WATCH_HI) push("Body temperature rising", "warn",
-      `Eye-region temperature ${temp.value.toFixed(1)} C — upper end of normal; watching trend.`, temp.ts);
+    if (temp.source === "thermal_camera") {
+      const base = eyeBaseline(rd, temp);
+      const d = base === null ? null : temp.value - base;
+      const vs = base === null ? "" : ` (${d >= 0 ? "+" : ""}${d.toFixed(1)} C vs this horse's usual ${base.toFixed(1)} C)`;
+      const confirm = " Eye surface, screening-grade; confirm with a rectal thermometer.";
+      if (temp.value >= TEMP_FEVER || (d !== null && d >= EYE_RISE_ALERT)) push("Elevated body temperature", "alert",
+        `Eye temperature ${temp.value.toFixed(1)} C${vs} — well above normal.${confirm}`, temp.ts);
+      else if (d !== null && d >= EYE_RISE_WARN) push("Body temperature rising", "warn",
+        `Eye temperature ${temp.value.toFixed(1)} C${vs} — watching the trend.${confirm}`, temp.ts);
+      else if (d !== null && d <= -EYE_DROP_WARN) push("Eye temperature below usual", "warn",
+        `Eye temperature ${temp.value.toFixed(1)} C${vs} — a cold stall, wet coat or a camera that has moved can do this; ` +
+        `check the horse and the camera aim.`, temp.ts);
+    } else {
+      if (temp.value >= TEMP_FEVER) push("Elevated body temperature", "alert",
+        `Body temperature ${temp.value.toFixed(1)} C — above fever threshold (${TEMP_FEVER} C).`, temp.ts);
+      else if (temp.value <= TEMP_LOW) push("Low body temperature", "alert",
+        `Body temperature ${temp.value.toFixed(1)} C — below ${TEMP_LOW} C.`, temp.ts);
+      else if (temp.value >= TEMP_WATCH_HI) push("Body temperature rising", "warn",
+        `Body temperature ${temp.value.toFixed(1)} C — upper end of normal; watching trend.`, temp.ts);
+    }
   }
 
   if (resp && !uncalibrated(resp)) {
