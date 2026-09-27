@@ -2,8 +2,10 @@
 # EquiCare demo on one Mac: the site server and the edge agent together, with
 # the camera cabled to this machine. No internet needed.
 #
-#   scripts/demo.sh            start (builds the app the first time)
-#   scripts/demo.sh --build    rebuild first (after pulling new code)
+#   scripts/demo.sh                   start (builds the app the first time)
+#   scripts/demo.sh --build           rebuild first (after pulling new code)
+#   scripts/demo.sh --setup-detector  once: lying-down detection (downloads
+#                                     ~70 MB: numpy, onnxruntime, YOLOX-tiny)
 #
 # Everything the demo keeps — horses, devices, readings, the edge-box token —
 # lives in ~/EquiCare-demo, outside the repository, so it survives restarts
@@ -22,9 +24,32 @@ mkdir -p "$DATA" "$LOGS"
 say() { printf '\033[1m[demo]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[demo] %s\033[0m\n' "$*" >&2; exit 1; }
 
+# ---- optional: the horse detector for lying down / getting up ---------------
+# A Python environment of its own under ~/EquiCare-demo (nothing installed
+# system-wide) and the YOLOX-tiny model (Megvii, Apache-2.0, COCO "horse").
+VENV="$HOME_DIR/edge-venv"
+MODEL="$HOME_DIR/models/yolox_tiny.onnx"
+if [ "${1:-}" = "--setup-detector" ]; then
+  command -v python3 >/dev/null || die "python3 is not installed."
+  say "creating $VENV …"
+  python3 -m venv "$VENV" || die "could not create the Python environment"
+  "$VENV/bin/pip" -q install requests numpy onnxruntime || die "package install failed (needs internet)"
+  mkdir -p "$HOME_DIR/models"
+  say "downloading the YOLOX-tiny model …"
+  curl -fsSL -o "$MODEL.part" https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx \
+    && mv "$MODEL.part" "$MODEL" || die "model download failed"
+  "$VENV/bin/python" -c "import sys; sys.path.insert(0, 'edge'); from detector import load; d, why = load('$MODEL'); print(why or 'detector ready')"
+  exit 0
+fi
+PY=python3
+if [ -x "$VENV/bin/python" ] && [ -s "$MODEL" ]; then
+  PY="$VENV/bin/python"
+  export EQUICARE_DETECTOR_MODEL="$MODEL"
+fi
+
 command -v node >/dev/null || die "Node.js is not installed (need v22)."
 command -v python3 >/dev/null || die "python3 is not installed."
-python3 -c "import requests" 2>/dev/null || die "python3 is missing the 'requests' package: python3 -m pip install --user requests"
+"$PY" -c "import requests" 2>/dev/null || die "python3 is missing the 'requests' package: python3 -m pip install --user requests"
 
 if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   die "port $PORT is already in use — another server is running. Stop it with: kill \$(lsof -tiTCP:$PORT -sTCP:LISTEN)"
@@ -97,8 +122,11 @@ if [ ! -s "$TOKEN_FILE" ]; then
   esac
 fi
 if [ -s "$TOKEN_FILE" ]; then
+  if [ "$PY" = python3 ]; then
+    say "lying-down detection is off (run scripts/demo.sh --setup-detector once to turn it on)"
+  fi
   say "starting the edge agent (log: $LOGS/edge.log)"
-  python3 -u edge/edge_agent.py --server "$URL" --token "$(cat "$TOKEN_FILE")" --refresh 15 \
+  "$PY" -u edge/edge_agent.py --server "$URL" --token "$(cat "$TOKEN_FILE")" --refresh 15 \
     > "$LOGS/edge.log" 2>&1 &
   AGENT=$!
 fi

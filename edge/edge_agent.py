@@ -721,25 +721,66 @@ class CameraWorker(Worker):
             pass
 
 
+STATE_DIR = Path(os.environ.get("EQUICARE_STATE_DIR") or (Path.home() / "EquiCare-demo" / "state"))
+
+
 class MtrpcCameraWorker(CameraWorker):
     """A JSON-RPC (/mtrpc) camera — the firmware on the Sparsh demo unit.
 
-    Two data paths, each used for what it is good at:
+    Data paths, each used for what it is good at:
       pixel reads (absolute °C, ~1 refresh/s): eye temperature (hottest pixel
         in the eye box), the nostril box's average °C, floor warm patches;
-      thermal video (25 fps, relative brightness): breathing rhythm, activity,
-        stillness, weaving — see video_analytics.py.
-    Without ffmpeg the video path is off and breathing falls back to pixel
+      thermal video (25 fps, relative brightness): breathing rhythm, and where
+        the horse is moving over the floor (so the floor detector waits for it
+        to step off a deposit);
+      behaviour video — the COLOUR stream by default: with the 25 mm thermal
+        lens the thermal view is ~1.5 × 1.2 m at 3.5 m (the head and neck),
+        while the colour lens sees the whole stall, day and night (IR lamp).
+        Activity, stillness, weaving, box walking, head tossing, and — with
+        the optional detector — lying down / getting up. behaviourStream
+        "thermal" keeps it on the thermal view (a camera hung far enough back
+        to see the whole horse), where posture comes from the warm body's box.
+    Without ffmpeg the video paths are off and breathing falls back to pixel
     sampling (too slow on this firmware to find a rhythm reliably)."""
 
-    FLOOR_EVERY_S = 5.0
+    FLOOR_EVERY_S = 2.0
+    VISIBLE_SIZE = (352, 288)          # finer than thermal: flank movement is ~1 cm
+    DETECT_EVERY_S = 1.0
 
     def __init__(self, dev, sink, window_s=60, target_hz=5.0):
         super().__init__(dev, sink, window_s, target_hz)
-        self.video = None
-        self.analyzer = None
+        self.video = self.vvideo = None
+        self.analyzer = self.vanalyzer = None
         self.floor = None
+        self.detector, self.detector_note = None, None
+        self.last_visible = None
+        self.boxes_seen = 0
+        self.posture = None
         self._lock = threading.Lock()
+
+    # -- which stream does behaviour ------------------------------------------ #
+    def behaviour_stream(self):
+        return "thermal" if self.dev.get("behaviourStream") == "thermal" else "visible"
+
+    def _posture_path(self):
+        return STATE_DIR / f"posture-{self.dev['id']}-{self.behaviour_stream()}.json"
+
+    def _load_posture(self):
+        from behaviour import PostureTracker  # noqa
+        try:
+            st = json.loads(self._posture_path().read_text())
+        except Exception:                                   # noqa: BLE001  (first run / unreadable)
+            st = None
+        self.posture = PostureTracker(st)
+
+    def _save_posture(self):
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = self._posture_path().with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.posture.to_state()))
+            tmp.replace(self._posture_path())
+        except Exception as e:                              # noqa: BLE001
+            print(f"[edge] {self.name}: could not save the posture model ({e})")
 
     def connect(self):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -758,33 +799,91 @@ class MtrpcCameraWorker(CameraWorker):
         self._start_video()
 
     def _start_video(self):
-        from video_analytics import ThermalStream, WindowAnalyzer, box_px  # noqa
-        if self.video is not None and self.video.is_alive():
-            return
-        self.analyzer = WindowAnalyzer()
-        self._box_px = box_px
-
-        def on_frame(frame, _t):
-            rois = self.dev.get("rois") or {}
-            nb = box_px(rois["nostril"]) if rois.get("nostril") else None
-            with self._lock:
-                self.analyzer.feed(frame, nb)
-
+        from video_analytics import VideoStream, WindowAnalyzer, box_px  # noqa
+        if self.posture is None:
+            self._load_posture()
         d = self.dev
-        self.video = ThermalStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_frame,
-                                   port=d.get("rtspPort", 554))
-        self.video.start()
+        thermal_posture = self.posture if self.behaviour_stream() == "thermal" else None
+        if self.video is None or not self.video.is_alive():
+            self.analyzer = WindowAnalyzer(mode="thermal", posture=thermal_posture)
 
-    def _floor_scan(self, rois):
-        from video_analytics import FloorWatcher  # noqa
+            def on_thermal(frame, t):
+                rois = self.dev.get("rois") or {}
+                nb = box_px(rois["nostril"]) if rois.get("nostril") else None
+                with self._lock:
+                    self.analyzer.feed(frame, nb, t=t)
+
+            self.video = VideoStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_thermal,
+                                     port=d.get("rtspPort", 554), path="/media/live/202")
+            self.video.start()
+        rois = d.get("rois") or {}
+        want_visible = self.behaviour_stream() == "visible" or rois.get("flank")
+        if want_visible and (self.vvideo is None or not self.vvideo.is_alive()):
+            vw, vh = self.VISIBLE_SIZE
+            self.vanalyzer = WindowAnalyzer(mode="visible", w=vw, h=vh)
+
+            def on_visible(frame, t):
+                r = self.dev.get("rois") or {}
+                fb = box_px(r["flank"], vw, vh) if r.get("flank") else None
+                with self._lock:
+                    self.vanalyzer.feed(frame, flank_bounds=fb, t=t)
+                    self.last_visible = (frame, t)
+
+            self.vvideo = VideoStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_visible,
+                                      port=d.get("rtspPort", 554), path="/media/live/102", w=vw, h=vh)
+            self.vvideo.start()
+            if self.behaviour_stream() == "visible" and self.detector is None and self.detector_note is None:
+                from detector import load  # noqa
+                self.detector, self.detector_note = load(os.environ.get("EQUICARE_DETECTOR_MODEL"))
+                if self.detector_note:
+                    print(f"[edge] {self.name}: {self.detector_note} — lying is not measured")
+                else:
+                    threading.Thread(target=self._detect_loop, daemon=True, name=f"detect:{self.name}").start()
+
+    def _detect_loop(self):
+        """The horse's box in the colour picture, once a second, into the
+        posture tracker (standing / lying from the box's shape over time)."""
+        vw, vh = self.VISIBLE_SIZE
+        last = None
+        while not self.stop_evt.is_set():
+            self.stop_evt.wait(self.DETECT_EVERY_S)
+            with self._lock:
+                snap = self.last_visible
+                motion = self.vanalyzer.recent_motion() if self.vanalyzer else 0.0
+            if not snap or snap[1] == last:
+                continue
+            last = snap[1]
+            try:
+                boxes = self.detector.detect(snap[0], vw, vh)
+            except Exception as e:                          # noqa: BLE001
+                print(f"[edge] {self.name}: detector failed ({e}) — lying not measured")
+                self.detector, self.detector_note = None, f"detector failed: {e}"
+                return
+            best = max(boxes, key=lambda b: (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) * b["score"]) if boxes else None
+            if best:
+                best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
+                self.boxes_seen += 1
+            with self._lock:
+                self.posture.feed(snap[1], best, motion)
+
+    def _floor_scan(self, rois, calib, lying_recent):
+        from floor import FloorTracker  # noqa
+        from video_analytics import box_px  # noqa
         from mtrpc import to_cam, clamp_cam  # noqa
         if not rois.get("floor"):
             self.floor = None
-            return None
-        if self.floor is None:
-            self.floor = FloorWatcher()
+            return []
+        key = (calib.get("deltaC"), calib.get("urineHalfLifeMin"), tuple(sorted(rois["floor"].items())))
+        if self.floor is None or getattr(self, "_floor_key", None) != key:
+            self.floor = FloorTracker(delta_c=calib.get("deltaC"), urine_half_life_min=calib.get("urineHalfLifeMin"))
+            self._floor_key = key
         pts = [{"x": clamp_cam(to_cam(p["x"])), "y": clamp_cam(to_cam(p["y"]))} for p in self.floor.grid(rois["floor"])]
-        return self.floor.scan(self.cam.read_pixels(pts))
+        temps = self.cam.read_pixels(pts)
+        horse = set()
+        if self.analyzer is not None:
+            with self._lock:
+                horse = self.analyzer.motion.moving_cells(box_px(rois["floor"]), self.floor.cols, self.floor.rows, 30)
+        return self.floor.scan(temps, horse_cells=horse, lying_recent=lying_recent)
 
     def _run_once(self):
         rois = self.dev.get("rois")
@@ -792,10 +891,17 @@ class MtrpcCameraWorker(CameraWorker):
             raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
         if self.cam is None:
             self.connect()
+        else:
+            self._start_video()                              # a stream may have died, or a flank box was added
         video_ok = self.video is not None and self.video.is_alive() and not self.video.error
+        vis_ok = self.vvideo is not None and self.vvideo.is_alive() and not self.vvideo.error
         with self._lock:
             self.analyzer.reset()
+            if self.vanalyzer:
+                self.vanalyzer.reset()
+        self.boxes_seen = 0
         pixel_window, floor_events = [], []
+        calib = self.dev.get("floorCalib") or {}
         t0 = last_floor = time.time()
         while time.time() - t0 < self.window_s and not self.stop_evt.is_set():
             tick = time.time()
@@ -805,15 +911,18 @@ class MtrpcCameraWorker(CameraWorker):
                 if v is not None:
                     pixel_window.append(v)
             if tick - last_floor >= self.FLOOR_EVERY_S:
-                ev = self._floor_scan(rois)
-                if ev:
-                    floor_events.append(ev)
+                lying_recent = self.posture is not None and self.posture.state == "lying"
+                floor_events += self._floor_scan(rois, calib, lying_recent)
                 last_floor = tick
-            self.stop_evt.wait(max(0.0, (1.0 / self.target_hz if not video_ok else 1.0) - (time.time() - tick)))
+            self.stop_evt.wait(max(0.0, (1.0 / self.target_hz if not video_ok else 0.5) - (time.time() - tick)))
         if self.stop_evt.is_set():
             return
         with self._lock:
             summary = self.analyzer.summary(compute_resp_rate) if video_ok else {}
+            vsummary = self.vanalyzer.summary(compute_resp_rate) if (vis_ok and self.vanalyzer) else {}
+            posture = self.posture.drain() if self.posture else None
+        if self.posture is not None:
+            self._save_posture()
         eye = self.cam.box_max(rois["eye"]) if rois.get("eye") and "x0" in rois["eye"] else None
         nostril_c = self.cam.box_avg(rois["nostril"])
         calibrated = bool(self.dev.get("calibrated"))
@@ -822,58 +931,108 @@ class MtrpcCameraWorker(CameraWorker):
 
         # Is a horse there at all? An empty stall is not a horse at rest, and
         # its "eye box" reads the wall. (A real recording: empty 87 of 133
-        # minutes, 86 of which a movement-only rule counted as rest.)
+        # minutes, 86 of which a movement-only rule counted as rest.) The
+        # thermal view only covers the head, so the colour view counts too: a
+        # detector box, or movement.
         from video_analytics import horse_present  # noqa
         from mtrpc import grid_points  # noqa
         grid = self.cam.read_pixels(grid_points({"x0": 0, "y0": 0, "x1": 10000, "y1": 10000}, 8))
         present, why = horse_present(grid, eye)
-        if present is False:
+        seen_colour = self.boxes_seen > 0 or (vsummary.get("activity") or 0) >= 0.05
+        if present is False and not seen_colour:
             if getattr(self, "_absent_logged", False) is False:
                 print(f"[edge] {self.name}: no horse in view ({why}) — reporting nothing until one is")
                 self._absent_logged = True
             self.emit([])
             return
         self._absent_logged = False
+        head_in_view = present is not False
 
-        def add(metric, value, unit, source="thermal_camera", conf=0.95, **meta):
-            out.append(dict(deviceId=dev_id, metric=metric, value=round(value, 3), unit=unit, ts=ts,
+        def add(metric, value, unit, source="thermal_camera", conf=0.95, at=None, **meta):
+            out.append(dict(deviceId=dev_id, metric=metric, value=round(value, 3), unit=unit, ts=at or ts,
                             source=source, confidence=round(conf, 2), meta=meta))
 
         vit = {"calibrated": calibrated}
-        if eye is not None:
-            add("body_temp_c", eye, "°C", conf=0.95 if calibrated else 0.3, method="eye box, hottest pixel", **vit)
-        if nostril_c is not None:
-            add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
-        br = summary.get("breathing") or {}
-        if br.get("bpm"):
-            add("respiratory_rate_bpm", br["bpm"], "bpm", conf=min(0.95, br["strength"]) if calibrated else 0.3,
-                method="thermal video, nostril box", regularity=round(br["strength"], 2), **vit)
-        elif not video_ok:
+        if head_in_view:                                     # vitals only when the head is in the thermal view
+            if eye is not None:
+                add("body_temp_c", eye, "°C", conf=0.95 if calibrated else 0.3, method="eye box, hottest pixel", **vit)
+            if nostril_c is not None:
+                add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
+        br = summary.get("breathing") or {} if head_in_view else {}
+        fl = vsummary.get("flank_breathing") or {}
+        pick, method = None, None
+        if br.get("bpm") and fl.get("bpm"):
+            agree = abs(br["bpm"] - fl["bpm"]) <= max(2.0, 0.15 * br["bpm"])
+            pick = br if br["strength"] >= fl["strength"] else fl
+            method = ("thermal nostril + colour flank agree" if agree
+                      else "thermal nostril (colour flank disagreed)" if pick is br else "colour flank (thermal nostril disagreed)")
+        elif br.get("bpm"):
+            pick, method = br, "thermal video, nostril box"
+        elif fl.get("bpm"):
+            pick, method = fl, "colour video, flank movement"
+        if pick:
+            conf = min(0.95, pick["strength"]) if calibrated else 0.3
+            add("respiratory_rate_bpm", pick["bpm"], "bpm", conf=conf, method=method,
+                regularity=None if pick.get("regularity") is None else round(pick["regularity"], 2),
+                intervalCv=None if pick.get("intervalCv") is None else round(pick["intervalCv"], 3),
+                band=pick.get("band"), seconds=pick.get("seconds"), **vit)
+        elif not video_ok and head_in_view:
             rr, q = compute_resp_rate(pixel_window, len(pixel_window) / self.window_s if pixel_window else 1, with_quality=True)
             if rr:
                 add("respiratory_rate_bpm", rr, "bpm", conf=min(0.95, q) if calibrated else 0.3,
                     method="pixel sampling", regularity=round(q, 2), **vit)
-        # Behaviour — prototype heuristics, reported as such (source thermal_video).
-        proto = {"prototype": True, "presence": why}
-        if "activity" in summary:
-            add("activity_index", summary["activity"], "0..1", source="thermal_video", conf=0.6,
-                method="thermal video motion", **proto)
-            add("inactive_minutes", summary["inactive_min"], "min", source="thermal_video", conf=0.6,
-                method="thermal video stillness (not lying-down)", windowMin=round(summary["seconds"] / 60, 2), **proto)
-        wv = summary.get("weave") or {}
+        # Behaviour — prototype heuristics, reported as such.
+        bstream = self.behaviour_stream()
+        bsum = vsummary if (bstream == "visible" and vsummary) else summary
+        bsrc = "visible_video" if bsum is vsummary and vsummary else "thermal_video"
+        proto = {"prototype": True, "presence": why if present else "seen in the colour view", "stream": bsrc}
+        wmin = round((bsum.get("seconds") or 0) / 60, 2)
+        if "activity" in bsum:
+            add("activity_index", bsum["activity"], "0..1", source=bsrc, conf=0.6,
+                method=f"{bsrc.replace('_', ' ')} motion", **proto)
+            add("inactive_minutes", bsum["inactive_min"], "min", source=bsrc, conf=0.6,
+                method="stillness (not lying-down)", windowMin=wmin, **proto)
+        wv = bsum.get("weave") or {}
         if wv.get("detected"):
-            add("vice_event", 1, "event", source="thermal_video", conf=min(0.8, wv["strength"]),
-                kind="weaving", hz=round(wv["hz"], 2), swing=round(wv["swing"], 3), method="side-to-side sway rhythm", **proto)
+            add("vice_event", 1, "event", source=bsrc, conf=min(0.8, wv["strength"]), kind="weaving",
+                hz=round(wv["hz"], 2), cv=round(wv["cv"], 3), windowMin=wmin,
+                method="regular side-to-side sway rhythm", **proto)
+        bw = bsum.get("box_walk") or {}
+        if bw.get("detected"):
+            add("vice_event", 1, "event", source=bsrc, conf=min(0.7, bw["strength"]), kind="box_walking",
+                hz=round(bw["hz"], 3), windowMin=wmin, method="laps of the stall", **proto)
+        ht = bsum.get("head_toss") or {}
+        if ht.get("detected"):
+            add("vice_event", 1, "event", source=bsrc, conf=min(0.6, ht["strength"]), kind="head_tossing",
+                hz=round(ht["hz"], 2), windowMin=wmin, method="regular up-down head rhythm, in place", **proto)
+        # Posture: lying minutes and events, once this stall's model has
+        # seen both standing and lying.
+        if posture and posture["observed_s"] > 0 and self.posture.model:
+            psrc = "thermal_video" if bstream == "thermal" else "visible_video"
+            pm = {**proto, "stream": psrc, "method": "horse box shape over time (per-stall)" +
+                  ("" if bstream == "thermal" else ", colour detector")}
+            add("lying_minutes", posture["lying_s"] / 60, "min", source=psrc, conf=0.5,
+                lateralMin=round(posture["lateral_s"] / 60, 2), observedMin=round(posture["observed_s"] / 60, 2),
+                windowMin=wmin, **pm)
+            for ev in posture["events"]:
+                add("posture_event", 1, "event", source=psrc, conf=0.5 if ev["kind"] in ("lie_down", "get_up") else 0.35,
+                    at=dt.datetime.fromtimestamp(ev["t"], dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    kind=ev["kind"], **pm)
         for ev in floor_events:
-            add(f"{ev['kind']}_event", 1, "event", source="thermal_video", conf=0.6 if ev["shape_agrees"] else 0.4,
-                minutes_warm=round(ev["minutes_warm"], 1), peak_c=round(ev["peak_c"], 1),
-                peak_area=round(ev["peak_area"], 3), method="warm patch on the floor box", **proto)
+            if not ev.get("kind"):
+                continue                                     # rejected (a body print) — not an event
+            add(f"{ev['kind']}_event", 1, "event", source="thermal_video", conf=ev["confidence"],
+                at=dt.datetime.fromtimestamp(ev["start"], dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                tier=ev["tier"], halfLifeMin=ev["half_life_min"], peakRiseC=ev["peak_rise_c"],
+                area=ev["area_max"], spread=ev["spread"], shapeAgrees=ev["shape_agrees"],
+                method="warm patch on the floor, classified by how it cooled", prototype=True)
         self.emit(out)
 
     def stop(self):
         Worker.stop(self)
-        if self.video is not None:
-            self.video.stop()
+        for v in (self.video, self.vvideo):
+            if v is not None:
+                v.stop()
         try:
             if self.cam is not None:
                 self.cam.logout()                     # the camera allows only a couple of sessions
@@ -971,7 +1130,8 @@ class EdgeRuntime:
     @staticmethod
     def _fingerprint(d):
         keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
-                "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol", "rtspPort")
+                "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol", "rtspPort",
+                "behaviourStream")
         return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
 
     def apply(self, cfg):

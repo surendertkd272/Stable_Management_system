@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from edge_agent import compute_resp_rate  # noqa: E402
-from video_analytics import W, H, FPS, WindowAnalyzer, FloorWatcher, box_px, horse_present  # noqa: E402
+from video_analytics import W, H, FPS, WindowAnalyzer, FloorTracker, box_px, horse_present  # noqa: E402
 
 rng = random.Random(7)
 fails = 0
@@ -76,28 +76,46 @@ check("breathing 15 bpm found in the nostril box", breath.get("breathing", {}).g
 flat = run(N, lambda i: frame(blob_x=95, blob_y=76, blob_r=30, nostril=(*nb, rng.gauss(0, 1))), nb)
 check("no breathing signal: no rate invented", flat.get("breathing", {}).get("bpm") is None, flat.get("breathing"))
 
-# Floor: one scan every 5 s over a 12x8 grid.
-def floor_run(patch_cells, warm_minutes, total_minutes=15):
-    fw, events, t = FloorWatcher(), [], 0.0
-    for k in range(int(total_minutes * 12)):
-        t = k * 5.0
-        temps = [26 + rng.gauss(0, 0.2) for _ in range(96)]
-        if 2 <= t / 60 < 2 + warm_minutes:
-            cool = (t / 60 - 2) / warm_minutes            # cools towards the floor
-            for c in patch_cells:
-                temps[c] = 36 - 8 * cool
-        e = fw.scan(temps, now=t)
-        if e:
-            events.append(e)
+# Floor: one scan every 2 s over a 16x10 grid (160 cells). A deposit lands
+# at minute 2 under the horse (masked), the horse steps off 10 s later, and the
+# patch then cools exponentially towards the floor with the given half-life.
+def floor_run(cells, half_life_min, peak=9.0, total_minutes=40, spill=False, sun=False, body=False, horse_until=130):
+    ft, events = FloorTracker(), []
+    for k in range(int(total_minutes * 30)):
+        t = k * 2.0
+        temps = [24 + rng.gauss(0, 0.2) for _ in range(160)]
+        if sun:                                            # a sun patch warming over 20 minutes
+            for c in range(60, 90):
+                temps[c] += min(8.0, 8.0 * t / 1200)
+        horse = set()
+        if t >= 120:
+            age = (t - 120) / 60
+            for c in cells:
+                if spill:                                  # cold water: never warm, evaporates cooler
+                    temps[c] = 24 - min(2.0, age)
+                else:
+                    temps[c] = 24 + peak * 0.5 ** (age / half_life_min) + rng.gauss(0, 0.2)
+            if t < horse_until:
+                horse = set(cells) | {c + 1 for c in cells if c + 1 < 160}
+        events += ft.scan(temps, now=t, horse_cells=horse, lying_recent=body)
     return events
 
-urine = floor_run(list(range(0, 24)), 3)                 # wide patch, cools in ~3 min
-check("wide patch cooling fast: urination", len(urine) == 1 and urine[0]["kind"] == "urination", urine)
-manure = floor_run([40, 41, 52], 11)                     # compact, warm ~10 min
-check("compact patch staying warm: excretion", len(manure) == 1 and manure[0]["kind"] == "excretion", manure)
-check("shape agrees for both", urine and manure and urine[0]["shape_agrees"] and manure[0]["shape_agrees"])
-nothing = floor_run([], 0)
-check("empty floor: no events", nothing == [], nothing)
+
+URINE = [r * 16 + c for r in range(3, 7) for c in range(3, 9)]        # 24 cells, a wide patch
+urine = floor_run(URINE, 2.0)
+check("wide patch cooling in ~2 min: urination", len(urine) == 1 and urine[0]["kind"] == "urination", urine)
+MANURE = [5 * 16 + 10, 5 * 16 + 11, 6 * 16 + 10, 6 * 16 + 11]        # 4 cells, compact
+manure = floor_run(MANURE, 15.0)
+check("compact patch staying warm (half-life 15 min): excretion", len(manure) == 1 and manure[0]["kind"] == "excretion", manure)
+check("half-life measured", manure and 12 <= (manure[0]["half_life_min"] or 0) <= 18, manure)
+check("shape agrees for both", urine and manure and urine[0]["shape_agrees"] and manure[0]["shape_agrees"], (urine, manure))
+check("empty floor: no events", floor_run([], 2.0) == [])
+check("spilled water (never warm): no event", floor_run(URINE, 2.0, spill=True) == [])
+check("sun patch warming slowly: no event", floor_run([], 2.0, sun=True) == [])
+bp = floor_run([r * 16 + c for r in range(0, 8) for c in range(0, 16)], 3.0)   # 128 cells: where the horse lay
+check("body print where the horse lay: rejected, not an event", all(e.get("kind") is None for e in bp) and len(bp) <= 1, bp)
+hidden = floor_run(MANURE, 15.0, horse_until=400)                              # horse stands on it for 4.7 min
+check("deposit under the horse: found once it steps off", len(hidden) == 1 and hidden[0]["kind"] == "excretion", hidden)
 
 # Presence: an empty stall is not a resting horse.
 empty = [26.0 + rng.gauss(0, 0.3) for _ in range(48)]
