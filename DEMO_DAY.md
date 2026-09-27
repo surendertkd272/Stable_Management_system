@@ -84,7 +84,12 @@ footage from this camera at real stalls, with events marked.
    side (up to 16× speed), and press a key when something happens —
    `l` lying (press again where it ends), `s` standing still, `e` eating,
    `d` drinking, `w` weaving, `p` pawing, `r` rolling, `u` urinating,
-   `m` defecating, `1`/`2` lies down / gets up. Space plays and pauses, ←/→ jump 5 s.
+   `m` defecating, `1`/`2` lies down / gets up. Colic signs from the pain
+   scale: `f` flank watching, `k` kicks at belly, `t` stretches as if to
+   urinate, `3` lying flat on side. Vices: `c` crib-biting, `a` box walking,
+   `h` head tossing. Hover a button for its definition (from the published
+   ethograms); **Behaviour guide** in the sidebar has the full reference.
+   Space plays and pauses, ←/→ jump 5 s.
 3. **To label** tab: the moments worth checking — movement bursts, the start
    and end of long stillness, warm floor patches, weaving, plus one random
    moment per hour. Open one (it starts 15 s before), label, press **Done**;
@@ -110,6 +115,27 @@ Ask the stable's permission before recording, and switch it off when not needed.
   pen "moving" at 98 % confidence. Models trained elsewhere are confidently
   wrong here — posture (head down eating / head up / lying) needs hours of
   labelled footage from OUR camera: record at the demos and label it.
+
+## What behaviour patterns mean (Behaviour guide)
+
+The **Behaviour guide** page lists 37 patterns from 48 open-access sources
+(Merck Veterinary Manual, peer-reviewed studies, university extension): what
+each looks like, what it may mean, how strong a sign it is, what not to
+confuse it with, and whether EquiCare observes it today. Points worth saying:
+
+- **Colic:** rolling, kicking at the belly, repeated flank watching and going
+  down and up again are strong signs; pawing, sweating and not eating mean
+  little alone. The Equine Acute Abdominal Pain Scale scores the worst sign
+  seen (flank watching 1 … rolling 5) — behaviour only, so it suits a camera.
+- **No source gives** rolls per hour, a lying time limit, a weaving rhythm,
+  a normal urination count or a "no manure for X h" threshold. Where
+  EquiCare needs one, it compares the horse with its own normal, and the
+  number is ours to set with a vet.
+- **Normal, not alarming:** busy in the 20 min before a feed; little lying
+  for the first 1–4 nights in a new stall; foals lying half the day.
+- **Eye temperature is ~2 °C below rectal** and does not reliably track it,
+  so alerts compare each horse with its own 7-day baseline (+1.0 °C watch,
+  +1.5 °C alert). A healthy 35 °C eye no longer reads as hypothermia.
 
 ## Saying it accurately
 

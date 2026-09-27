@@ -10,6 +10,7 @@ import {
   Map,
   FileText,
   NotebookPen,
+  BookOpen,
   Settings,
   Sparkles,
   Search,
@@ -52,6 +53,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/reports", label: "Reports", icon: FileText },
       { to: "/diary", label: "Care Diary", icon: NotebookPen },
+      { to: "/guide", label: "Behaviour guide", icon: BookOpen },
     ],
   },
   {
@@ -241,6 +243,7 @@ function TopBar() {
     "/portal": { h1: "Owner Portal", p: "Scoped read-only view of each owner's horses" },
     "/settings": { h1: "Settings", p: "Alerts, sensitivity, account & privacy" },
     "/hardware": { h1: "Hardware", p: "Edge boxes, cameras and sensors — connect, test and calibrate" },
+    "/guide": { h1: "Behaviour guide", p: "What horse behaviour patterns may mean — from open veterinary sources" },
     "/footage": { h1: "Footage & labels", p: "Recorded camera video — mark what the horse does, for training" },
   };
 

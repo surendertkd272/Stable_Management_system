@@ -412,7 +412,7 @@ export interface FootageClip {
   start: string; at: string; end: string; recording: boolean; labels: number;
   thermal: FootageStreamRef | null; visible: FootageStreamRef | null;
 }
-export interface LabelDef { key: string; name: string; kind: "interval" | "moment"; shortcut: string }
+export interface LabelDef { key: string; name: string; kind: "interval" | "moment"; shortcut: string; def?: string; pattern?: string | null }
 export interface FootageLabel {
   id: string; camera: string; clip: string; label: string; startAt: string; endAt: string | null;
   note: string; horse: string | null; stall: string | null; by: string; createdAt: string;

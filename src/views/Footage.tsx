@@ -413,17 +413,20 @@ function ClipLabeller({ clip, vocab, ticket, onChanged, focus, onQueueStatus }: 
         <span className="muted" style={{ fontSize: 12 }}>{boxes.length} box{boxes.length === 1 ? "" : "es"} in this clip</span>
       </div>
 
-      <p className="hw-legend" style={{ marginTop: 0 }}>Mark what the horse does</p>
+      <p className="hw-legend" style={{ marginTop: 0 }}>
+        Mark what the horse does <a href="/guide" target="_blank" rel="noreferrer" style={{ textTransform: "none", letterSpacing: 0, fontWeight: 500, marginLeft: 6 }}>definitions &amp; what they mean</a>
+      </p>
       {open && (
         <div className="row watch" style={{ padding: "8px 12px", marginBottom: 8 }}>
           <Loader2 size={14} className="spin" style={{ flexShrink: 0 }} />
-          <span style={{ fontSize: 12.5 }}><b>{open.def.name}</b> since {t(open.startAt)} — press it again (or “{open.def.shortcut}”) where it ends.</span>
+          <span style={{ fontSize: 12.5 }}><b>{open.def.name}</b> since {t(open.startAt)} — press it again (or “{open.def.shortcut}”) where it ends.
+            {open.def.def && <><br /><span style={{ color: "var(--text-secondary)" }}>{open.def.def}</span></>}</span>
         </div>
       )}
       <div className="footage-buttons">
         {vocab.map((v) => (
           <button key={v.key} className={`btn-ghost ${open?.def.key === v.key ? "accent" : ""}`} onClick={() => press(v)}
-            title={v.kind === "interval" ? "Press at the start and again at the end" : "Press when it happens"}>
+            title={`${v.def ? v.def + "\n\n" : ""}${v.kind === "interval" ? "Press at the start and again at the end" : "Press when it happens"}`}>
             <kbd>{v.shortcut}</kbd> {v.name}{v.kind === "interval" ? (open?.def.key === v.key ? " — end" : "") : ""}
           </button>
         ))}

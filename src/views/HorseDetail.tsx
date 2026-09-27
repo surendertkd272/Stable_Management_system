@@ -590,6 +590,20 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
         {e.times.length > 0 && <span className="muted"> · {e.times.map(hm).join(", ")}</span>}
       </>
     );
+  // Context from open veterinary sources (server/knowledge.mjs, /guide). Only
+  // for patterns actually seen; never a diagnosis.
+  const meaning: { id: string; text: string }[] = [];
+  if (b.activity?.unusual === "high") meaning.push({ id: "restless", text:
+    "More active than its own normal. Restlessness alone is a weak sign — horses are busy in the 20 min before a feed. " +
+    "With rolling, flank watching or kicking at the belly it points to colic." });
+  if (b.activity?.unusual === "low") meaning.push({ id: "dull_back_of_box", text:
+    "Much quieter than its own normal. Dozing is normal, but a dull horse standing at the back of the box with its head low can be in pain." });
+  if (b.weaving && b.weaving.count24h > 0) meaning.push({ id: "weaving", text:
+    "Weaving is a stable vice linked to confinement, isolation and feeding routine; it peaks around meals. " +
+    "It may help the horse cope, so a sudden stop is not automatically good news." });
+  if (b.excretion && b.excretion.count24h < 4) meaning.push({ id: "manure_frequency", text:
+    `${b.excretion.count24h} droppings seen in 24 h; normal is 4–13 a day and fewer droppings is a colic sign. ` +
+    "The floor detector is a prototype and can miss droppings — check the stall." });
   return (
     <div className="card" style={{ marginBottom: 24 }}>
       <div className="card-head">
@@ -654,6 +668,19 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
           </b>
         </div>
       </div>
+      {meaning.length > 0 && (
+        <>
+          <p className="hw-legend">What this may mean</p>
+          {meaning.map((m) => (
+            <p key={m.id} style={{ fontSize: 12.5, margin: "0 0 6px" }}>
+              {m.text} <a href={`/guide#${m.id}`} className="muted">sources</a>
+            </p>
+          ))}
+        </>
+      )}
+      <p className="muted" style={{ fontSize: 11.5, margin: "10px 0 0" }}>
+        What each pattern may mean, with sources: <a href="/guide">Behaviour guide</a>.
+      </p>
     </div>
   );
 }
