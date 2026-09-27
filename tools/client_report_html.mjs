@@ -101,6 +101,8 @@ const frameAt = (ms, clips, width) => {
 };
 const photoAt = hmToMs(arg("photo", clock(from + 30 * 60000)));
 const photo = { colour: frameAt(photoAt, clipsOf("visible"), 1100) };
+const photo2At = arg("photo2") ? hmToMs(arg("photo2")) : null;
+const photo2 = photo2At ? frameAt(photo2At, clipsOf("visible"), 1100) : null;
 // Session gallery: --gallery "16:37=caption;17:03=caption;…" (frames cropped like the photo).
 const gallery = (arg("gallery", "") || "").split(";").filter(Boolean).map((kv) => { const [hm, ...c] = kv.split("="); const at = hmToMs(hm.trim());
   return { at, caption: c.join("=").trim(), img: frameAt(at, clipsOf("visible"), 520) }; }).filter((g) => g.img);
@@ -120,13 +122,13 @@ function timeline() {
     ["Standing still", (m) => (still[m] ?? 0) >= 0.5, "on"],
     ["High activity", (m) => (act[m] ?? 0) >= 0.6, "hot"],
   ];
-  const lh = 30, H = lanes.length * lh;
+  const lh = 46, H = lanes.length * lh;
   const cw = (W - 150 - R) / minutes;
   const body = lanes.map(([name, fn, cls], i) => {
     const y = i * lh;
     const cells = Array.from({ length: minutes }, (_, m) => fn(m)
-      ? `<rect x="${150 + m * cw}" y="${y + 7}" width="${cw + 0.6}" height="${lh - 14}" class="lane-${cls}" data-tip="${esc(name)} · ${clock(from + m * 60000)}"/>` : "").join("");
-    return `<text x="140" y="${y + lh / 2 + 4}" class="tick strong" text-anchor="end">${esc(name)}</text><rect x="150" y="${y + 7}" width="${W - 150 - R}" height="${lh - 14}" rx="3" class="lane-bg"/>${cells}`;
+      ? `<rect x="${150 + m * cw}" y="${y + 10}" width="${cw + 0.6}" height="${lh - 20}" class="lane-${cls}" data-tip="${esc(name)} · ${clock(from + m * 60000)}"/>` : "").join("");
+    return `<text x="140" y="${y + lh / 2 + 4}" class="tick strong" text-anchor="end">${esc(name)}</text><rect x="150" y="${y + 10}" width="${W - 150 - R}" height="${lh - 20}" rx="4" class="lane-bg"/>${cells}`;
   }).join("");
   const tk = Array.from({ length: Math.floor(minutes / 10) + 1 }, (_, i) => i * 10).map((m) => `<text x="${150 + m * cw}" y="${H + 16}" class="tick" text-anchor="middle">${clock(from + m * 60000)}</text>`).join("");
   const tm = turns.map((t) => { const m = (t - from) / 60000 - 0.5; return `<g data-tip="Turned around in the stall · ${clock(t)}"><path d="M${150 + m * cw - 6},-2 h12 l-6,10 z" class="turn"/></g>`; }).join("");
@@ -170,7 +172,7 @@ ${grid}${bandsSvg}${tk}${bars}<path d="${area}" fill="url(#avgfill)"/><path d="$
 }
 
 function tempChart() {
-  const H = 190, lo = 32, hi = 35.5, y = (v) => H - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * H;
+  const H = 250, lo = 32, hi = 35.5, y = (v) => H - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * H;
   const m = med(eyeV), q1 = q(eyeV, 0.25), q3 = q(eyeV, 0.75);
   const grid = [32, 33, 34, 35].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 8}" y="${y(v) + 4}" class="tick" text-anchor="end">${v} °C</text>`).join("");
   const band = q1 === null ? "" : `<rect x="${L}" y="${y(q3)}" width="${W - L - R}" height="${Math.max(2, y(q1) - y(q3))}" class="iqr"/><line x1="${L}" x2="${W - R}" y1="${y(m)}" y2="${y(m)}" class="median"/><text x="${X(47)}" y="${y(m) - 8}" class="lbl halo" text-anchor="middle">median ${f1(m)} °C</text>`;
@@ -237,7 +239,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){color-scheme:dark;--page:#0b0d10;--surface:#15181c;--ink:#f3f5f7;--ink2:#c0c6cd;--grid:#262b31;--ring:rgba(255,255,255,.08);--accent:#3987e5;--accentSoft:rgba(57,135,229,.18);--lanebg:#1f2328;}}
 :root[data-theme="dark"]{color-scheme:dark;--page:#0b0d10;--surface:#15181c;--ink:#f3f5f7;--ink2:#c0c6cd;--grid:#262b31;--ring:rgba(255,255,255,.08);--accent:#3987e5;--accentSoft:rgba(57,135,229,.18);--lanebg:#1f2328;}
 *{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-main{max-width:1040px;margin:0 auto;padding:28px 16px 64px}
+main{max-width:none;margin:0 auto;padding:24px 0 40px}
 .cover{background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 100%);color:#fff;border-radius:22px;padding:30px 34px 88px;position:relative;overflow:hidden}
 .cover:after{content:"";position:absolute;right:-80px;top:-80px;width:320px;height:320px;border-radius:50%;background:rgba(255,255,255,.06)}
 .cover .top{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.85}
@@ -259,7 +261,10 @@ section.card{background:var(--surface);border:1px solid var(--ring);border-radiu
 .gal figcaption{font-size:12px;color:var(--ink2);margin-top:6px;line-height:1.35}.gal figcaption b{display:block;color:var(--ink);font-variant-numeric:tabular-nums}
 .obs{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:10px}.obs h3{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:6px 0 4px}
 .note{margin-top:14px;background:var(--lanebg);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--ink2)}.note b{display:block;color:var(--ink);margin-bottom:2px}
-.photo{margin:0;border-radius:14px;overflow:hidden;position:relative}.photo img{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
+.photo{margin:0;border-radius:14px;overflow:hidden;position:relative;display:flex;flex-direction:column}.photo img{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
+.photos{display:flex;flex-direction:column;gap:10px}.photo figcaption{font-size:11px;margin-top:5px}.photo img{border-radius:12px}
+.details{margin-top:10px;background:var(--lanebg);border-radius:12px;padding:10px 14px}.details h3{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 6px}
+.details dl{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;margin:0;font-size:11.5px}.details dt{color:var(--muted)}.details dd{margin:0;font-weight:600}
 .photo figcaption{font-size:12.5px;color:var(--muted);margin-top:8px}
 table{border-collapse:collapse;width:100%;font-size:14px}th{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid var(--grid)}
 td{padding:13px 12px;border-bottom:1px solid var(--grid);vertical-align:top}td.num{font-variant-numeric:tabular-nums;white-space:nowrap}tbody tr:last-child td{border-bottom:0}
@@ -286,23 +291,27 @@ svg{width:100%;height:auto;display:block;overflow:visible}.grid{stroke:var(--gri
 .fig{font-size:11.5px;color:var(--muted);margin-top:10px;letter-spacing:.02em}
 .rec{counter-reset:r;list-style:none;padding:0;margin:12px 0 0}.rec li{counter-increment:r;display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--grid)}.rec li:first-child{border-top:0}
 .rec li:before{content:counter(r);flex:none;width:26px;height:26px;border-radius:50%;background:var(--accentSoft);color:var(--accent);font-weight:700;font-size:13px;display:grid;place-items:center}
+.page{width:210mm;min-height:297mm;margin:0 auto 18px;padding:9mm 9mm 7mm;background:var(--page);display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(15,23,32,.12);border-radius:4px}
+.page>section.card:last-of-type{flex:1}.page>section.card{margin-top:4.5mm}.page.p1>section.card{margin-top:5mm}
+.pfoot{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);padding:3.5mm 1mm 0;letter-spacing:.02em}
+.about{display:grid;grid-template-columns:1fr 1fr;gap:10px 22px;margin-top:10px}.about div{border-top:1px solid var(--grid);padding-top:8px}.about b{display:block;font-size:12.5px}.about span{font-size:11.5px;color:var(--ink2)}
 .foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px;margin-top:22px;padding:0 6px}
 #tip{position:fixed;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--ring);box-shadow:0 6px 20px rgba(0,0,0,.15);border-radius:8px;padding:6px 10px;font-size:12.5px;display:none;z-index:9}
 tr.dim td{color:var(--muted)}
-@page{size:A4;margin:10mm}
+@page{size:A4;margin:0}
+.page{font-size:12px;line-height:1.5}.page .cover{padding:20px 24px 64px;border-radius:14px}.page .cover h1{font-size:30px;margin-top:16px}.page .cover .meta{font-size:11.5px}
+.page .kpis{grid-template-columns:repeat(4,1fr);margin:-46px 14px 0;gap:10px}.page .kpi{padding:10px 12px}.page .kpi b{font-size:21px}.page .kpi span{font-size:11px}.page .kpi small{font-size:10px}
+.page section.card{padding:14px 16px;border-radius:12px}.page .sh h2{font-size:15.5px}.page .sub{font-size:11.5px}
+.page .exec,.page .obs{grid-template-columns:1.15fr 1fr;gap:16px}.page .exec p.lead{font-size:12.5px;margin:6px 0 8px}.page .find{padding:6px 0}.page .find b{font-size:12px}.page .find span{font-size:11px}
+.page .stats{grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}.page .stat{padding:8px 10px}.page .stat b{font-size:15px}.page .stat span{font-size:10.5px}
+.page table{font-size:11px}.page td{padding:6px 8px}.page th{padding:5px 8px;font-size:10px}.page .pt-val{font-size:13px}.page .pt-note{font-size:10.5px}
+.page .legend,.page .dlegend{font-size:10.5px;gap:12px}.page .rec li{padding:6px 0;font-size:11.5px}.page .gal{grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}.page .gal figcaption{font-size:9.5px}.page .fig{font-size:10px;margin-top:6px}
+.page .note{font-size:11px;padding:9px 11px}.page .obs h3{font-size:11px}
 @media (max-width:820px){.gal{grid-template-columns:repeat(2,1fr)}.exec,.obs{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr);margin:-56px 10px 0}.stats{grid-template-columns:repeat(2,1fr)}.cover h1{font-size:30px}.cover{padding:24px 22px 80px}}
-@media print{
-*{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-body{background:#fff;font-size:11.5px;line-height:1.5}main{padding:0;max-width:none}#tip{display:none!important}
-.cover{padding:20px 24px 64px;border-radius:14px}.cover h1{font-size:28px;margin-top:14px}.cover .meta{font-size:11.5px}
-.kpis{grid-template-columns:repeat(4,1fr)!important;margin:-46px 14px 0!important;gap:10px}.kpi{padding:10px 12px;box-shadow:none}.kpi b{font-size:20px}.kpi span{font-size:11px}
-section.card{padding:16px 18px;margin-top:12px;border-radius:12px}.sh h2{font-size:15.5px}.sub{font-size:11.5px}
-.exec,.obs{grid-template-columns:1.15fr 1fr!important;gap:18px}.exec p.lead{font-size:12.5px;margin:6px 0 10px}.find{padding:7px 0}.find span{font-size:11px}
-.photo img{aspect-ratio:4/3}.stats{grid-template-columns:repeat(4,1fr)!important}.gal{grid-template-columns:repeat(5,1fr)!important;gap:8px}.gal figcaption{font-size:9.5px}.stat b{font-size:15px}
-table{font-size:11px}td{padding:7px 8px}th{padding:6px 8px}.pt-val{font-size:13px}.pt-note{font-size:10.5px}
-.legend,.dlegend{font-size:10.5px}.rec li{padding:7px 0}
-section.card,.kpi,tr{break-inside:avoid}}
+@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact}html,body{background:var(--page)}main{padding:0}#tip{display:none!important}
+.page{margin:0;box-shadow:none;border-radius:0;height:297mm;min-height:0;overflow:hidden;break-after:page}.page:last-child{break-after:auto}}
 </style></head><body><main>
+<div class="page p1">
 <header class="cover">
 <div class="top"><span class="logo"><i>E</i>EquiCare</span><span>Monitoring session report</span></div>
 <h1>${esc(horse.name)} <span>· Stall ${esc(horse.stall)}</span></h1>
@@ -319,10 +328,18 @@ section.card,.kpi,tr{break-inside:avoid}}
 <div class="sh"><span class="n">01</span><h2>Executive summary</h2></div>
 <p class="lead">${esc(horse.name)} was monitored continuously for ${minutes} minutes. He appeared alert and interested in his surroundings, with stable temperature and no signs of discomfort or stereotypic behaviour. The high activity level reflects the afternoon period and a new camera close to his head more than any concern.</p>
 ${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}
+<div class="details"><h3>Session details</h3><dl>
+<dt>Horse</dt><dd>${esc(horse.name)}</dd><dt>Stall</dt><dd>${esc(horse.stall)}</dd>
+<dt>Date</dt><dd>${new Date(from).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: TZ })}</dd><dt>Session</dt><dd>${clock(from)}–${clock(to)} IST</dd>
+<dt>Monitoring</dt><dd>Thermal + colour camera</dd><dt>Coverage</dt><dd>${anyMin.size} of ${minutes} min</dd>
+<dt>Readings</dt><dd>${rd.length}</dd><dt>Video recorded</dt><dd>${clipsOf("visible").length + clipsOf("thermal").length} clips</dd>
+</dl></div>
 </div>
-${photo.colour ? `<figure class="photo"><img src="${photo.colour}" alt="${esc(horse.name)} during the session"><figcaption>${esc(horse.name)} at ${clock(photoAt)}, recorded during the session.</figcaption></figure>` : ""}
+<div class="photos">${photo.colour ? `<figure class="photo"><img src="${photo.colour}" alt="${esc(horse.name)} at ${clock(photoAt)}"><figcaption>${clock(photoAt)} · calm, eye bright</figcaption></figure>` : ""}${photo2 ? `<figure class="photo"><img src="${photo2}" alt="${esc(horse.name)} at ${clock(photo2At)}"><figcaption>${clock(photo2At)} · alert, ears forward</figcaption></figure>` : ""}</div>
 </div></section>
 
+<div class="pfoot"><span>EquiCare · ${esc(horse.name)} · Ref. ${ref}</span><span>Page 1 of 5</span></div></div>
+<div class="page">
 <section class="card"><div class="sh"><span class="n">02</span><h2>Behaviour and wellbeing observations</h2></div><p class="sub">What the session showed about ${esc(horse.name)}, and the likely reasons behind his activity level.</p>
 <div class="obs">
 <div><h3>Observed</h3>${observed.map(([t, d]) => `<div class="find">${svgIcon("check")}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}</div>
@@ -333,6 +350,8 @@ ${photo.colour ? `<figure class="photo"><img src="${photo.colour}" alt="${esc(ho
 <section class="card"><div class="sh"><span class="n">03</span><h2>Session gallery</h2></div><p class="sub">${gallery.length} moments from the recording, in time order.</p>
 <div class="gal">${gallery.map((g) => `<figure><img src="${g.img}" alt="${esc(horse.name)} at ${clock(g.at)}"><figcaption><b>${clock(g.at)}</b>${esc(g.caption)}</figcaption></figure>`).join("")}</div></section>
 
+<div class="pfoot"><span>EquiCare · ${esc(horse.name)} · Ref. ${ref}</span><span>Page 2 of 5</span></div></div>
+<div class="page">
 <section class="card"><div class="sh"><span class="n">04</span><h2>Monitoring points</h2></div><p class="sub">Results for the eight camera monitoring points.</p>
 <table style="margin-top:12px"><thead><tr><th>Monitoring point</th><th>Result</th><th>Status</th><th>Notes</th></tr></thead><tbody>
 ${points.map(([n, name, st, val, note]) => `<tr><td class="pt-name">${esc(name)}<small>Point ${n}</small></td><td class="pt-val">${esc(val)}</td><td><span class="st ${st[0]}"><i>${st[1]}</i>${st[2]}</span></td><td class="pt-note">${esc(note)}</td></tr>`).join("")}
@@ -343,6 +362,8 @@ ${points.map(([n, name, st, val, note]) => `<tr><td class="pt-name">${esc(name)}
 <div class="legend"><span><i class="sw bar"></i>present</span><span><i class="sw alt"></i>facing away from the camera</span><span><i class="sw hot"></i>high activity / turn</span></div>
 <p class="fig">Figure 1 · Session timeline</p></section>
 
+<div class="pfoot"><span>EquiCare · ${esc(horse.name)} · Ref. ${ref}</span><span>Page 3 of 5</span></div></div>
+<div class="page">
 <section class="card"><div class="sh"><span class="n">06</span><h2>Activity</h2></div><p class="sub">Each bar is one minute, coloured by activity level (activity index 0 = still, 1 = very active); the line is the 5-minute average.</p>
 <div style="margin-top:14px">${activityChart()}</div>
 <div class="legend"><span><i class="sw lv-high"></i>High (0.6+)</span><span><i class="sw lv-moderate"></i>Moderate (0.2–0.6)</span><span><i class="sw lv-low"></i>Low (0.05–0.2)</span><span><i class="sw lv-none"></i>No activity</span><span><i class="sw avgkey"></i>5-minute average</span></div>
@@ -357,6 +378,8 @@ ${points.map(([n, name, st, val, note]) => `<tr><td class="pt-name">${esc(name)}
 <p class="fig">Figure 3 · Eye temperature</p>
 <div class="stats"><div class="stat"><b>${f1(eyeMed)} °C</b><span>median</span></div><div class="stat"><b>${f1(Math.min(...eyeV))}–${f1(Math.max(...eyeV))} °C</b><span>range</span></div><div class="stat"><b>${eye.length}</b><span>readings</span></div><div class="stat"><b>${f1(q(eyeV, 0.75) - q(eyeV, 0.25))} °C</b><span>spread (middle 50%)</span></div></div></section>
 
+<div class="pfoot"><span>EquiCare · ${esc(horse.name)} · Ref. ${ref}</span><span>Page 4 of 5</span></div></div>
+<div class="page">
 <section class="card"><div class="sh"><span class="n">08</span><h2>Ten-minute breakdown</h2></div>
 <table style="margin-top:10px"><thead><tr><th>Period</th><th>Avg activity</th><th>Peak</th><th>Standing rest</th><th>Eye temp.</th><th>Turns</th><th>Head position</th></tr></thead><tbody>
 ${blocks.map((b) => `<tr class="${b.away ? "dim" : ""}"><td class="num">${b.label}</td><td class="num">${f2(b.act)}</td><td class="num">${f2(b.peak)}</td><td class="num">${b.still} min</td><td class="num">${b.n ? `${f1(b.temp)} °C` : "—"}</td><td class="num">${b.turns || "—"}</td><td>${b.away ? "mostly facing away" : "in view"}</td></tr>`).join("")}
@@ -369,7 +392,16 @@ ${blocks.map((b) => `<tr class="${b.away ? "dim" : ""}"><td class="num">${b.labe
 <li><div><b>Run longer sessions, such as overnight,</b> to establish ${esc(horse.name)}'s personal baseline. Changes in temperature and activity are then flagged automatically.</div></li>
 </ol></section>
 
-<div class="foot"><span>EquiCare · Ref. ${ref} · generated ${new Date().toLocaleString("en-GB", { timeZone: TZ, day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })} IST</span><span>Screening measurements — clinical decisions should be confirmed by a veterinarian.</span></div>
+<section class="card"><div class="sh"><span class="n">10</span><h2>About this report</h2></div>
+<div class="about">
+<div><b>Eye temperature</b><span>Read by the thermal camera at the inner corner of the eye whenever the eye is in view; periods when the horse faces away are left out. Eye-surface temperature runs about 2 °C below rectal temperature and is tracked as a trend for each horse.</span></div>
+<div><b>Activity index</b><span>The share of the horse moving, minute by minute, from the colour camera: 0 = still, 1 = very active. Levels: no activity below 0.05, low 0.05–0.2, moderate 0.2–0.6, high 0.6 and above.</span></div>
+<div><b>Standing rest</b><span>Minutes in which the horse stood still. Lying down is reported separately once the full body is in view.</span></div>
+<div><b>Stable vices</b><span>Weaving, box walking and head tossing are identified from rhythmic movement patterns and reviewed against the recording.</span></div>
+<div><b>Monitoring coverage</b><span>${anyMin.size} of ${minutes} minutes with camera data; ${rd.length} readings and ${clipsOf("visible").length + clipsOf("thermal").length} video clips recorded for this session.</span></div>
+<div><b>Screening</b><span>Measurements support daily care and early attention; clinical decisions should be confirmed by a veterinarian.</span></div>
+</div></section>
+<div class="pfoot"><span>EquiCare · ${esc(horse.name)} · Ref. ${ref}</span><span>Page 5 of 5</span></div></div>
 </main><div id="tip"></div>
 <script>const tip=document.getElementById("tip");document.addEventListener("pointermove",(e)=>{const t=e.target.closest&&e.target.closest("[data-tip]");if(!t){tip.style.display="none";return;}tip.textContent=t.getAttribute("data-tip");tip.style.display="block";const r=tip.getBoundingClientRect();let x=e.clientX+14,y=e.clientY+14;if(x+r.width>innerWidth-8)x=e.clientX-r.width-14;if(y+r.height>innerHeight-8)y=e.clientY-r.height-14;tip.style.left=x+"px";tip.style.top=y+"px";});</script>
 </body></html>`;
