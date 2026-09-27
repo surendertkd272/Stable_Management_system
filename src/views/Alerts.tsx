@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "../i18n";
 import { useState } from "react";
 import { AlertTriangle, Droplet, Sparkles, Activity, Check, Bell, Wind, Repeat, Moon } from "lucide-react";
 import { useStable } from "../store";
@@ -18,6 +19,7 @@ const ICON: Record<string, React.ReactNode> = {
 
 export default function Alerts() {
   const { alerts: list, acknowledge: ack } = useStable();
+  const { t } = useT();
   const [tab, setTab] = useState<"open" | "all">("open");
 
   const shown = tab === "open" ? list.filter((a) => !a.acknowledged) : list;
@@ -33,17 +35,16 @@ export default function Alerts() {
       <div className="flex between center wrap" style={{ marginBottom: 18, gap: 12 }}>
         <div className="tabs">
           <button className={tab === "open" ? "on" : ""} onClick={() => setTab("open")}>
-            Open ({open})
+            {t("Open")} ({open})
           </button>
           <button className={tab === "all" ? "on" : ""} onClick={() => setTab("all")}>
-            All ({list.length})
+            {t("All")} ({list.length})
           </button>
         </div>
-        {/* This claimed a manager -> on-call -> vet chain that the backend
-            does not run (server/notify.mjs sends one flat webhook per alert,
-            deliberately not that chain — see its own header comment). */}
+        {/* Delivery (instant, escalation, digest) is set in Settings and run
+            by the server (server/notify.mjs). */}
         <span className="pill muted">
-          <Bell size={13} /> Delivered via webhook
+          <Bell size={13} /> {t("Delivery: see Settings")}
         </span>
       </div>
 
@@ -51,7 +52,7 @@ export default function Alerts() {
         <div className="card" style={{ textAlign: "center", padding: 48 }}>
           <Check size={32} color="var(--positive)" />
           <p style={{ marginTop: 10, fontWeight: 600, color: "var(--ink)" }}>
-            {silentUnacked ? "No behavioural alerts" : "All clear"}
+            {t(silentUnacked ? "No behavioural alerts" : "All clear")}
           </p>
           <p className="muted" style={{ fontSize: 13 }}>
             {silentUnacked
@@ -71,7 +72,7 @@ export default function Alerts() {
           <div className="grow">
             <div className="flex between center wrap" style={{ gap: 8 }}>
               <b>
-                {a.type} · {a.horse}
+                {t(a.type)} · {a.horse}
               </b>
               <span className="muted" style={{ fontSize: 12 }}>
                 {a.time}
@@ -82,11 +83,11 @@ export default function Alerts() {
           <div style={{ flexShrink: 0 }}>
             {a.acknowledged ? (
               <span className="pill ok">
-                <Check size={13} /> Acknowledged
+                <Check size={13} /> {t("Acknowledged")}
               </span>
             ) : (
               <button className="btn-ghost accent" onClick={() => ack(a.id)}>
-                Acknowledge
+                {t("Acknowledge")}
               </button>
             )}
           </div>

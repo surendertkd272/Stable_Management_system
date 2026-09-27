@@ -14,7 +14,6 @@ import {
   Settings,
   Sparkles,
   Search,
-  MessageCircle,
   Sun,
   Moon,
   LogOut,
@@ -34,6 +33,7 @@ import { useAuth } from "../auth";
 import { useStable, useToast } from "../store";
 import { breedingMares, Horse } from "../data/mock";
 import { Modal } from "./ui";
+import { useT } from "../i18n";
 
 type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; adminOnly?: boolean; staffOnly?: boolean };
 
@@ -82,6 +82,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
 
 function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { theme, set } = useTheme();
+  const { t: tr } = useT();
   const { alerts } = useStable();
   const { user, authRequired } = useAuth();
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
@@ -104,7 +105,7 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
       onClick={onClose}
     >
       <n.icon size={19} />
-      {n.label}
+      {tr(n.label)}
       {n.to === "/alerts" && openAlerts > 0 && <span className="count">{openAlerts}</span>}
     </Link>
   );
@@ -126,7 +127,7 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
           const items = sec.items.filter(canSee);
           return items.length ? (
             <div key={sec.title}>
-              <div className="nav-section">{sec.title}</div>
+              <div className="nav-section">{tr(sec.title)}</div>
               {items.map(item)}
             </div>
           ) : null;
@@ -137,17 +138,17 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
           onClick={onClose}
         >
           <Settings size={19} />
-          Settings
+          {tr("Settings")}
         </Link>
       </nav>
 
       <div className="rail-foot">
         <div className="theme-toggle">
           <button className={theme === "light" ? "on" : ""} onClick={() => set("light")}>
-            <Sun size={15} /> Light
+            <Sun size={15} /> {tr("Light")}
           </button>
           <button className={theme === "dark" ? "on" : ""} onClick={() => set("dark")}>
-            <Moon size={15} /> Dark
+            <Moon size={15} /> {tr("Dark")}
           </button>
         </div>
         <UserBlock />
@@ -160,6 +161,7 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
  *  is open (standalone prototype), where there is nobody to sign out. */
 function UserBlock() {
   const { user, authRequired, signOut } = useAuth();
+  const { t: tr } = useT();
   const initials = (user?.name ?? "Surender Y.")
     .split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
   const roleLabel = user
@@ -174,7 +176,7 @@ function UserBlock() {
         <span>{roleLabel}</span>
       </div>
       {authRequired && user && (
-        <button className="icon-btn" onClick={signOut} title="Sign out" aria-label="Sign out">
+        <button className="icon-btn" onClick={signOut} title={tr("Sign out")} aria-label={tr("Sign out")}>
           <LogOut size={16} />
         </button>
       )}
@@ -190,6 +192,7 @@ function TopBar() {
   const nav = (to: string) => router.push(to);
   const { horses, alerts, health, invoices, addHorse } = useStable();
   const notify = useToast();
+  const { t: tr } = useT();
   const [addOpen, setAddOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -276,22 +279,19 @@ function TopBar() {
   return (
     <header className="topbar">
       <div className="greeting">
-        <h1>{t.h1}</h1>
+        <h1>{tr(t.h1)}</h1>
         <p>{t.p}</p>
       </div>
       <div className="topbar-actions">
-        <button className="icon-btn" title="Search horses" onClick={() => setSearchOpen(true)}>
+        <button className="icon-btn" title={tr("Search horses")} onClick={() => setSearchOpen(true)}>
           <Search size={19} />
         </button>
-        <button className="icon-btn" title="Messages" onClick={() => notify("No new messages")}>
-          <MessageCircle size={19} />
-        </button>
-        <button className="icon-btn" title="Notifications" onClick={() => nav("/alerts")}>
+        <button className="icon-btn" title={tr("Notifications")} onClick={() => nav("/alerts")}>
           <Bell size={19} />
           {openAlerts > 0 && <span className="dot" />}
         </button>
         <button className="btn-primary" onClick={() => setAddOpen(true)}>
-          <Plus size={17} /> Add horse
+          <Plus size={17} /> {tr("Add horse")}
         </button>
       </div>
 

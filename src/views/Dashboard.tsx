@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "../i18n";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -63,6 +64,7 @@ function avg(xs: (number | null)[]): number | null {
 }
 
 export default function Dashboard() {
+  const { t } = useT();
   const router = useRouter();
   const nav = (to: string) => router.push(to);
   const { horses, series, alerts } = useStable();
@@ -168,7 +170,7 @@ export default function Dashboard() {
       {/* focus horse profile card */}
       <div className="card span-1">
         <div className="card-head">
-          <h3>Needs attention</h3>
+          <h3>{t("Needs attention")}</h3>
           {/* This card is chosen purely by status, and silence itself raises a
               "watch"/"urgent" status via the monitoring-gap rule — so it was
               possible (and, in the camera-only demo, the normal case) to show
@@ -246,7 +248,7 @@ export default function Dashboard() {
       {/* stress gauge */}
       <div className="card span-1 fill">
         <div className="card-head">
-          <h3>Stress level</h3>
+          <h3>{t("Stress level")}</h3>
           <span className={`pill ${focus.stress === null ? "muted" : focus.stress === "High" ? "alert" : focus.stress === "Medium" ? "warn" : "ok"}`}>
             {focus.stress ?? "no sensor"}
           </span>
@@ -298,7 +300,7 @@ export default function Dashboard() {
       {/* yard map / triage preview (tall, full height right) */}
       <div className="card span-1">
         <div className="card-head">
-          <h3>Yard map</h3>
+          <h3>{t("Yard map")}</h3>
           <button className="sub" style={{ color: "var(--accent)", fontWeight: 600 }} onClick={() => nav("/yard")}>
             Open <ChevronRight size={13} style={{ verticalAlign: "-2px" }} />
           </button>
@@ -330,7 +332,7 @@ export default function Dashboard() {
       {/* weekly alerts mini */}
       <div className="card span-1 fill">
         <div className="card-head">
-          <h3>Alerts this week</h3>
+          <h3>{t("Alerts this week")}</h3>
           <Bell size={17} color="var(--text-secondary)" />
         </div>
         <div className="fill-body">
@@ -393,7 +395,7 @@ export default function Dashboard() {
       {/* foaling watch card */}
       <div className={`foaling span-2 ${labourMare ? "labour" : ""}`}>
         <div className="card-head">
-          <h3>Foaling watch</h3>
+          <h3>{t("Foaling watch")}</h3>
           {labourMare ? (
             <span className="pill alert">Labour detected</span>
           ) : (
@@ -459,7 +461,7 @@ export default function Dashboard() {
       {/* predictive risk radar */}
       <div className="card span-1">
         <div className="card-head">
-          <h3>Risk radar</h3>
+          <h3>{t("Risk radar")}</h3>
           <button className="sub" style={{ color: "var(--accent)", fontWeight: 600 }} onClick={() => nav("/horses")}>
             All
           </button>
@@ -509,7 +511,7 @@ export default function Dashboard() {
           backend's own taxonomy so it cannot drift from what we really support */}
       <div className="card span-3">
         <div className="card-head">
-          <h3>What we monitor here</h3>
+          <h3>{t("What we monitor here")}</h3>
           <button className="sub" style={{ color: "var(--accent)", fontWeight: 600 }} onClick={() => nav("/settings")}>
             Detail <ChevronRight size={13} style={{ verticalAlign: "-2px" }} />
           </button>

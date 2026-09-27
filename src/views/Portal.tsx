@@ -37,6 +37,17 @@ export default function Portal() {
     .filter((t) => !t.done && myNames.has(t.horse))
     .sort((a, b) => a.due.localeCompare(b.due));
   const myAlerts = alerts.filter((a) => myNames.has(a.horse) && !a.acknowledged);
+  // Today's camera behaviour per horse (the server scopes an owner to their horses).
+  const [beh, setBeh] = useState<Record<string, api.HorseBehaviour | undefined>>({});
+  const ids = myHorses.map((h) => h.id).join(",");
+  useEffect(() => {
+    if (api.demoMode) return;
+    let stop = false;
+    Promise.all(myHorses.map((h) => api.getHorseDetail(h.id).then((d) => [h.id, d?.behaviour] as const))).then((rows) => {
+      if (!stop) setBeh(Object.fromEntries(rows));
+    });
+    return () => { stop = true; };
+  }, [ids]); // eslint-disable-line react-hooks/exhaustive-deps
   // Which cameras watch this owner's horses. An owner account receives a
   // status-only projection from the server (no address, no credentials);
   // staff previewing the portal get full records, reduced to the same fields.
@@ -161,6 +172,7 @@ export default function Portal() {
                   </div>
                 </>
               )}
+              <CameraToday b={beh[h.id]} />
               <div className="flex gap-sm" style={{ marginTop: 14 }}>
                 <button className="btn-ghost" style={{ flex: 1 }} onClick={() => nav(`/horses/${h.id}`)}>
                   Profile
@@ -275,6 +287,27 @@ export default function Portal() {
 }
 
 /** An owner needs "is it working", not the device-state vocabulary. */
+/** A plain-language line or two of today's camera behaviour, for owners. */
+function CameraToday({ b }: { b: api.HorseBehaviour | undefined }) {
+  if (!b) return null;
+  const lines: string[] = [];
+  if (b.resting) lines.push(`Lay down ${Math.floor(b.resting.lyingTodayMin / 60)}h ${String(b.resting.lyingTodayMin % 60).padStart(2, "0")}m in 24 h, in ${b.resting.bouts24h} ${b.resting.bouts24h === 1 ? "bout" : "bouts"}`);
+  if (b.activity?.baseline != null)
+    lines.push(b.activity.unusual === "high" ? "More active than usual" : b.activity.unusual === "low" ? "Quieter than usual" : "Activity as usual");
+  if (b.excretion) lines.push(`${b.excretion.count24h} manure ${b.excretion.count24h === 1 ? "event" : "events"} seen in 24 h`);
+  const vices = [["weaving", b.weaving], ["box walking", b.boxWalking], ["head tossing", b.headTossing]] as const;
+  for (const [name, v] of vices) if (v && v.count24h > 0) lines.push(`${name[0].toUpperCase()}${name.slice(1)}: ${v.minutes24h ?? v.count24h} min in 24 h`);
+  if (!lines.length) return null;
+  return (
+    <div style={{ marginTop: 12, fontSize: 12, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+      <div className="muted" style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
+        Today from the camera · prototype
+      </div>
+      {lines.map((l) => <div key={l}>{l}</div>)}
+    </div>
+  );
+}
+
 function OwnerCamPill({ state }: { state: api.DeviceState }) {
   const [cls, label] =
     state === "online" ? ["ok", "working"]

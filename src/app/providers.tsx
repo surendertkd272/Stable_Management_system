@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ThemeProvider } from "../theme";
+import { LangProvider } from "../i18n";
 import { AuthProvider } from "../auth";
 import { StableProvider, ToastProvider } from "../store";
 import Layout from "../components/Layout";
@@ -14,6 +15,7 @@ import Layout from "../components/Layout";
 export default function Providers({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
+      <LangProvider>
       <AuthProvider>
         <StableProvider>
           <ToastProvider>
@@ -21,6 +23,7 @@ export default function Providers({ children }: { children: ReactNode }) {
           </ToastProvider>
         </StableProvider>
       </AuthProvider>
+      </LangProvider>
     </ThemeProvider>
   );
 }

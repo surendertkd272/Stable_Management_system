@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode } from "react";
+import { useT } from "../i18n";
 import { TrendingUp, TrendingDown, X, WifiOff, AlertTriangle } from "lucide-react";
 import type { Status, Monitoring } from "../data/mock";
 
@@ -183,7 +184,8 @@ const STATUS_MAP: Record<Status, { cls: string; label: string }> = {
 };
 export function StatusPill({ status }: { status: Status }) {
   const s = STATUS_MAP[status];
-  return <span className={`pill ${s.cls}`}>{s.label}</span>;
+  const { t } = useT();
+  return <span className={`pill ${s.cls}`}>{t(s.label)}</span>;
 }
 
 export const statusColor = (s: Status) =>

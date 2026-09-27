@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "../i18n";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -39,6 +40,7 @@ export default function HorseDetail() {
   const router = useRouter();
   const nav = (to: string) => router.push(to);
   const { horses, alerts, diary, addDiary, series } = useStable();
+  const { t } = useT();
   const notify = useToast();
   const [cam, setCam] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -102,7 +104,7 @@ export default function HorseDetail() {
   return (
     <>
       <button className="back-link" onClick={() => router.back()}>
-        <ChevronLeft size={16} /> Back
+        <ChevronLeft size={16} /> {t("Back")}
       </button>
 
       {/* hero */}
@@ -163,26 +165,28 @@ export default function HorseDetail() {
             )}
             <div className="flex gap-sm" style={{ marginTop: 16, flexWrap: "wrap" }}>
               <button className="btn-primary" onClick={() => setCam(true)}>
-                <Play size={16} /> Camera reference
+                <Play size={16} /> {t("Camera reference")}
               </button>
               <button className="btn-ghost" onClick={() => nav(`/reports?horse=${horse.id}`)}>
-                Generate vet report
+                {t("Generate vet report")}
               </button>
               <button className="btn-ghost" onClick={() => setNoteOpen(true)}>
-                Add diary note
+                {t("Add diary note")}
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* live vitals from the thermal camera (points 2, 3, 4) */}
-      {live?.vitals?.body_temp_c && (
+      {/* live vitals from the camera (points 2, 3, 4, 5). With one camera the
+          thermal view catches the head only part of the day, so each card says
+          when it was last read, and turns amber once that is 2 h+ ago. */}
+      {live?.vitals && (live.vitals.body_temp_c || live.vitals.respiratory_rate_bpm || live.vitals.activity_index) && (
         <>
           <h3 style={{ margin: "4px 0 12px" }}>
-            Live vitals <span style={{ color: "var(--text-secondary)", fontWeight: 400, fontSize: 13 }}>· thermal camera</span>
+            {t("Live vitals")} <span style={{ color: "var(--text-secondary)", fontWeight: 400, fontSize: 13 }}>· {t("camera")}</span>
           </h3>
-          {live.vitals.body_temp_c.calibrated === false && (
+          {(live.vitals.body_temp_c?.calibrated === false || live.vitals.respiratory_rate_bpm?.calibrated === false) && (
             <div className="row watch" style={{ marginBottom: 12, padding: "10px 14px" }}>
               <Crosshair size={16} style={{ flexShrink: 0 }} />
               <span style={{ fontSize: 12.5 }}>
@@ -192,20 +196,26 @@ export default function HorseDetail() {
             </div>
           )}
           <div className="grid cols-4" style={{ marginBottom: 24 }}>
-            <MetricCard
-              icon={<Heart size={18} />}
-              label={live.vitals.body_temp_c.calibrated === false ? "Body temperature · uncalibrated" : "Body temperature"}
-              muted={live.vitals.body_temp_c.calibrated === false}
-              value={`${live.vitals.body_temp_c.value.toFixed(1)}°C`}
-              delta={trend(live.charts.body_temp_c)}
-              spark={live.charts.body_temp_c}
-            />
+            {live.vitals.body_temp_c ? (
+              <MetricCard
+                icon={<Heart size={18} />}
+                label={live.vitals.body_temp_c.calibrated === false ? "Body temperature · uncalibrated" : "Body temperature"}
+                muted={live.vitals.body_temp_c.calibrated === false}
+                value={`${live.vitals.body_temp_c.value.toFixed(1)}°C`}
+                note={readAt(live.vitals.body_temp_c.ts)}
+                delta={trend(live.charts.body_temp_c)}
+                spark={live.charts.body_temp_c}
+              />
+            ) : (
+              <MetricCard icon={<Heart size={18} />} label="Body temperature" value={null} delta={null} spark={[]} />
+            )}
             {live.vitals.respiratory_rate_bpm && (
               <MetricCard
                 icon={<Activity size={18} />}
                 label={live.vitals.respiratory_rate_bpm.calibrated === false ? "Respiratory rate · uncalibrated" : "Respiratory rate"}
                 muted={live.vitals.respiratory_rate_bpm.calibrated === false}
                 value={`${Math.round(live.vitals.respiratory_rate_bpm.value)} bpm`}
+                note={readAt(live.vitals.respiratory_rate_bpm.ts)}
                 delta={trend(live.charts.respiratory_rate_bpm)}
                 spark={live.charts.respiratory_rate_bpm}
               />
@@ -213,8 +223,9 @@ export default function HorseDetail() {
             {live.vitals.activity_index && (
               <MetricCard
                 icon={<Activity size={18} />}
-                label={live.vitals.activity_index.source === "thermal_video" ? "Activity · prototype" : "Activity index"}
+                label={PROTOTYPE_SOURCES.has(live.vitals.activity_index.source ?? "") ? "Activity · prototype" : "Activity"}
                 value={live.vitals.activity_index.value.toFixed(2)}
+                note={readAt(live.vitals.activity_index.ts)}
                 delta={trend(live.charts.activity_index)}
                 spark={live.charts.activity_index}
                 type="bar"
@@ -230,13 +241,24 @@ export default function HorseDetail() {
           it — they used to fall back to the yard-wide series, so the chart
           under one horse's rest figure was actually every horse's. */}
       <div className="grid cols-4" style={{ marginBottom: 24 }}>
-        <MetricCard
-          icon={<Moon size={18} />}
-          label="Daily rest"
-          value={horse.rest}
-          delta={trend(live?.charts.rest_hours)}
-          spark={live?.charts.rest_hours ?? series.rest}
-        />
+        {horse.rest === null && live?.behaviour?.resting ? (
+          // No lying sensor, but the camera measures lying (prototype).
+          <MetricCard
+            icon={<Moon size={18} />}
+            label="Daily rest · camera prototype"
+            value={hmm(live.behaviour.resting.lyingTodayMin)}
+            delta={null}
+            spark={live.charts.lying_hours ?? []}
+          />
+        ) : (
+          <MetricCard
+            icon={<Moon size={18} />}
+            label="Daily rest"
+            value={horse.rest}
+            delta={trend(live?.charts.rest_hours)}
+            spark={live?.charts.rest_hours ?? series.rest}
+          />
+        )}
         <MetricCard
           icon={<Droplet size={18} />}
           label="Water intake"
@@ -519,9 +541,12 @@ function MetricCard({
   type = "line",
   color,
   muted = false,
+  note,
 }: {
   icon: React.ReactNode;
   label: string;
+  /** e.g. "read 3 h ago" — with one camera, vitals are read only while the head is in view */
+  note?: { text: string; stale: boolean } | null;
   value: string | null;
   /** null = we have no honest basis for a trend; the badge is then omitted. */
   delta: number | null;
@@ -534,6 +559,7 @@ function MetricCard({
   // No sensor for this metric here. Show that plainly instead of a number:
   // a "0h 00m" rest figure would describe a horse that never lay down.
   const measured = value !== null && value !== undefined;
+  const { t } = useT();
   return (
     <div className="card stat">
       <div className="top">
@@ -548,10 +574,15 @@ function MetricCard({
           color: measured && !muted ? undefined : "var(--text-secondary)",
         }}
       >
-        {measured ? value : "Not measured"}
+        {measured ? value : t("Not measured")}
       </div>
+      {measured && note && (
+        <div style={{ fontSize: 11.5, marginTop: 2, color: note.stale ? "var(--warn)" : "var(--text-secondary)" }}>
+          {note.text.replace(/^read just now$|^read (\d+) (min|h|d) ago$/, (m, n, u) => (!n ? t(m) : t("read") === "read" ? m : `${n} ${t(u)} ${t("ago")} ${t("read")}`))}
+        </div>
+      )}
       <div className="foot">
-        <span className="label">{label}</span>
+        <span className="label">{t(label)}</span>
         {measured && spark.filter((n) => n !== null).length > 1 ? (
           <Sparkline
             data={spark.filter((n): n is number => n !== null)}
@@ -577,8 +608,16 @@ function MetricCard({
 // --------------------------------------------------------------------------- //
 const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const hmm = (min: number) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, "0")}m`;
+const PROTOTYPE_SOURCES = new Set(["thermal_video", "visible_video"]);
+/** "read 12 min ago"; stale (amber) from 2 h — the head may have left the thermal view. */
+function readAt(iso: string) {
+  const min = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+  const text = min < 2 ? "read just now" : min < 90 ? `read ${min} min ago` : min < 48 * 60 ? `read ${Math.round(min / 60)} h ago` : `read ${Math.round(min / 1440)} d ago`;
+  return { text, stale: min >= 120 };
+}
 
 function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number | null }) {
+  const { t } = useT();
   const any = b.activity || b.inactive || b.resting || b.urination || b.excretion || b.weaving || b.boxWalking || b.headTossing || b.breathing;
   if (!any) return null;
   const none = <span className="muted">not measured here</span>;
@@ -632,7 +671,7 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
   return (
     <div className="card" style={{ marginBottom: 24 }}>
       <div className="card-head">
-        <h3>Behaviour from the camera</h3>
+        <h3>{t("Behaviour from the camera")}</h3>
         <span className="pill warn" title="Produced today by heuristics whose thresholds are not yet validated on horses">
           <FlaskConical size={12} /> prototype
         </span>
@@ -644,7 +683,7 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
       </p>
       <div className="hw-facts">
         <div>
-          <span>Respiration pattern</span>
+          <span>{t("Respiration pattern")}</span>
           <b>
             {b.breathing
               ? <>{b.breathing.band === "fast" && <span className="pill warn" style={{ marginRight: 6, fontSize: 10.5 }}>fast</span>}
@@ -656,7 +695,7 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
           </b>
         </div>
         <div>
-          <span>Activity</span>
+          <span>{t("Activity")}</span>
           <b>
             {!b.activity ? none : (
               <>
@@ -671,7 +710,7 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
           </b>
         </div>
         <div>
-          <span>Resting (still)</span>
+          <span>{t("Resting (still)")}</span>
           <b>
             {!b.inactive ? none : (
               <>
@@ -686,9 +725,11 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
           </b>
         </div>
         <div>
-          <span>Lying down</span>
+          <span>{t("Lying down")}</span>
           <b>
-            {!rs ? <span className="muted">not measured yet — needs the lying detector and a few days to learn this stall&apos;s standing and lying shapes</span> : (
+            {!rs ? <span className="muted">{b.activity
+                ? "learning — lying is shown once this stall's standing and lying shapes have both been seen (a few hours to days; needs the lying detector)"
+                : "not measured here"}</span> : (
               <>
                 {hmm(rs.lyingTodayMin)} in 24 h · {rs.bouts24h} {rs.bouts24h === 1 ? "bout" : "bouts"}
                 {rs.longestBoutMin != null && <span className="muted"> · longest {rs.longestBoutMin} min</span>}
@@ -699,18 +740,18 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
             )}
           </b>
         </div>
-        <div><span>Urination</span><b>{events(b.urination)}</b></div>
-        <div><span>Excretion</span><b>{events(b.excretion)}</b></div>
+        <div><span>{t("Urination")}</span><b>{events(b.urination)}</b></div>
+        <div><span>{t("Excretion")}</span><b>{events(b.excretion)}</b></div>
         <div>
-          <span>Weaving</span>
+          <span>{t("Weaving")}</span>
           <b>{vice(b.weaving, b.activity ? <span className="muted">none seen</span> : none)}</b>
         </div>
-        {b.boxWalking && <div><span>Box walking</span><b>{vice(b.boxWalking, none)}</b></div>}
-        {b.headTossing && <div><span>Head tossing</span><b>{vice(b.headTossing, none)}</b></div>}
+        {b.boxWalking && <div><span>{t("Box walking")}</span><b>{vice(b.boxWalking, none)}</b></div>}
+        {b.headTossing && <div><span>{t("Head tossing")}</span><b>{vice(b.headTossing, none)}</b></div>}
       </div>
       {meaning.length > 0 && (
         <>
-          <p className="hw-legend">What this may mean</p>
+          <p className="hw-legend">{t("What this may mean")}</p>
           {meaning.map((m) => (
             <p key={m.id} style={{ fontSize: 12.5, margin: "0 0 6px" }}>
               {m.text} <a href={`/guide#${m.id}`} className="muted">sources</a>
