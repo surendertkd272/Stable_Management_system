@@ -29,6 +29,15 @@ const WATER_LOW_FRAC = 0.55;                        // < 55% of own baseline
 const NO_URINE_H = 8, NO_MANURE_H = 12;             // hours without an event
 const ACT_UNUSUAL_HI = 2.0, ACT_UNUSUAL_LO = 0.4;   // x the horse's own 7-day activity
 const ACT_BASELINE_DAYS = 3;                        // days of activity needed before judging
+// Posture and vices from the camera (prototype). No published thresholds
+// exist for any of these (research 27 Sep): each is our rule, stated as such.
+const DOWN_UP_COUNT = 3, DOWN_UP_WINDOW_MIN = 60;   // 3+ lie-downs within an hour
+const LATERAL_LONG_MIN = 60;                        // normal single bouts stayed <= ~57 min (Kelemen 2021)
+const LOW_LYING_NIGHT_MIN = 10, LOW_LYING_NIGHTS = 3; // REM needs >= 30 min lying/day; deprived horses lay ~8
+const NIGHT_COVERAGE_MIN = 360;                     // a night counts only with 6 h of camera posture data
+const VICE_PHASE_GAP_MIN = 10;                      // bouts <= 10 min apart are one phase (Sambraus 1989)
+const VICE_RISE = 1.5;                              // x own 7-day minutes/day
+const MANURE_LOW_FRAC = 0.5;                        // < 50 % of own daily count
 
 // Monitoring-gap thresholds. A 24/7 monitor that goes blind must SAY so —
 // otherwise stale data reads as "calm" and the barn is silently unwatched.
@@ -228,6 +237,50 @@ function evaluate(bio, rd) {
           : "Why: stretching as if to urinate without a stream is a colic sign; straining or dribbling points to the bladder."), now);
   }
 
+  // Less manure than this horse usually passes (baseline-relative: no
+  // published "X hours" threshold exists; fasting alone cuts output 55–63 %).
+  const ex = b.excretion;
+  if (ex?.baselinePerDay && ex.baselinePerDay >= 3 && ex.count24h < ex.baselinePerDay * MANURE_LOW_FRAC)
+    push("Less manure than usual", "warn",
+      `${ex.count24h} manure events seen in 24 h vs this horse's usual ~${ex.baselinePerDay}/day — prototype floor detector; ` +
+      "check the stall and when the horse last ate. Why: fewer droppings is an early colic sign, but not eating also lowers output.", now);
+
+  // Posture (prototype camera): watch notes, never alarms.
+  const rs = b.resting;
+  if (rs) {
+    const downs = rs.downTimes.map((t) => Date.parse(t)).filter((t) => Date.now() - t <= 2 * 3600 * 1000);
+    const cluster = downs.some((t) => downs.filter((u) => u >= t && u - t <= DOWN_UP_WINDOW_MIN * 60000).length >= DOWN_UP_COUNT);
+    if (cluster) push("Lying down and getting up repeatedly", "warn",
+      `${downs.length} lie-downs in the last 2 h — prototype camera posture; look at the horse. ` +
+      "Why: going down and up again and again is a strong colic sign (normal lying bouts last 15–40 min). Our rule: 3+ within an hour.", now);
+    if (rs.lastCast && Date.now() - Date.parse(rs.lastCast) <= 3600 * 1000) push("Possibly cast — check the horse now", "warn",
+      "Lying 10+ minutes with repeated bursts of struggling and no getting up — prototype camera rule. " +
+      "Why: a horse stuck against the wall cannot rise and can injure itself.", rs.lastCast);
+    if (rs.lastRoll && Date.now() - Date.parse(rs.lastRoll) <= 3600 * 1000 && rs.rolls24h >= 2) push("Possible rolling", "warn",
+      `${rs.rolls24h} possible rolls in 24 h — prototype camera rule. Why: rolling (other than a single dust-bath) is the ` +
+      "highest score on the equine abdominal pain scale.", rs.lastRoll);
+    if (rs.lateralLast90Min >= LATERAL_LONG_MIN) push("Lying flat on the side a long time", "warn",
+      `About ${rs.lateralLast90Min} min possibly flat on the side in the last 90 min — prototype camera posture. ` +
+      "Why: normal single lying bouts stay under ~1 h; flat out while awake is a pain sign. Our rule: 60 min.", now);
+    if (rs.lowNights >= LOW_LYING_NIGHTS) push("Little lying down at night", "warn",
+      `Under ${LOW_LYING_NIGHT_MIN} min lying on ${rs.lowNights} recent nights — prototype camera posture. ` +
+      "Why: horses need 30+ min lying a day for REM sleep; persistent lack shows as buckling while dozing. " +
+      "Normal for the first 1–4 nights in a new stall.", now);
+  }
+  // Vices: a new one is worth a look; a rise is information.
+  for (const [k, label] of [["weaving", "Weaving"], ["boxWalking", "Box walking"], ["headTossing", "Head tossing"]]) {
+    const v = b[k];
+    if (!v) continue;
+    if (v.isNew) push(`New stable vice: ${label.toLowerCase()}`, "warn",
+      `${label} seen (${v.minutes24h} min in 24 h) with none in the previous week — prototype camera detector. ` +
+      (k === "headTossing" ? "Why: head shaking has medical causes (ears, eyes, airway, pain) — worth a vet's look." :
+        "Why: a new stereotypy follows stress, isolation or a diet change; stable staff miss most of them."), v.last);
+    else if (v.baselineMinPerDay && v.minutes24h >= 10 && v.minutes24h >= v.baselineMinPerDay * VICE_RISE)
+      push(`${label} increased`, "ok",
+        `${v.minutes24h} min in 24 h vs usual ~${v.baselineMinPerDay} min/day — prototype camera detector. ` +
+        "Why: more stereotypy time suggests more stress or a routine/feeding change; it peaks around feeds.", v.last);
+  }
+
   return out;
 }
 
@@ -374,14 +427,94 @@ export function behaviourForHorse(rd) {
     return { count24h: today.length, last: all.at(-1).ts, times: today.map((r) => r.ts).slice(-12) };
   };
 
+  // Camera days: how many distinct days of behaviour data exist (for "new"
+  // and "less than usual" judgements, which need a history).
+  const camDays = new Set(act.filter((r) => within(r, 8 * DAY_MS)).map((r) => dayKey(r.ts))).size;
+
+  // Floor events with how sure the detector was.
+  const floorEvents = (m) => {
+    const e = events(m);
+    if (!e) return null;
+    const all = of(m), last = all.at(-1);
+    const older = all.filter((r) => within(r, 8 * DAY_MS) && !within(r, DAY_MS));
+    const perDay = camDays >= ACT_BASELINE_DAYS + 1 ? older.length / Math.max(1, camDays - 1) : null;
+    return { ...e, lastConfidence: last.confidence ?? null, lastHalfLifeMin: last.meta?.halfLifeMin ?? null,
+      tier: last.meta?.tier ?? null, baselinePerDay: perDay === null ? null : Math.round(perDay * 10) / 10 };
+  };
+
+  // Vices: minutes per day (each event is one analysis window), grouped into
+  // phases, against the horse's own 7-day level.
+  const vice = (kind) => {
+    const e = of("vice_event").filter((r) => (r.meta?.kind || "weaving") === kind);
+    if (!e.length) return null;
+    const today = day(e);
+    const mins = (rows) => rows.reduce((a, r) => a + (r.meta?.windowMin ?? 1), 0);
+    let phases = 0, lastT = null;
+    for (const r of today) {
+      const t = Date.parse(r.ts);
+      if (lastT === null || t - lastT > VICE_PHASE_GAP_MIN * 60000) phases++;
+      lastT = t;
+    }
+    const prev = e.filter((r) => within(r, 8 * DAY_MS) && !within(r, DAY_MS));
+    const baseline = camDays >= ACT_BASELINE_DAYS + 1 ? mins(prev) / Math.max(1, camDays - 1) : null;
+    return { count24h: today.length, last: e.at(-1).ts, minutes24h: Math.round(mins(today)), phases24h: phases,
+      baselineMinPerDay: baseline === null ? null : Math.round(baseline), isNew: today.length > 0 && !prev.length && camDays >= ACT_BASELINE_DAYS + 1 };
+  };
+
+  // Resting pattern from the camera's posture (lying minutes + lie-down /
+  // get-up events). Stillness above is NOT lying; this is.
+  const lyingRows = of("lying_minutes"), pev = of("posture_event");
+  let resting = null;
+  if (lyingRows.length || pev.length) {
+    const today = day(lyingRows);
+    const kind = (k) => day(pev).filter((r) => r.meta?.kind === k);
+    const downs = kind("lie_down"), ups = kind("get_up");
+    const bouts = downs.map((d) => {
+      const up = pev.find((r) => r.meta?.kind === "get_up" && r.ts > d.ts);
+      const end = up ? Date.parse(up.ts) : Date.now();
+      return { start: d.ts, end: up ? up.ts : null, minutes: Math.round((end - Date.parse(d.ts)) / 60000) };
+    });
+    // Nights (18:00–06:00 local), newest first; only nights the camera saw.
+    const nights = {};
+    for (const r of lyingRows.filter((x) => within(x, 4 * DAY_MS))) {
+      const d = new Date(Date.parse(r.ts) - 6 * 3600 * 1000);          // 06:00 → night rolls over at 06:00
+      const h = new Date(r.ts).getHours();
+      if (h >= 6 && h < 18) continue;
+      const k = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      (nights[k] ||= { lying: 0, covered: 0 });
+      nights[k].lying += r.value;
+      nights[k].covered += r.meta?.observedMin ?? r.meta?.windowMin ?? 1;
+    }
+    const seen = Object.values(nights).filter((x) => x.covered >= NIGHT_COVERAGE_MIN);
+    const recentLateral = lyingRows.filter((r) => within(r, 90 * 60000)).reduce((a, r) => a + (r.meta?.lateralMin ?? 0), 0);
+    resting = {
+      lyingTodayMin: Math.round(today.reduce((a, r) => a + r.value, 0)),
+      lateralTodayMin: Math.round(today.reduce((a, r) => a + (r.meta?.lateralMin ?? 0), 0)),
+      lateralLast90Min: Math.round(recentLateral),
+      nightLyingMin: Math.round(today.filter((r) => { const h = new Date(r.ts).getHours(); return h < 4; }).reduce((a, r) => a + r.value, 0)),
+      bouts24h: downs.length, getUps24h: ups.length,
+      bouts: bouts.slice(-8),
+      longestBoutMin: bouts.length ? Math.max(...bouts.map((b) => b.minutes)) : null,
+      nightsSeen: seen.length,
+      lowNights: seen.filter((x) => x.lying < LOW_LYING_NIGHT_MIN).length,
+      rolls24h: kind("possible_roll").length,
+      lastRoll: kind("possible_roll").at(-1)?.ts ?? null,
+      lastCast: kind("possible_cast").at(-1)?.ts ?? null,
+      downTimes: downs.map((r) => r.ts),
+    };
+  }
+
   const resp = of("respiratory_rate_bpm").at(-1);
+  const stream = act.at(-1)?.source ?? null;
   return {
-    activity, inactive,
-    urination: events("urination_event"),
-    excretion: events("excretion_event"),
-    weaving: (() => { const e = of("vice_event").filter((r) => (r.meta?.kind || "weaving") === "weaving");
-      return e.length ? { count24h: day(e).length, last: e.at(-1).ts } : null; })(),
-    breathing: resp ? { regularity: resp.meta?.regularity ?? resp.confidence ?? null, method: resp.meta?.method ?? null, at: resp.ts } : null,
+    activity, inactive, resting, stream,
+    urination: floorEvents("urination_event"),
+    excretion: floorEvents("excretion_event"),
+    weaving: vice("weaving"),
+    boxWalking: vice("box_walking"),
+    headTossing: vice("head_tossing"),
+    breathing: resp ? { regularity: resp.meta?.regularity ?? resp.confidence ?? null, method: resp.meta?.method ?? null,
+      band: resp.meta?.band ?? null, intervalCv: resp.meta?.intervalCv ?? null, at: resp.ts } : null,
   };
 }
 
