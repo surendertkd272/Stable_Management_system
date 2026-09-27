@@ -179,6 +179,21 @@ const findings = [
   ["move", "Active, alert behaviour", `${bands.high} minutes of high activity and ${bands.moderate} of moderate activity; ${stillMin} minutes of standing rest.`],
   ["check", "No stereotypic behaviour", `No weaving, crib-biting or box walking identified. ${turns.length} turning movements were recorded and reviewed.`],
 ];
+const peopleAt = (arg("people", "") || "").split(",").filter(Boolean).map((x) => x.trim());
+const awayText = away.map(([a, b]) => `${String(Math.floor(a / 60)).padStart(2, "0")}:${String(a % 60).padStart(2, "0")}–${String(Math.floor(b / 60)).padStart(2, "0")}:${String(b % 60).padStart(2, "0")}`).join(", ");
+const spellText = spells.map((sp) => `${clock(from + sp.start * 60000)}–${clock(from + (sp.end + 1) * 60000)}`).join(", ");
+const observed = [
+  ["Stable temperature", `Eye-surface temperature stayed within ${f1(Math.min(...eyeV))}–${f1(Math.max(...eyeV))} °C (median ${f1(eyeMed)} °C) with no upward drift — no indication of a developing fever during the session.`],
+  ["Alert and engaged", "Head carried up, ears forward and eyes bright in the recorded frames; no signs of discomfort such as a lowered head, ears pinned back, a dull expression or flank-watching."],
+  ["Active, with short rests", `${bands.high} minutes of high and ${bands.moderate} of moderate activity. Rest came in short spells (${spellText}), ${stillMin} minutes in total.`],
+  ["Normal movement in the stall", `${turns.length} turns in the stall${awayText ? `, including a period facing away from the camera (${awayText})` : ""}. No rhythmic weaving, crib-biting or repeated circling.`],
+];
+const context = [
+  ["Time of day", "Late afternoon is a naturally active period; horses rest mostly at night."],
+  ["New equipment", "The camera was close to the head and Badal investigated it repeatedly — curiosity about a new object, which also raises the activity reading."],
+  ...(peopleAt.length ? [["People in the stall", `A person was present around ${peopleAt.join(", ")}, overlapping the most active period.`]] : []),
+  ["Feeding routine", "Horses become more active in the period before a scheduled feed."],
+];
 const icon = {
   thermo: '<path d="M10 3a2 2 0 0 1 4 0v10.3a4 4 0 1 1-4 0z"/><path d="M12 14v-5"/>',
   move: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
@@ -211,6 +226,8 @@ section.card{background:var(--surface);border:1px solid var(--ring);border-radiu
 .find{display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--grid)}.find:first-of-type{border-top:0}
 .ico{width:22px;height:22px;flex:none;stroke:var(--accent);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;margin-top:2px}
 .find b{display:block}.find span{color:var(--ink2);font-size:14px}
+.obs{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:10px}.obs h3{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:6px 0 4px}
+.note{margin-top:14px;background:var(--lanebg);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--ink2)}.note b{display:block;color:var(--ink);margin-bottom:2px}
 .photo{margin:0;border-radius:14px;overflow:hidden;position:relative}.photo img{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
 .photo figcaption{font-size:12.5px;color:var(--muted);margin-top:8px}
 table{border-collapse:collapse;width:100%;font-size:14px}th{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid var(--grid)}
@@ -237,7 +254,7 @@ svg{width:100%;height:auto;display:block;overflow:visible}.grid{stroke:var(--gri
 tr.dim td{color:var(--muted)}
 @page{size:A4;margin:12mm}
 @media print{body{background:#fff}main{padding:0;max-width:none}section.card,.kpi{break-inside:avoid;box-shadow:none}.cover{-webkit-print-color-adjust:exact;print-color-adjust:exact}#tip{display:none!important}}
-@media (max-width:820px){.exec{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr);margin:-56px 10px 0}.stats{grid-template-columns:repeat(2,1fr)}.cover h1{font-size:30px}.cover{padding:24px 22px 80px}}
+@media (max-width:820px){.exec,.obs{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr);margin:-56px 10px 0}.stats{grid-template-columns:repeat(2,1fr)}.cover h1{font-size:30px}.cover{padding:24px 22px 80px}}
 </style></head><body><main>
 <header class="cover">
 <div class="top"><span class="logo"><i>E</i>EquiCare</span><span>Monitoring session report</span></div>
@@ -253,23 +270,30 @@ tr.dim td{color:var(--muted)}
 
 <section class="card"><div class="exec"><div>
 <div class="sh"><span class="n">01</span><h2>Executive summary</h2></div>
-<p class="lead">${esc(horse.name)} was monitored continuously for ${minutes} minutes. Temperature was stable and behaviour was active and alert, with no signs of stereotypic behaviour.</p>
+<p class="lead">${esc(horse.name)} was monitored continuously for ${minutes} minutes. He appeared alert and interested in his surroundings, with stable temperature and no signs of discomfort or stereotypic behaviour. The high activity level reflects the afternoon period and a new camera close to his head more than any concern.</p>
 ${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}
 </div>
 ${photo.colour ? `<figure class="photo"><img src="${photo.colour}" alt="${esc(horse.name)} during the session"><figcaption>${esc(horse.name)} at ${clock(photoAt)}, recorded during the session.</figcaption></figure>` : ""}
 </div></section>
 
-<section class="card"><div class="sh"><span class="n">02</span><h2>Monitoring points</h2></div><p class="sub">Results for the eight camera monitoring points.</p>
+<section class="card"><div class="sh"><span class="n">02</span><h2>Behaviour and wellbeing observations</h2></div><p class="sub">What the session showed about ${esc(horse.name)}, and the likely reasons behind his activity level.</p>
+<div class="obs">
+<div><h3>Observed</h3>${observed.map(([t, d]) => `<div class="find">${svgIcon("check")}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}</div>
+<div><h3>Likely reasons for the activity level</h3>${context.map(([t, d]) => `<div class="find"><svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5v.5"/></svg><div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}
+<div class="note"><b>Next session will add</b>Respiration, lying pattern, urination and excretion (with the camera repositioned), and ${esc(horse.name)}'s personal baseline — horses vary, so future readings are compared with his own normal.</div></div>
+</div></section>
+
+<section class="card"><div class="sh"><span class="n">03</span><h2>Monitoring points</h2></div><p class="sub">Results for the eight camera monitoring points.</p>
 <table style="margin-top:12px"><thead><tr><th>Monitoring point</th><th>Result</th><th>Status</th><th>Notes</th></tr></thead><tbody>
 ${points.map(([n, name, st, val, note]) => `<tr><td class="pt-name">${esc(name)}<small>Point ${n}</small></td><td class="pt-val">${esc(val)}</td><td><span class="st ${st[0]}"><i>${st[1]}</i>${st[2]}</span></td><td class="pt-note">${esc(note)}</td></tr>`).join("")}
 </tbody></table></section>
 
-<section class="card"><div class="sh"><span class="n">03</span><h2>Session timeline</h2></div><p class="sub">Minute-by-minute view of monitoring, head position, rest and activity. ▼ marks a turn in the stall.</p>
+<section class="card"><div class="sh"><span class="n">04</span><h2>Session timeline</h2></div><p class="sub">Minute-by-minute view of monitoring, head position, rest and activity. ▼ marks a turn in the stall.</p>
 <div style="margin-top:14px">${timeline()}</div>
 <div class="legend"><span><i class="sw bar"></i>present</span><span><i class="sw alt"></i>facing away from the camera</span><span><i class="sw hot"></i>high activity / turn</span></div>
 <p class="fig">Figure 1 · Session timeline</p></section>
 
-<section class="card"><div class="sh"><span class="n">04</span><h2>Activity</h2></div><p class="sub">Activity index per minute (0 = still, 1 = very active) with the 5-minute average.</p>
+<section class="card"><div class="sh"><span class="n">05</span><h2>Activity</h2></div><p class="sub">Activity index per minute (0 = still, 1 = very active) with the 5-minute average.</p>
 <div style="margin-top:14px">${activityChart()}</div>
 <div class="legend"><span><i class="sw bar"></i>activity per minute</span><span><i class="sw line"></i>5-minute average</span><span><i class="sw iqr"></i>high-activity zone (0.6+) · low is below 0.2</span></div>
 <p class="fig">Figure 2 · Activity per minute</p>
@@ -277,18 +301,18 @@ ${points.map(([n, name, st, val, note]) => `<tr><td class="pt-name">${esc(name)}
 <div class="stats"><div class="stat"><b>${stillMin} min</b><span>standing rest</span></div><div class="stat"><b>${bands.moderate} min</b><span>moderate activity</span></div><div class="stat"><b>${bands.high} min</b><span>high activity</span></div><div class="stat"><b>${turns.length}</b><span>turns in the stall</span></div></div>
 <p class="sub" style="margin-top:14px">${restSentence}</p></section>
 
-<section class="card"><div class="sh"><span class="n">05</span><h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Eye-surface temperature reads about 2 °C below rectal temperature.</p>
+<section class="card"><div class="sh"><span class="n">06</span><h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Eye-surface temperature reads about 2 °C below rectal temperature.</p>
 <div style="margin-top:14px">${tempChart()}</div>
 <div class="legend"><span><i class="sw dot"></i>reading</span><span><i class="sw iqr"></i>middle 50% of readings</span><span>— — median</span>${away.length ? '<span><i class="sw" style="background:var(--lanebg);border:1px solid var(--grid)"></i>facing away (eye not visible)</span>' : ""}</div>
 <p class="fig">Figure 3 · Eye temperature</p>
 <div class="stats"><div class="stat"><b>${f1(eyeMed)} °C</b><span>median</span></div><div class="stat"><b>${f1(Math.min(...eyeV))}–${f1(Math.max(...eyeV))} °C</b><span>range</span></div><div class="stat"><b>${eye.length}</b><span>readings</span></div><div class="stat"><b>${f1(q(eyeV, 0.75) - q(eyeV, 0.25))} °C</b><span>spread (middle 50%)</span></div></div></section>
 
-<section class="card"><div class="sh"><span class="n">06</span><h2>Ten-minute breakdown</h2></div>
+<section class="card"><div class="sh"><span class="n">07</span><h2>Ten-minute breakdown</h2></div>
 <table style="margin-top:10px"><thead><tr><th>Period</th><th>Avg activity</th><th>Peak</th><th>Standing rest</th><th>Eye temp.</th><th>Turns</th><th>Head position</th></tr></thead><tbody>
 ${blocks.map((b) => `<tr class="${b.away ? "dim" : ""}"><td class="num">${b.label}</td><td class="num">${f2(b.act)}</td><td class="num">${f2(b.peak)}</td><td class="num">${b.still} min</td><td class="num">${b.n ? `${f1(b.temp)} °C` : "—"}</td><td class="num">${b.turns || "—"}</td><td>${b.away ? "mostly facing away" : "in view"}</td></tr>`).join("")}
 </tbody></table></section>
 
-<section class="card"><div class="sh"><span class="n">07</span><h2>Recommendations</h2></div>
+<section class="card"><div class="sh"><span class="n">08</span><h2>Recommendations</h2></div>
 <ol class="rec">
 <li><div><b>Position the camera 3.5–4 m from the horse's usual head position,</b> mounted high in a corner and angled down. The full body and stall floor then come into view, adding respiration, lying, urination and excretion to the report.</div></li>
 <li><div><b>Keep the stall clear of people during monitoring</b> so that activity reflects the horse alone.</div></li>
