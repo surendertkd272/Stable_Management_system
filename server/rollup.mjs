@@ -208,7 +208,10 @@ function evaluate(bio, rd) {
   const b = behaviourForHorse(rd);
   if (b.activity?.unusual) push("Activity unusual for this horse", "warn",
     `Activity over the last 4 h is ${b.activity.unusual === "high" ? "well above" : "well below"} this horse's own ` +
-    `7-day level (${b.activity.avg4h.toFixed(2)} vs ${b.activity.baseline.toFixed(2)}) — prototype camera measure; worth a look.`, now);
+    `7-day level (${b.activity.avg4h.toFixed(2)} vs ${b.activity.baseline.toFixed(2)}) — prototype camera measure; worth a look. ` +
+    (b.activity.unusual === "high"
+      ? "Why: restlessness is a colic sign when seen with rolling, flank watching or kicking at the belly; alone it is often feed anticipation."
+      : "Why: a dull horse, head low at the back of the box, can be in pain — or simply dozing."), now);
   // Absence of an event only means something where the detector is known to
   // see this stall: it must have reported events here in the last 3 days.
   for (const [metric, hours, what] of [["urination_event", NO_URINE_H, "urination"], ["excretion_event", NO_MANURE_H, "manure"]]) {
@@ -218,7 +221,9 @@ function evaluate(bio, rd) {
     if (seesStall && last !== null && Date.now() - last >= hours * 3600 * 1000)
       push(what === "manure" ? "No manure seen" : "No urination seen", "warn",
         `No ${what} seen for ${gapText(Date.now() - last)} (watch threshold ${hours} h) — prototype floor detector; ` +
-        `check the horse and the stall.`, now);
+        `check the horse and the stall. ` + (what === "manure"
+          ? "Why: horses pass manure 4–13 times a day; fewer droppings is a colic sign."
+          : "Why: stretching as if to urinate without a stream is a colic sign; straining or dribbling points to the bladder."), now);
   }
 
   return out;

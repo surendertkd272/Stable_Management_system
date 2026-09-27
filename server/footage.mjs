@@ -10,30 +10,60 @@
 // seconds (each is cut on the next keyframe after the clock boundary, so they
 // rarely start on the same second). Labels are stored with ABSOLUTE times, so
 // they stay true whichever clip or stream they were made on.
+import { patternForLabel } from "./knowledge.mjs";
 import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+// `def` is the annotator's rule: what to mark and what not to. Definitions
+// follow the published ethograms cited in knowledge.mjs (via `pattern`).
 export const LABELS = [
   // interval labels: something that lasts
-  { key: "lying", name: "Lying down", kind: "interval", shortcut: "l" },
-  { key: "standing_still", name: "Standing still / dozing", kind: "interval", shortcut: "s" },
-  { key: "eating", name: "Eating", kind: "interval", shortcut: "e" },
-  { key: "drinking", name: "Drinking", kind: "interval", shortcut: "d" },
-  { key: "weaving", name: "Weaving", kind: "interval", shortcut: "w" },
-  { key: "pawing", name: "Pawing", kind: "interval", shortcut: "p" },
-  { key: "rolling", name: "Rolling", kind: "interval", shortcut: "r" },
-  { key: "crib_biting", name: "Crib-biting / wind-sucking", kind: "interval", shortcut: "c" },
-  { key: "nursing", name: "Nursing / suckling (foal)", kind: "interval", shortcut: "n" },
-  { key: "out_of_view", name: "Horse out of view", kind: "interval", shortcut: "o" },
+  { key: "lying", name: "Lying down", kind: "interval", shortcut: "l",
+    def: "Body on the ground, on the chest (legs folded) or flat on the side. From the moment the body touches down until it is up." },
+  { key: "lying_lateral", name: "Lying flat on side", kind: "interval", shortcut: "3",
+    def: "Flat on the side, head down. Mark it inside a 'Lying down' span. Note if the horse is awake and moving (a pain sign) or still (normal deep sleep)." },
+  { key: "standing_still", name: "Standing still / dozing", kind: "interval", shortcut: "s",
+    def: "Standing, not moving the legs, head often lowered, a hind leg may rest on the toe. Not eating or drinking." },
+  { key: "eating", name: "Eating", kind: "interval", shortcut: "e",
+    def: "Head at the hay, manger or floor feed, taking and chewing food." },
+  { key: "drinking", name: "Drinking", kind: "interval", shortcut: "d",
+    def: "Muzzle in the water bowl or bucket, swallowing." },
+  { key: "weaving", name: "Weaving", kind: "interval", shortcut: "w",
+    def: "Obvious side-to-side swaying of head, neck and forequarters in one spot, often at the stall front. Mark once it has swung 3+ times in a row (our rule)." },
+  { key: "box_walking", name: "Box walking", kind: "interval", shortcut: "a",
+    def: "Walking the stall perimeter again and again. Note whether slow and silent, or fast with neighing (distress)." },
+  { key: "pawing", name: "Pawing", kind: "interval", shortcut: "p",
+    def: "Scraping the floor repeatedly with a front hoof. Note if a feed is due — pawing before meals is normal." },
+  { key: "rolling", name: "Rolling", kind: "interval", shortcut: "r",
+    def: "Down and rolling onto the back or side. Note if it is a single dust-bathing roll ending with a shake, or repeated." },
+  { key: "crib_biting", name: "Crib-biting / wind-sucking", kind: "interval", shortcut: "c",
+    def: "Grips a fixed edge with the front teeth (or not, for wind-sucking), arches the neck, pulls back and gulps air. Plain chewing of wood is not crib-biting." },
+  { key: "head_tossing", name: "Head nodding / tossing", kind: "interval", shortcut: "h",
+    def: "Repetitive up-and-down bobbing, or sudden bouts of tossing. Not a single toss at a fly." },
+  { key: "nursing", name: "Nursing / suckling (foal)", kind: "interval", shortcut: "n",
+    def: "Foal's muzzle at the udder, suckling. Nuzzling without drinking: add a note." },
+  { key: "out_of_view", name: "Horse out of view", kind: "interval", shortcut: "o",
+    def: "The horse is not visible, or only a small part of it is." },
   // moment labels: something that happens
-  { key: "lies_down", name: "Lies down (moment)", kind: "moment", shortcut: "1" },
-  { key: "gets_up", name: "Gets up (moment)", kind: "moment", shortcut: "2" },
-  { key: "urinating", name: "Urinating", kind: "moment", shortcut: "u" },
-  { key: "defecating", name: "Defecating", kind: "moment", shortcut: "m" },
-  { key: "other", name: "Other (add a note)", kind: "moment", shortcut: "x" },
-];
+  { key: "lies_down", name: "Lies down (moment)", kind: "moment", shortcut: "1",
+    def: "The moment the body reaches the ground." },
+  { key: "gets_up", name: "Gets up (moment)", kind: "moment", shortcut: "2",
+    def: "The moment the horse is standing on all four legs." },
+  { key: "flank_watching", name: "Flank watching", kind: "moment", shortcut: "f",
+    def: "Turns the head back to the flank or belly and holds it. Not a quick scratch or fly bite (mouth on the coat)." },
+  { key: "kick_at_belly", name: "Kicks at belly", kind: "moment", shortcut: "k",
+    def: "Lifts a hind leg and kicks forward, towards the belly. Stamping down at flies is not this." },
+  { key: "stretch_as_if_to_urinate", name: "Stretches as if to urinate", kind: "moment", shortcut: "t",
+    def: "Takes the urination stance (hind legs back, body stretched) with no stream or only a little. With a full stream, mark 'Urinating'." },
+  { key: "urinating", name: "Urinating", kind: "moment", shortcut: "u",
+    def: "Stretched stance with a stream of urine." },
+  { key: "defecating", name: "Defecating", kind: "moment", shortcut: "m",
+    def: "Tail lifted, droppings passed. Note straining." },
+  { key: "other", name: "Other (add a note)", kind: "moment", shortcut: "x",
+    def: "Anything else worth a vet's eye — e.g. rocking-back stance, sweating, buckling while asleep standing. Say what in the note." },
+].map((l) => ({ ...l, pattern: patternForLabel(l.key)?.id || null }));
 const LABEL_KEYS = new Set(LABELS.map((l) => l.key));
 const STREAMS = ["thermal", "visible"];
 const PAIR_WITHIN_S = 8;

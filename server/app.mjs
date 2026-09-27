@@ -24,6 +24,7 @@ import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labels
   BOX_LABELS, validateBox, boxesExport, labellingQueue } from "./footage.mjs";
 import { randomBytes as footageRandom } from "node:crypto";
 import { SC_IT6420_HB_V2 } from "./hardware-spec.mjs";
+import { knowledge } from "./knowledge.mjs";
 import { deviceApi } from "./devices.mjs";
 
 import SEED_ROSTER from "./roster.mjs";
@@ -156,6 +157,7 @@ export async function handle(req) {
     // gate on purpose: monitoring must be able to poll it without a session.
     if (path === "/api/health") return json(200, { ok: true, ...store.statsSummary(), sessions: sessionCount(), authRequired: authRequired() });
     if (path === "/api/coverage") return json(200, coverage());
+    if (path === "/api/knowledge" && method === "GET") return json(200, knowledge());
     const devices = G.devices;
     if (!devices) return json(503, { error: "server initialising, retry in a moment" });
 
