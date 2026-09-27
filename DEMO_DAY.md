@@ -85,8 +85,14 @@ footage from this camera at real stalls, with events marked.
    `l` lying (press again where it ends), `s` standing still, `e` eating,
    `d` drinking, `w` weaving, `p` pawing, `r` rolling, `u` urinating,
    `m` defecating, `1`/`2` lies down / gets up. Space plays and pauses, ←/→ jump 5 s.
-3. **Export labels (CSV)** when you have a batch — that file plus the clips is
-   the training set.
+3. **To label** tab: the moments worth checking — movement bursts, the start
+   and end of long stillness, warm floor patches, weaving, plus one random
+   moment per hour. Open one (it starts 15 s before), label, press **Done**;
+   the next one opens.
+4. **Boxes**: press `b` and drag over each animal (horse / foal / person),
+   on a few frames per clip — this teaches the detector where the horse is.
+5. **Export labels (CSV)** and **Export boxes (JSON)** when you have a batch —
+   those files plus the clips are the training set.
 
 Ask the stable's permission before recording, and switch it off when not needed.
 
