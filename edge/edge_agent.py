@@ -885,14 +885,18 @@ class MtrpcCameraWorker(CameraWorker):
             # flank box was drawn by hand. The region only moves when the horse does.
             self.auto_flank = flank_from_box(best, vw, vh) if still else None
             rois = self.dev.get("rois") or {}
+            # The floor is only watched where someone drew it: a guessed area
+            # may be the horse's body or a wall (camera close to the horse).
             bounds = box_px(rois["colourFloor"], vw, vh) if rois.get("colourFloor") else None
-            if self.cfloor is None or self.cfloor.bounds != (bounds or self.cfloor.bounds):
+            if bounds is None:
+                self.cfloor = None
+            elif self.cfloor is None or self.cfloor.bounds != bounds:
                 self.cfloor = ColourFloorWatcher(vw, vh, bounds)
             with self._lock:
                 self.posture.feed(t, best, motion)
                 moving = self.vanalyzer.motion.moving_cells(self.cfloor.bounds, self.cfloor.COLS, self.cfloor.ROWS, 30) \
-                    if self.vanalyzer else set()
-            evs = self.cfloor.feed(snap[0], t, best, still, moving)
+                    if (self.vanalyzer and self.cfloor) else set()
+            evs = self.cfloor.feed(snap[0], t, best, still, moving) if self.cfloor else []
             if evs:
                 with self._lock:
                     self.cfloor_events += evs

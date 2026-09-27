@@ -346,6 +346,16 @@ def clean_ffmpeg_error(err):
     return text[-160:]
 
 
+def retry_wait(err, failures):
+    """Seconds before trying the stream again. A refused login is retried
+    slowly — the camera counts failed logins and locks the account (a
+    recorder retrying every 5 s with no password locked out RTSP on the demo
+    unit, 27 Sep); anything else is retried soon."""
+    if "401" in (err or "") or "Unauthorized" in (err or ""):
+        return min(600, 60 * 2 ** min(failures, 4))       # 60, 120, 240, 480, 600 s
+    return 5
+
+
 def local_relay(host, port, stop_evt):
     """A 127.0.0.1 TCP port that forwards to host:port, until stop_evt. ffmpeg
     cannot use an IPv6 zone (fe80::…%en8) in a URL; this lets it reach a
@@ -408,12 +418,17 @@ class VideoStream(threading.Thread):
         self.proc = None
         self.error = None
         self.frames = 0
+        self.failures = 0
 
     def _relay(self):
         return local_relay(self.host, self.port, self.stop_evt)
 
     def run(self):
+        if not self.password:
+            self.error = "no camera password set — video not started (enter it in the Hardware page)"
+            return
         while not self.stop_evt.is_set():
+            frames_before = self.frames
             port = self._relay()
             cred = f"{urllib.parse.quote(self.username)}:{urllib.parse.quote(self.password)}"
             url = f"rtsp://{cred}@127.0.0.1:{port}{self.path}"
@@ -435,8 +450,10 @@ class VideoStream(threading.Thread):
                 self.proc.kill()
             err = clean_ffmpeg_error((self.proc.stderr.read() or b"").decode(errors="replace"))
             if not self.stop_evt.is_set():
-                self.error = f"video {self.path} stopped: {err or 'stream ended'} — reconnecting"
-                self.stop_evt.wait(5)
+                self.failures = 0 if self.frames > frames_before else self.failures + 1
+                wait = retry_wait(err, self.failures - 1)
+                self.error = f"video {self.path} stopped: {err or 'stream ended'} — retrying in {wait} s"
+                self.stop_evt.wait(wait)
 
     def stop(self):
         self.stop_evt.set()

@@ -133,5 +133,9 @@ from video_analytics import clean_ffmpeg_error  # noqa: E402
 msg = clean_ffmpeg_error("Error opening input file rtsp://admin:Admin%40123@127.0.0.1:61952/media/live/102.\n")
 check("camera password never appears in a video error", "Admin" not in msg and "@" not in msg and "61952" not in msg, msg)
 
+from video_analytics import retry_wait  # noqa: E402
+check("a refused login is retried slowly (camera lockout)", retry_wait("Server returned 401 Unauthorized", 0) >= 60
+      and retry_wait("401 Unauthorized", 9) == 600 and retry_wait("Connection refused", 0) == 5)
+
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)
