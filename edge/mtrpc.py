@@ -41,13 +41,20 @@ def login_response(username, password, realm, nonce, qop, cnonce, nc="00000001",
     return md5(f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}")
 
 
-def grid_points(box, n):
-    """Camera coordinates covering an EquiCare box, at most n×n (mirrors gridPoints)."""
+def grid_size(box, n):
+    """(cols, rows) of grid_points(box, n): at most n, and no more than the
+    thermal pixels the box spans."""
     x0, x1 = clamp_cam(to_cam(box["x0"])), clamp_cam(to_cam(box["x1"]))
     y0, y1 = clamp_cam(to_cam(box["y0"])), clamp_cam(to_cam(box["y1"]))
     px_step = CAM_SCALE / THERMAL_PX
-    cols = max(2, min(n, int((x1 - x0) / px_step) + 1))
-    rows = max(2, min(n, int((y1 - y0) / px_step) + 1))
+    return max(2, min(n, int((x1 - x0) / px_step) + 1)), max(2, min(n, int((y1 - y0) / px_step) + 1))
+
+
+def grid_points(box, n):
+    """Camera coordinates covering an EquiCare box, at most n×n (mirrors gridPoints), row by row."""
+    x0, x1 = clamp_cam(to_cam(box["x0"])), clamp_cam(to_cam(box["x1"]))
+    y0, y1 = clamp_cam(to_cam(box["y0"])), clamp_cam(to_cam(box["y1"]))
+    cols, rows = grid_size(box, n)
     return [{"x": int(x0 + (x1 - x0) * i / (cols - 1) + 0.5), "y": int(y0 + (y1 - y0) * j / (rows - 1) + 0.5)}
             for j in range(rows) for i in range(cols)]
 
@@ -164,6 +171,11 @@ class MtrpcCamera:
             if v is not None and (best is None or v > vals[best]):
                 best = i
         return None if best is None else vals[best]
+
+    def box_grid(self, box, n=16):
+        """Pixel reads over a box: (values row by row, cols, rows)."""
+        cols, rows = grid_size(box, n)
+        return self.read_pixels(grid_points(box, n)), cols, rows
 
     def box_avg(self, box, n=5):
         vals = [v for v in self.read_pixels(grid_points(box, n)) if v is not None]

@@ -481,15 +481,24 @@ class PostureTracker:
 # Eye temperature wherever the head is. With one camera the thermal view is
 # aimed where the head spends most time (hay net, door), but the head moves.
 # The inner corner of the eye is normally the warmest spot on a horse's head,
-# so when the fixed eye box misses, the hottest compact point in view is used.
+# so when the fixed eye box misses, the view is searched for an eye.
+#
+# Warmth alone does not find it: in a warm stall the coat of a horse facing
+# away reads 33–34 °C, the same as its eye (Badal, 27 Sep: 33.0–34.4 °C while
+# he faced away, 33.0–34.6 °C with his face in view). The shape does — an eye is a small hot spot with
+# cooler skin all round it; the coat is a broad warm area and a skin fold a
+# warm line, and both run out of a small window around their hottest point.
 EYE_MIN_C, EYE_MAX_C = 33.0, 41.0      # a living eye; hotter is a lamp or the sun
+EYE_HOT_C = 0.7                        # within this of the peak: part of the same hot spot
+EYE_RING_C = 1.0                       # the skin round an eye is at least this much cooler
+EYE_MAX_SHARE = 0.12                   # an eye covers little of the window around it
 
 
-def pick_hotspot(vals, cols, rows):
-    """(col, row, °C) of the hottest reading on a cols×rows grid that looks like
-    an eye on a head: 33–41 °C, not on the frame edge, with warm body around
-    it. None otherwise."""
-    best = None
+def hotspot_candidates(vals, cols, rows, n=3):
+    """Up to n (col, row, °C), hottest first, of the readings on a cols×rows
+    grid that could be an eye on a head: 33–41 °C, not on the frame edge, with
+    warm body around them, and not next to one already chosen."""
+    cands = []
     for k, v in enumerate(vals):
         if v is None or not (EYE_MIN_C <= v <= EYE_MAX_C):
             continue
@@ -500,9 +509,53 @@ def pick_hotspot(vals, cols, rows):
         warm = sum(1 for a in around if a is not None and a >= v - 6)
         if warm < 4:
             continue                                        # an isolated hot dot, not a head
-        if best is None or v > best[2]:
-            best = (c, r, v)
-    return best
+        cands.append((c, r, v))
+    out = []
+    for c, r, v in sorted(cands, key=lambda x: -x[2]):
+        if all(max(abs(c - oc), abs(r - orow)) > 1 for oc, orow, _ in out):
+            out.append((c, r, v))
+        if len(out) == n:
+            break
+    return out
+
+
+def pick_hotspot(vals, cols, rows):
+    """(col, row, °C) of the hottest reading that could be an eye on a head
+    (see hotspot_candidates), or None."""
+    c = hotspot_candidates(vals, cols, rows, 1)
+    return c[0] if c else None
+
+
+def eye_spot(vals, cols, rows):
+    """(°C, None) when the hottest reading on this grid (a small window of
+    pixel reads, row by row) is eye-shaped, else (None, why not)."""
+    pts = [(k, v) for k, v in enumerate(vals) if v is not None]
+    if len(pts) < 0.5 * cols * rows:
+        return None, "too few pixel readings"
+    k, peak = max(pts, key=lambda p: p[1])
+    if not (EYE_MIN_C <= peak <= EYE_MAX_C):
+        return None, f"nothing eye-warm (hottest {peak:.1f} °C, an eye reads 33–41)"
+    spot, todo = {k}, [k]                                   # the hot spot: joined to the peak, within EYE_HOT_C
+    while todo:
+        i = todo.pop()
+        c, r = i % cols, i // cols
+        for dc in (-1, 0, 1):
+            for dr in (-1, 0, 1):
+                cc, rr = c + dc, r + dr
+                j = rr * cols + cc
+                if (0 <= cc < cols and 0 <= rr < rows and j not in spot
+                        and vals[j] is not None and vals[j] >= peak - EYE_HOT_C):
+                    spot.add(j)
+                    todo.append(j)
+    edge = lambda i: i % cols in (0, cols - 1) or i // cols in (0, rows - 1)  # noqa: E731
+    if any(edge(i) for i in spot):
+        return None, "the warm area runs on past the eye window (coat or a skin fold)"
+    if len(spot) > max(9, EYE_MAX_SHARE * cols * rows):     # up to 3×3: a close eye spans a few reads
+        return None, "a broad warm area (coat), not a small hot spot"
+    ring = sorted(vals[i] for i in range(cols * rows) if edge(i) and vals[i] is not None)
+    if not ring or ring[len(ring) // 2] > peak - EYE_RING_C:
+        return None, "no cooler skin around the hot spot"
+    return peak, None
 
 
 def flank_from_box(box, w, h):

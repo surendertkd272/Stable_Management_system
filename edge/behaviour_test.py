@@ -83,6 +83,9 @@ check("colour: IR lamp switching is a scene change, not activity", ir["activity"
 laps = run(N * 2, lambda i: colour_frame(88 + 50 * math.sin(2 * math.pi * i / (FPS * 15))))
 check("colour: laps of the box every 15 s: box walking", (laps.get("box_walk") or {}).get("detected"), laps.get("box_walk"))
 check("colour: box walking is not head tossing", not (laps.get("head_toss") or {}).get("detected"), laps.get("head_toss"))
+turns = run(N, lambda i: colour_frame(88 + 50 * math.sin(2 * math.pi * i / (FPS * 31))))
+check("colour: turning round every ~30 s (under 3 laps in the window) is not box walking",
+      not (turns.get("box_walk") or {}).get("detected"), turns.get("box_walk"))
 
 nod = run(N, lambda i: colour_frame(88, head_dy=6 * math.sin(2 * math.pi * 1.0 * i / FPS)))
 check("colour: regular nodding in place: head tossing", (nod.get("head_toss") or {}).get("detected"), nod.get("head_toss"))
@@ -217,6 +220,39 @@ for i in range(30):
     mm.feed(bytes(f))
 cells = mm.moving_cells((0, 90, W - 1, H - 1), 16, 5, 10)
 check("moving cells mark where the horse is, not the whole floor", 0 < len(cells) < 40, cells)
+
+# ---- is the hottest point an eye? ---------------------------------------------- #
+from behaviour import eye_spot  # noqa: E402
+
+
+def grid(cols, rows, f):
+    return [f(c, r) for r in range(rows) for c in range(cols)]
+
+
+def eye_at(cc, cr, skin=32.0, eye=34.8, rim=33.6):
+    return lambda c, r: eye if (c, r) == (cc, cr) else rim if max(abs(c - cc), abs(r - cr)) == 1 else skin
+
+
+v, why = eye_spot(grid(7, 7, eye_at(3, 3)), 7, 7)
+check("a small hot spot with cooler skin round it is an eye", v == 34.8, why)
+v, why = eye_spot(grid(16, 16, eye_at(9, 7, eye=35.1, rim=34.6)), 16, 16)
+check("... in the eye box too", v == 35.1, why)
+coat = grid(7, 7, lambda c, r: 34.0 + 0.1 * math.sin(c) - 0.05 * r)
+v, why = eye_spot(coat, 7, 7)
+check("coat of a horse facing away (33–34 °C all over) is not an eye", v is None and "runs on" in why, why)
+fold = grid(7, 7, lambda c, r: 34.2 if r == 3 else 32.5)
+v, why = eye_spot(fold, 7, 7)
+check("a warm skin fold (a line through the window) is not an eye", v is None, why)
+flat = grid(7, 7, lambda c, r: 34.0 if (c, r) == (3, 3) else 33.2 if max(abs(c - 3), abs(r - 3)) == 1 else 33.5)
+v, why = eye_spot(flat, 7, 7)
+check("a hot point without cooler skin round it is not an eye", v is None and "cooler" in why, why)
+blob = grid(16, 16, lambda c, r: 34.3 if 3 <= c <= 11 and 3 <= r <= 11 else 31.0)
+v, why = eye_spot(blob, 16, 16)
+check("a broad warm patch inside the eye box is not an eye", v is None and "broad" in why, why)
+v, why = eye_spot(grid(7, 7, eye_at(3, 3, eye=55.0, rim=40.0)), 7, 7)
+check("a heat lamp is not an eye", v is None, why)
+v, why = eye_spot(grid(7, 7, lambda c, r: 27.0), 7, 7)
+check("the wall is not an eye", v is None and "eye-warm" in why, why)
 
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

@@ -738,9 +738,10 @@ class MtrpcCameraWorker(CameraWorker):
       thermal video (25 fps, relative brightness): breathing rhythm, and where
         the horse is moving over the floor (so the floor detector waits for it
         to step off a deposit);
-      behaviour video — the COLOUR stream by default: with the 25 mm thermal
-        lens the thermal view is ~1.5 × 1.2 m at 3.5 m (the head and neck),
-        while the colour lens sees the whole stall, day and night (IR lamp).
+      behaviour video — the COLOUR stream by default (more detail, and the
+        horse detector runs on it; day and night with the IR lamp). On the
+        demo unit it shows about the same ~25° view as the 25 mm thermal
+        (~1.5 × 1.2 m at 3.5 m), not the whole stall.
         Activity, stillness, weaving, box walking, head tossing, and — with
         the optional detector — lying down / getting up. behaviourStream
         "thermal" keeps it on the thermal view (a camera hung far enough back
@@ -750,6 +751,7 @@ class MtrpcCameraWorker(CameraWorker):
 
     FLOOR_EVERY_S = 2.0
     VISIBLE_SIZE = (352, 288)          # finer than thermal: flank movement is ~1 cm
+    FILLS_VIEW = 0.5                   # horse box at least half the frame wide: laps cannot be seen
     DETECT_EVERY_S = 1.0
 
     def __init__(self, dev, sink, window_s=60, target_hz=5.0):
@@ -760,6 +762,8 @@ class MtrpcCameraWorker(CameraWorker):
         self.detector, self.detector_note = None, None
         self.last_visible = None
         self.boxes_seen = 0
+        self.box_widths = []               # horse box widths (share of the frame) this window
+        self._walk_prev = None             # box walking seen last window: its minutes, or True mid-bout
         self.posture = None
         self.auto_flank = None             # flank bounds from the detector box while the horse stands still
         self.cfloor, self.cfloor_events = None, []
@@ -878,6 +882,7 @@ class MtrpcCameraWorker(CameraWorker):
             if best:
                 best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
                 self.boxes_seen += 1
+                self.box_widths.append(best["x1"] - best["x0"])
             t = snap[1]
             history = [(ht, hb) for ht, hb in history if t - ht <= 30] + ([(t, best)] if best else [])
             still = bool(best) and motion < 0.1 and len(history) >= 20 and all(iou(hb, best) >= 0.85 for _, hb in history)
@@ -902,23 +907,34 @@ class MtrpcCameraWorker(CameraWorker):
                     self.cfloor_events += evs
 
     def _auto_eye(self):
-        """Hottest eye-like point anywhere in the thermal view: a coarse 16×12
-        scan of pixel reads, then a fine 7×7 look around the best cell."""
-        from behaviour import pick_hotspot  # noqa
+        """An eye anywhere in the thermal view: a coarse 16×12 scan of pixel
+        reads for warm points on a head, then a close 7×7 look around each of
+        the three warmest; the first that is eye-shaped (behaviour.eye_spot)
+        wins. (°C, None), or (None, why not)."""
+        from behaviour import eye_spot, hotspot_candidates  # noqa
         from mtrpc import to_cam, clamp_cam  # noqa
         cols, rows = 16, 12
         pts = [{"x": clamp_cam(to_cam((i + 0.5) * 10000 / cols)), "y": clamp_cam(to_cam((j + 0.5) * 10000 / rows))}
                for j in range(rows) for i in range(cols)]
-        hit = pick_hotspot(self.cam.read_pixels(pts), cols, rows)
-        if hit is None:
-            return None
-        c, r, _ = hit
-        cx, cy = (c + 0.5) * 10000 / cols, (r + 0.5) * 10000 / rows
+        cands = hotspot_candidates(self.cam.read_pixels(pts), cols, rows, 3)
+        if not cands:
+            return None, "no eye-warm point on a head in the thermal view"
+        why = None
         hw, hh = 10000 / cols, 10000 / rows
-        fine = [{"x": clamp_cam(to_cam(cx - hw + 2 * hw * i / 6)), "y": clamp_cam(to_cam(cy - hh + 2 * hh * j / 6))}
-                for j in range(7) for i in range(7)]
-        vals = [v for v in self.cam.read_pixels(fine) if v is not None and v <= 41.0]
-        return max(vals) if vals else hit[2]
+        for c, r, _ in cands:
+            cx, cy = (c + 0.5) * hw, (r + 0.5) * hh
+            fine = [{"x": clamp_cam(to_cam(cx - hw + 2 * hw * i / 6)), "y": clamp_cam(to_cam(cy - hh + 2 * hh * j / 6))}
+                    for j in range(7) for i in range(7)]
+            eye, why = eye_spot(self.cam.read_pixels(fine), 7, 7)
+            if eye is not None:
+                return eye, None
+        return None, why
+
+    def _note_eye(self, why):
+        """Log once when the eye goes out of view (and why), and when it is back."""
+        if why != getattr(self, "_eye_why", None):
+            print(f"[edge] {self.name}: " + (f"no eye temperature — {why}" if why else "eye in view again"))
+            self._eye_why = why
 
     def warnings(self):
         out = []
@@ -978,7 +994,7 @@ class MtrpcCameraWorker(CameraWorker):
             self.analyzer.reset()
             if self.vanalyzer:
                 self.vanalyzer.reset()
-        self.boxes_seen = 0
+        self.boxes_seen, self.box_widths = 0, []
         pixel_window, floor_events = [], []
         calib = self.dev.get("floorCalib") or {}
         t0 = last_floor = time.time()
@@ -1002,16 +1018,22 @@ class MtrpcCameraWorker(CameraWorker):
             posture = self.posture.drain() if self.posture else None
         if self.posture is not None:
             self._save_posture()
-        eye = self.cam.box_max(rois["eye"]) if rois.get("eye") and "x0" in rois["eye"] else None
-        eye_method = "eye box, hottest pixel"
-        if eye is None or eye < 33.0:
-            # The head is not in the eye box: look for it anywhere in the
+        # The eye, if it is in view: eye-shaped, not just warm (see behaviour.eye_spot).
+        from behaviour import eye_spot  # noqa
+        eye, eye_why, eye_method, box_peak = None, "no eye box drawn", None, None
+        if rois.get("eye") and "x0" in rois["eye"]:
+            vals, cols, rows = self.cam.box_grid(rois["eye"])
+            eye, eye_why = eye_spot(vals, cols, rows)
+            eye_method = "eye box, eye-shaped hot spot"
+            box_peak = max((v for v in vals if v is not None), default=None)
+        in_boxes = eye is not None                           # the head is where the boxes were drawn
+        if eye is None:
+            # The head is not in the eye box: look for the eye anywhere in the
             # thermal view (one camera, aimed where the head spends most time).
-            found = self._auto_eye()
-            if found is not None:
-                eye, eye_method = found, "hottest point on the head, anywhere in view (eye box missed)"
-            elif eye is not None and eye < 30.0:
-                eye = None          # coat or wall under the eye box, not an eye: say nothing
+            eye, why = self._auto_eye()
+            eye_method = "eye-shaped hot spot, found anywhere in view (eye box missed)"
+            eye_why = None if eye is not None else f"eye box: {eye_why}; rest of the view: {why}"
+        self._note_eye(eye_why if eye is None else None)
         nostril_c = self.cam.box_avg(rois["nostril"])
         calibrated = bool(self.dev.get("calibrated"))
         ts, out = now_iso(), []
@@ -1025,7 +1047,7 @@ class MtrpcCameraWorker(CameraWorker):
         from video_analytics import horse_present  # noqa
         from mtrpc import grid_points  # noqa
         grid = self.cam.read_pixels(grid_points({"x0": 0, "y0": 0, "x1": 10000, "y1": 10000}, 8))
-        present, why = horse_present(grid, eye)
+        present, why = horse_present(grid, eye if eye is not None else box_peak)   # warm eye box: a head filling the view
         seen_colour = self.boxes_seen > 0 or (vsummary.get("activity") or 0) >= 0.05
         if present is False and not seen_colour:
             if getattr(self, "_absent_logged", False) is False:
@@ -1045,7 +1067,7 @@ class MtrpcCameraWorker(CameraWorker):
             if eye is not None:
                 add("body_temp_c", eye, "°C", conf=(0.95 if eye_method.startswith("eye box") else 0.7) if calibrated else 0.3,
                     method=eye_method, **vit)
-            if nostril_c is not None:
+            if nostril_c is not None and in_boxes:          # the nostril box is on the nostril only when the eye box is on the eye
                 add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
         br = summary.get("breathing") or {} if head_in_view else {}
         fl = vsummary.get("flank_breathing") or {}
@@ -1086,10 +1108,21 @@ class MtrpcCameraWorker(CameraWorker):
             add("vice_event", 1, "event", source=bsrc, conf=min(0.8, wv["strength"]), kind="weaving",
                 hz=round(wv["hz"], 2), cv=round(wv["cv"], 3), windowMin=wmin,
                 method="regular side-to-side sway rhythm", **proto)
+        # Box walking is a habit of many minutes: laps in two windows running.
+        # Not judged when the horse fills the colour view — the view is then
+        # narrower than the stall and a horse turning round looks like laps.
         bw = bsum.get("box_walk") or {}
-        if bw.get("detected"):
+        widths = sorted(self.box_widths)
+        fills = bsrc == "visible_video" and len(widths) >= 5 and widths[len(widths) // 2] >= self.FILLS_VIEW
+        walking = bool(bw.get("detected")) and not fills
+        if walking and self._walk_prev:
             add("vice_event", 1, "event", source=bsrc, conf=min(0.7, bw["strength"]), kind="box_walking",
-                hz=round(bw["hz"], 3), windowMin=wmin, method="laps of the stall", **proto)
+                hz=round(bw["hz"], 3), laps=round(bw["laps"], 1),
+                windowMin=round(wmin + (self._walk_prev if self._walk_prev is not True else 0), 2),
+                method="laps of the stall, in consecutive windows", **proto)
+            self._walk_prev = True                           # later windows of the same bout count their own minutes
+        else:
+            self._walk_prev = wmin if walking else None      # held until the next window confirms it
         ht = bsum.get("head_toss") or {}
         if ht.get("detected"):
             add("vice_event", 1, "event", source=bsrc, conf=min(0.6, ht["strength"]), kind="head_tossing",

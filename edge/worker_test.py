@@ -25,15 +25,28 @@ def check(name, ok, detail=""):
         print(f"FAIL {name} {detail}")
 
 
+def eye_window(cols, rows, eye, skin=32.0):
+    """Pixel reads with an eye in the middle: a hot point, a warm rim, cooler skin."""
+    cc, cr = cols // 2, rows // 2
+    return [eye if (c, r) == (cc, cr) else eye - 0.5 if max(abs(c - cc), abs(r - cr)) == 1 else skin
+            for r in range(rows) for c in range(cols)]
+
+
 class FakeCam:
     """Pixel reads: a warm head in view unless `absent`. With eye_in_box
     False the head is elsewhere in the view: the eye box reads the wall, and
-    a whole-view scan finds the eye at column 7, row 5 (or a lamp)."""
-    def __init__(self, absent=False, eye_in_box=True, lamp=False):
-        self.absent, self.scans, self.eye_in_box, self.lamp = absent, 0, eye_in_box, lamp
+    a whole-view scan finds the eye at column 7, row 5 (or a lamp). With
+    `coat` the horse faces away: warm coat (33–34.4 °C) fills the view and
+    the eye box, and there is no eye anywhere."""
+    def __init__(self, absent=False, eye_in_box=True, lamp=False, coat=False):
+        self.absent, self.scans, self.eye_in_box, self.lamp, self.coat = absent, 0, eye_in_box, lamp, coat
 
-    def box_max(self, box):
-        return None if self.absent else (35.1 if self.eye_in_box else 27.0)
+    def box_grid(self, box):
+        if self.absent:
+            return [None] * 256, 16, 16
+        if self.coat:
+            return [33.6 + 0.05 * ((i * 7) % 11) for i in range(256)], 16, 16
+        return (eye_window(16, 16, 35.1) if self.eye_in_box else [27.0] * 256), 16, 16
 
     def box_avg(self, box):
         return None if self.absent else 33.0
@@ -45,6 +58,8 @@ class FakeCam:
             g = [26.0] * 192
             if self.absent:
                 return g
+            if self.coat:
+                return [33.2 + 0.1 * ((i * 5) % 13) for i in range(192)]
             for r in range(3, 8):
                 for c in range(5, 10):
                     g[r * 16 + c] = 32.0                     # the head
@@ -55,8 +70,8 @@ class FakeCam:
                         g[r * 16 + c] = 26.0
                 g[5 * 16 + 7] = 55.0
             return g
-        if len(pts) == 49:                                   # fine look around the best cell
-            return [35.0] * 48 + [36.7]
+        if len(pts) == 49:                                   # close look around a candidate
+            return [34.0 + 0.05 * ((i * 3) % 7) for i in range(49)] if self.coat else eye_window(7, 7, 36.7)
         self.scans += 1
         return [24.0 + rng.gauss(0, 0.1) for _ in pts]
 
@@ -127,7 +142,10 @@ w, got = make_worker("visible")
 run_window(w, lambda: feed(w.vanalyzer, weave_frames()))
 metrics = {r["metric"] for r in got}
 act = [r for r in got if r["metric"] == "activity_index"]
-check("vitals emitted with the head in view", "body_temp_c" in metrics, metrics)
+check("vitals emitted with the head in view", {"body_temp_c", "nostril_temp_c"} <= metrics, metrics)
+temp = [r for r in got if r["metric"] == "body_temp_c"]
+check("eye in the eye box: its hot spot, full confidence", temp and temp[0]["value"] == 35.1
+      and temp[0]["meta"]["method"].startswith("eye box") and temp[0]["confidence"] == 0.95, temp)
 check("activity comes from the colour stream", act and act[0]["source"] == "visible_video", act)
 vice = [r for r in got if r["metric"] == "vice_event"]
 check("weaving event from the colour stream, flagged prototype, with its window length",
@@ -178,6 +196,14 @@ temp = [r for r in got if r["metric"] == "body_temp_c"]
 check("eye box missed: temperature from the head found elsewhere in view",
       temp and abs(temp[0]["value"] - 36.7) < 0.01 and "anywhere in view" in temp[0]["meta"]["method"], temp)
 check("... reported with lower confidence than a boxed eye", temp and temp[0]["confidence"] < 0.95, temp)
+check("... and no nostril temperature: the nostril box is not on the nostril either",
+      not [r for r in got if r["metric"] == "nostril_temp_c"], got)
+w, got = make_worker("visible", coat=True)
+run_window(w, lambda: feed(w.vanalyzer, weave_frames()))
+metrics = {r["metric"] for r in got}
+check("horse facing away (warm coat, no eye): no body temperature from the coat", "body_temp_c" not in metrics, metrics)
+check("... no nostril temperature either", "nostril_temp_c" not in metrics, metrics)
+check("... behaviour still reported", "activity_index" in metrics, metrics)
 w, got = make_worker("visible", eye_in_box=False, lamp=True)
 run_window(w, lambda: feed(w.vanalyzer, [bytes(150 for _ in range(W * H))] * 300))
 check("a heat lamp in view is not taken for an eye", not [r for r in got if r["metric"] == "body_temp_c"], got)
@@ -198,6 +224,33 @@ check("flank region sits in the middle of the body", fb == (144, 146, 207, 198),
 edge = [26.0] * 192
 edge[0] = 36.0
 check("a hot point on the frame edge is not an eye (partly out of view)", pick_hotspot(edge, 16, 12) is None)
+
+# 9. Box walking only when laps continue into a second window, and never
+#    while the horse fills the colour view (turning round looks like laps).
+def walk_windows(n, widths=()):
+    w, got = make_worker("visible")
+    walk = {"frames": 600, "seconds": 60, "activity": 0.6, "inactive_min": 0.0,
+            "box_walk": {"hz": 0.1, "strength": 0.8, "span": 0.5, "laps": 6.0, "detected": True}}
+
+    def summary(_):
+        w.box_widths = list(widths)
+        return dict(walk)
+    w.vanalyzer.summary = summary
+    per = []
+    for _ in range(n):
+        got.clear()
+        w._run_once()
+        per.append([r for r in got if r["metric"] == "vice_event"])
+    return per
+
+
+per = walk_windows(3)
+check("box walking: one window of laps is held back", per[0] == [], per[0])
+check("... reported when the next window has laps too, covering both minutes",
+      len(per[1]) == 1 and per[1][0]["meta"]["kind"] == "box_walking" and per[1][0]["meta"]["windowMin"] == 2.0, per[1])
+check("... then each further window counts its own minute", len(per[2]) == 1 and per[2][0]["meta"]["windowMin"] == 1.0, per[2])
+per = walk_windows(3, widths=[0.8] * 10)
+check("box walking not judged while the horse fills the view", per == [[], [], []], per)
 
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

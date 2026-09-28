@@ -1,8 +1,10 @@
 """Urination and manure from the COLOUR picture — so one camera covers the floor.
 
 The 25 mm thermal view is ~1.5 × 1.2 m at 3.5 m: aimed at the head it rarely
-sees the floor where horses urinate and pass manure. The colour lens sees the
-whole stall, day and night (IR lamp). What a deposit looks like there:
+sees the floor where horses urinate and pass manure. The colour picture is
+watched wherever it shows bedding (day and night, IR lamp) — on this unit it
+covers about the same area as the thermal (measured 27 Sep), so only where a
+floor box is drawn. What a deposit looks like there:
   manure  a new compact pile, darker than the bedding and textured (balls);
   urine   bedding going darker where it is wet — a wider, smoother patch
           (water absorbs near-infrared too, so wet bedding also darkens under

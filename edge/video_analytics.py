@@ -20,8 +20,11 @@ What each window produces — all heuristics, reported with how they were made
              movement, rate cross-checked by counting breaths (None otherwise)
   posture    standing / lying from the horse's box (behaviour.PostureTracker)
 
-The colour stream (mode "visible") sees the whole stall; the thermal stream
-with the 25 mm lens covers ~1.5 × 1.2 m at 3.5 m — the head and neck.
+The colour stream (mode "visible") is the default for behaviour: more detail,
+and the horse detector runs on it. On the demo unit it covers about the same
+area as the thermal view (~25° across, measured on the 27 Sep recording with
+the horse's face as a ruler) — not the whole stall — so the 25 mm thermal
+view's ~1.5 × 1.2 m at 3.5 m applies to both.
 
 Standard library only, so it runs on a bare Jetson image next to ffmpeg.
 """
@@ -186,8 +189,8 @@ class WindowAnalyzer:
     """Feed frames; call summary() at the end of each window.
 
     mode "thermal": the thermal stream (warm body = horse). mode "visible":
-    the colour stream, which sees the whole stall — the thermal view with the
-    25 mm lens is only ~1.5 × 1.2 m at 3.5 m, about one horse's head and neck."""
+    the colour stream (texture, and the detector's box). On the demo unit
+    both show about the same ~25° view (see the module notes)."""
 
     STILL_FRAC = 0.02             # below this share of the body changing, the horse is "still"
     ACTIVE_FRAC = 0.5             # half the body changing within a second reads as activity 1.0
@@ -197,6 +200,7 @@ class WindowAnalyzer:
     WEAVE_BAND = (0.25, 2.0)      # no verified weaving frequency exists — search wide
     TOSS_BAND = (0.3, 2.0)
     WALK_BAND = (0.03, 0.15)      # a lap of the box every ~7–30 s
+    WALK_MIN_LAPS = 3             # ... and at least 3 of them in the window
     POSTURE_EVERY = 5             # thermal blob posture at 2 samples/s
 
     def __init__(self, fs=FPS, w=W, h=H, mode="thermal", posture=None):
@@ -298,14 +302,18 @@ class WindowAnalyzer:
                 ok = ok and swing >= self.WEAVE_MIN_SWING
             out["weave"] = {"hz": f, "strength": strength, "swing": swing, "cv": cv, "detected": ok}
         # Box walking: laps of the stall — a slow, large back-and-forth of
-        # where the movement is, with the horse busy the whole time.
+        # where the movement is, with the horse busy the whole time. At least
+        # WALK_MIN_LAPS laps inside the window: fewer is a turn or two, not a
+        # rhythm (27 Sep: a "lap" every 31 s in a 60 s window was a horse
+        # turning round in a small stall).
         pos = [c for c in (self.cx if self.mode == "thermal" else self.mx) if c is not None]
         if out["activity"] >= 0.3 and len(pos) >= 0.7 * n and n >= self.fs * 40:
             f, strength = periodicity(pos, self.fs, *self.WALK_BAND)
             srt = sorted(pos)
             span = srt[int(len(srt) * 0.95)] - srt[int(len(srt) * 0.05)]
-            out["box_walk"] = {"hz": f, "strength": strength, "span": span,
-                               "detected": bool(f and strength >= 0.5 and span >= 0.3)}
+            laps = f * n / self.fs if f else 0.0
+            out["box_walk"] = {"hz": f, "strength": strength, "span": span, "laps": laps,
+                               "detected": bool(f and strength >= 0.5 and span >= 0.3 and laps >= self.WALK_MIN_LAPS)}
         # Head nodding/tossing: a REGULAR up-down rhythm while the horse stays
         # in one place (a walking horse nods with each stride). Irregular
         # tossing is left alone — that is discomfort or flies, not a vice.
