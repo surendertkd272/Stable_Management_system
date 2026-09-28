@@ -28,6 +28,11 @@ export function MonitoringPill({ monitoring }: { monitoring?: Monitoring }) {
 /** True when readings are too old to trust the clinical summary. */
 export const isBlind = (m?: Monitoring) => m === "offline" || m === "no-data";
 
+/** "Marwari · Mare · 7 yr" — parts that are empty or "—" are left out, so an
+ *  unknown age never leaves "Gelding · · Stall 01". */
+export const details = (...parts: (string | null | undefined)[]) =>
+  parts.map((p) => (p ?? "").trim()).filter((p) => p && p !== "—").join(" · ");
+
 /* ---------- modal ---------- */
 export function Modal({
   open,

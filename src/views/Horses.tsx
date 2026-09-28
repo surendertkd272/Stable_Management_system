@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Moon, Thermometer, Wind } from "lucide-react";
 import { Status } from "../data/mock";
 import { useStable } from "../store";
-import { StatusPill, MonitoringPill, isBlind, riskScore, riskBand } from "../components/ui";
+import { StatusPill, MonitoringPill, isBlind, riskScore, riskBand, details } from "../components/ui";
 
 const FILTERS: { key: Status | "all"; label: string }[] = [
   { key: "all", label: "All" },
@@ -51,7 +51,7 @@ export default function Horses() {
               </span>
             </div>
             <div className="meta">
-              {h.breed} · {h.sex} · {h.age}
+              {details(h.breed, h.sex, h.age)}
             </div>
             <div className="metrics">
               <div className="m">

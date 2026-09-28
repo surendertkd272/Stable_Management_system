@@ -83,7 +83,7 @@ export default function Health() {
   return (
     <>
       {/* summary */}
-      <div className="grid cols-3" style={{ marginBottom: 22 }}>
+      <div className="grid cols-3 kpi-row" style={{ marginBottom: 22 }}>
         <SummaryCard icon={<AlertTriangle size={20} />} tone="alert" value={overdue} label="Overdue" />
         <SummaryCard icon={<CalendarClock size={20} />} tone="warn" value={dueWeek} label="Due this week" />
         <SummaryCard icon={<Check size={20} />} tone="ok" value={completed} label="Completed" />
@@ -222,7 +222,7 @@ function SummaryCard({
       <div className="flex gap-md center">
         <div className={`sev-chip ${tone}`}>{icon}</div>
         <div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, color }}>{value}</div>
+          <div className="kpi-value" style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, color }}>{value}</div>
           <span className="muted" style={{ fontSize: 12.5 }}>
             {label}
           </span>

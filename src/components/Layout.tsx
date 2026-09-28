@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -101,6 +101,12 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const isActive = (to: string, end?: boolean) =>
     end ? pathname === to : pathname === to || pathname.startsWith(to + "/");
 
+  // Keep the current page's link in view when the list is taller than the screen.
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    navRef.current?.querySelector<HTMLElement>(".nav-item.active")?.scrollIntoView({ block: "nearest" });
+  }, [pathname]);
+
   const item = (n: NavItem) => (
     <Link
       key={n.to}
@@ -115,7 +121,7 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 
   return (
-    <aside className={`rail ${open ? "open" : ""}`}>
+    <aside id="app-menu" className={`rail ${open ? "open" : ""}`} aria-label={tr("Menu")}>
       <div className="rail-logo">
         <div className="mark">
           <Heart size={20} fill="currentColor" />
@@ -124,9 +130,12 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
           EquiCare
           <small>BHARAT SPORTS VENTURE</small>
         </div>
+        <button className="icon-btn rail-close" onClick={onClose} aria-label={tr("Close menu")}>
+          <X size={18} />
+        </button>
       </div>
 
-      <nav className="nav">
+      <nav className="nav" ref={navRef}>
         {SECTIONS.map((sec) => {
           const items = sec.items.filter(canSee);
           return items.length ? (
@@ -393,12 +402,26 @@ function TopBar() {
 
 export default function Layout({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+  const { t: tr } = useT();
+  // The phone menu: closes on a page change, on Escape and on a tap outside,
+  // and the page behind it does not scroll while it is open.
+  useEffect(() => { setOpen(false); }, [pathname]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", onKey);
+    document.body.classList.add("menu-open");
+    return () => { document.removeEventListener("keydown", onKey); document.body.classList.remove("menu-open"); };
+  }, [open]);
   return (
     <div className="app-shell">
       <Rail open={open} onClose={() => setOpen(false)} />
+      {open && <div className="rail-scrim" onClick={() => setOpen(false)} aria-hidden="true" />}
       <main className="main">
         <div className="mobile-bar">
-          <button className="icon-btn" onClick={() => setOpen((o) => !o)}>
+          <button className="icon-btn" onClick={() => setOpen((o) => !o)} aria-label={tr(open ? "Close menu" : "Open menu")}
+            aria-expanded={open} aria-controls="app-menu">
             {open ? <X size={19} /> : <Menu size={19} />}
           </button>
           <b style={{ fontFamily: "var(--font-display)" }}>EquiCare</b>

@@ -91,7 +91,7 @@ export default function Guide() {
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14, alignItems: "center" }}>
-        <div className="theme-toggle" style={{ flexWrap: "wrap", borderRadius: 14 }}>
+        <div className="theme-toggle guide-tabs" style={{ flexWrap: "wrap", borderRadius: 14 }}>
           <button className={group === "all" ? "on" : ""} onClick={() => setGroup("all")}>All</button>
           {GROUPS.map((g) => (
             <button key={g.key} className={group === g.key ? "on" : ""} onClick={() => setGroup(g.key)}>{g.name}</button>

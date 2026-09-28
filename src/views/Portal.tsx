@@ -101,7 +101,7 @@ export default function Portal() {
       </div>
 
       {/* summary */}
-      <div className="grid cols-3" style={{ marginBottom: 22 }}>
+      <div className="grid cols-3 kpi-row" style={{ marginBottom: 22 }}>
         <Summary icon={<Heart size={20} />} tone="ok" value={String(myHorses.length)} label="My horses" />
         <Summary icon={<IndianRupee size={20} />} tone="warn" value={inr(outstanding)} label="Outstanding balance" />
         <Summary icon={<Bell size={20} />} tone={myAlerts.length ? "alert" : "ok"} value={String(myAlerts.length)} label="Open alerts" />
@@ -335,7 +335,7 @@ function Summary({
       <div className="flex gap-md center">
         <div className={`sev-chip ${tone}`}>{icon}</div>
         <div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, color }}>{value}</div>
+          <div className="kpi-value" style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, color }}>{value}</div>
           <span className="muted" style={{ fontSize: 12.5 }}>
             {label}
           </span>

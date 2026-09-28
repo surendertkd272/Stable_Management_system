@@ -210,7 +210,7 @@ export default function Hardware() {
         </div>
       )}
 
-      <div className="grid cols-4" style={{ marginBottom: 22 }}>
+      <div className="grid cols-4 kpi-row" style={{ marginBottom: 22 }}>
         <Stat icon={<Server size={20} />} label="Edge boxes online"
           value={devices ? `${edges.filter((e) => e.status.state === "online").length}/${edges.length}` : "—"} />
         <Stat icon={<Wifi size={20} />} label="Devices reporting"
@@ -297,7 +297,7 @@ function Stat({ icon, label, value }: { icon: ReactNode; label: string; value: s
       <div className="top">
         <div className="chip">{icon}</div>
       </div>
-      <div className="value" style={{ fontSize: 32 }}>
+      <div className="value kpi-value" style={{ fontSize: 32 }}>
         {value}
       </div>
       <div className="foot">

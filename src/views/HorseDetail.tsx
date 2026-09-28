@@ -8,7 +8,7 @@ import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, 
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour } from "../data/api";
-import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand } from "../components/ui";
+import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand, details } from "../components/ui";
 
 const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
   { icon: "feed", label: "Feed change" },
@@ -110,17 +110,7 @@ export default function HorseDetail() {
       {/* hero */}
       <div className="card" style={{ marginBottom: 24 }}>
         <div className="flex gap-md wrap" style={{ alignItems: "stretch" }}>
-          <div
-            style={{
-              width: 200,
-              minWidth: 160,
-              flex: "0 0 auto",
-              borderRadius: "var(--radius-inner)",
-              backgroundImage: `url(${horse.photo})`,
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-            }}
-          />
+          <div className="hero-photo" role="img" aria-label={horse.name} style={{ backgroundImage: `url(${horse.photo})` }} />
           <div className="grow" style={{ minWidth: 220 }}>
             <div className="flex between center wrap" style={{ gap: 10 }}>
               <h2 style={{ fontFamily: "var(--font-display)", fontSize: 26, color: "var(--ink)" }}>{horse.name}</h2>
@@ -130,7 +120,7 @@ export default function HorseDetail() {
               </div>
             </div>
             <p className="muted" style={{ marginTop: 4 }}>
-              {horse.breed} · {horse.sex} · {horse.age} · Stall {horse.stall}
+              {details(horse.breed, horse.sex, horse.age, `Stall ${horse.stall}`)}
             </p>
             <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
               Owner: {horse.owner}

@@ -20,6 +20,7 @@ const HI: Record<string, string> = {
   // top bar
   "Add horse": "घोड़ा जोड़ें", "Search horses": "घोड़े खोजें", Notifications: "सूचनाएँ", "Sign out": "साइन आउट",
   Light: "हल्का", Dark: "गहरा", Back: "वापस", Close: "बंद करें", Save: "सहेजें", Cancel: "रद्द करें",
+  Menu: "मेनू", "Open menu": "मेनू खोलें", "Close menu": "मेनू बंद करें",
   // status
   Calm: "शांत", Watch: "नज़र रखें", Urgent: "तुरंत", calm: "शांत", watch: "नज़र रखें", urgent: "तुरंत",
   prototype: "प्रोटोटाइप", "not measured": "मापा नहीं गया", "Not measured": "मापा नहीं गया",
