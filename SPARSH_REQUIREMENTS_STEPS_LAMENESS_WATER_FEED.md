@@ -363,7 +363,7 @@ nothing implanted.
 ## 10. What we need from Sparsh
 
 1. **For each device (A–F):** datasheet, **the actual protocol document / register map**, and a
-   **sample data file recorded from the exact model** you would supply.
+   **sample data file recorded from the exact model and firmware** you would supply.
 2. **Your answer to every requirement row** above (C1–C10, S1–S11, H1–H12, L1–L9, W1–W10,
    F1–F10, M1–M11): the value you meet, or **"not supported"**. A row left blank is recorded as not
    supported.
@@ -374,11 +374,6 @@ nothing implanted.
    1 charging dock, 1 water meter (or weighed bucket), 1 weigh-back feeder, 1 hay load cell —
    with **availability and lead time**.
 5. A **named technical contact** for clarifications.
-
-**One request from the camera integration:** the camera documentation described one protocol
-(ISAPI) while the unit runs another (JSON-RPC), and the SDK arrived for x86-64 only. So please
-send the **documents and sample data for the exact model and firmware you will ship**, and say
-plainly where something is not available. That lets us plan correctly from the start.
 
 *Commercial terms are not part of this document — we will discuss them once the technical fit
 is confirmed.*
