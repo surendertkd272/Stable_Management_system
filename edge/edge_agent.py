@@ -48,7 +48,7 @@ PROFILES = {
     "noor":   dict(resp_offset=10),                                 # elevated resp -> watch
     "raja":   dict(vice="crib_biting"),                             # vice -> ok note, calm
     "meher":  dict(backfill_days=10),                               # still learning baseline
-    "sultan": dict(),                                               # calm
+    "sultan": dict(lame_lf_days=4),                                 # calm; left-fore lameness developing over 4 days
     "laila":  dict(temp_offset=1.2),                                # fever -> urgent
 }
 
@@ -162,13 +162,36 @@ def reading(horse_id, stall, metric, value, unit, ts, source, conf=0.95, meta=No
 # --------------------------------------------------------------------------- #
 # simulation
 # --------------------------------------------------------------------------- #
+def _iso(t):
+    return t.replace(microsecond=0).isoformat() + "Z"
+
+
+def _limb(head, pelvis):
+    """Which leg, from the trot asymmetries — the rule server/gait.mjs applies
+    (noise floors ~5 mm head, ~3 mm pelvis; positive = the left limb)."""
+    h = max(head, key=abs) if head else 0.0
+    pv = max(pelvis, key=abs) if pelvis else 0.0
+    hs, ps = abs(h) / 5.0, abs(pv) / 3.0
+    if max(hs, ps) <= 1:
+        return None
+    if hs >= ps:
+        return "LF" if h > 0 else "RF"
+    return "LH" if pv > 0 else "RH"
+
+
 def sim_hour(horse_id, stall, when, p):
-    """All-12-point readings for one horse for one clock hour."""
+    """All-12-point readings for one horse for the clock hour ending at `when`.
+
+    Events inside the hour (drinks, meals, exercise) are stamped back from
+    `when`, never after it, so the live tick never writes the future."""
     hour = when.hour
     night = hour < 6 or hour >= 20
-    ts = when.replace(microsecond=0).isoformat() + "Z"
+    ts = _iso(when)
+    back = lambda minutes: when - dt.timedelta(minutes=minutes)  # noqa: E731
     out = []
-    R = lambda m, v, u, s, **k: out.append(reading(horse_id, stall, m, v, u, ts, s, **k))
+
+    def R(m, v, u, s, at=None, **k):
+        out.append(reading(horse_id, stall, m, v, u, _iso(at) if at else ts, s, **k))
 
     # 2 body temperature (eye region, thermal)
     R("body_temp_c", 37.6 + p.get("temp_offset", 0) + random.uniform(-0.15, 0.2), "°C", "thermal_camera")
@@ -185,21 +208,78 @@ def sim_hour(horse_id, stall, when, p):
     R("rest_minutes", lying, "min", "imu_optical")
     if not night and 8 <= hour <= 17 and random.random() < 0.5:
         R("outside_minutes", random.uniform(20, 55), "min", "optical")
-    # 1 steps (IMU)
-    R("steps", (20 if night else 140) * (2 if p.get("restless") else 1) + random.uniform(0, 40), "count", "imu")
-    # 7 lameness / gait asymmetry (sampled a few times/day)
+
+    # Exercise, once a day for most horses (hour by horse), on the wearable:
+    # a session with its trots analysed for lameness (§1 shapes, prototype).
+    steps = (20 if night else 140) * (2 if p.get("restless") else 1) + random.uniform(0, 40)
+    ex_hour = 9 + sum(map(ord, horse_id)) % 3
+    if hour == ex_hour and random.random() < 0.85:
+        minutes = random.uniform(30, 50)
+        start = back(55)
+        trot = random.uniform(10, 20)
+        strides = minutes * 60 * random.uniform(0.8, 0.95)       # walk ~1 Hz, trot ~1.4 Hz, some standing
+        ex_steps = round(strides * 4)                            # tagged leg's strikes × 4 legs
+        dist = (minutes - trot) * 60 * 1.6 + trot * 60 * 3.5     # walk 1.6 m/s, trot 3.5 m/s
+        steps += ex_steps
+        R("exercise_session", minutes, "min", "imu", at=start,
+          meta={"start": _iso(start), "end": _iso(start + dt.timedelta(minutes=minutes)), "steps": ex_steps,
+                "distanceM": round(dist), "trotMin": round(trot, 1), "prototype": True})
+        # Left-fore lameness developing: the head drops less when the sore
+        # leg lands (positive head asymmetry), growing over `lame_lf_days`.
+        lame = 0.0
+        if p.get("lame_lf_days"):
+            now = p.get("_now") or dt.datetime.utcnow()
+            onset = now - dt.timedelta(days=p["lame_lf_days"])
+            lame = min(1.0, max(0.0, (when - onset).total_seconds() / (p["lame_lf_days"] * 86400)))
+        for at_min in (12, 28):
+            head = [3 + 14 * lame + random.uniform(-2, 2), 1 + 6 * lame + random.uniform(-2, 2)]
+            pelvis = [random.uniform(-2.5, 2.5), random.uniform(-2.5, 2.5)]
+            if not lame:
+                head = [random.uniform(-4, 4), random.uniform(-4, 4)]
+            R("lameness_result", max(abs(x) for x in head + pelvis), "mm", "imu", at=start + dt.timedelta(minutes=at_min),
+              meta={"limb": _limb(head, pelvis),
+                    "head": {"minDiffMm": round(head[0], 1), "maxDiffMm": round(head[1], 1)},
+                    "pelvis": {"minDiffMm": round(pelvis[0], 1), "maxDiffMm": round(pelvis[1], 1)},
+                    "strides": random.randint(18, 36), "durationS": random.randint(14, 30), "prototype": True})
+    # 1 steps (IMU leg tag) — prototype until validated, so the colic rule
+    # does not lean on them
+    R("steps", steps, "count", "imu", at=back(60), meta={"sensor": "leg", "periodMin": 60, "prototype": True})
+    # Wearable status: battery by charge cycle (the SIM hub, with GPS, runs
+    # down fastest), signal = LTE for the hub, Bluetooth to the hub for tags.
+    k = sum(map(ord, horse_id))
+    hours = int(when.timestamp() // 3600)
+    for sensor, cycle, dbm in (("leg", 120, -68), ("head", 72, -85), ("pelvis", 168, -70)):
+        frac = ((hours + k * 7) % cycle) / cycle
+        R("device_status", 100 - 85 * frac, "%", "imu",
+          meta={"sensor": sensor, "hardwareId": f"SIM-{horse_id.upper()}-{sensor.upper()}",
+                "signalDbm": round(dbm + random.uniform(-6, 6)), "attached": True, "firmware": "sim-1.0"})
+    # 7 lameness / gait asymmetry (legacy index, sampled a few times/day)
     if random.random() < 0.15:
         R("gait_asymmetry", max(0, 0.08 + p.get("gait_offset", 0) + random.uniform(-0.03, 0.05)), "0..1", "imu_optical", conf=0.8)
-    # 9 water — a few visits/day
-    if random.random() < (0.35 if not night else 0.1):
-        ml = random.uniform(2500, 4500) * p.get("water_scale", 1.0)
-        R("water_visit", 1, "event", "flow_meter")
-        R("water_ml", ml, "ml", "flow_meter")
-    # 10 feed — at feed slots
-    if hour in (7, 12, 18):
-        given = random.uniform(1800, 2400)
-        R("feed_intake_g", given, "g", "feeder")
-        R("feed_refusal_g", max(0, random.uniform(-200, 400)), "g", "feeder")
+    # 9 water — drinking bouts (a visit + its ml, stamped at the bout start)
+    for chance in ((0.55, 0.15) if not night else (0.2,)):
+        if random.random() < chance:
+            ml = round(random.uniform(1500, 4000) * p.get("water_scale", 1.0))
+            at = back(random.uniform(1, 59))
+            meta = {"ml": ml, "durationS": round(ml / random.uniform(40, 80)),
+                    "boutId": f"sim-{horse_id}-{at.strftime('%Y%m%dT%H%M%S')}"}
+            R("water_visit", 1, "event", "flow_meter", at=at, meta=meta)
+            R("water_ml", ml, "ml", "flow_meter", at=at, meta=dict(meta))
+    if hour in (6, 16) and random.random() < 0.8:                # staff refilling the bucket
+        R("water_refill", random.uniform(8000, 16000), "ml", "flow_meter", at=back(random.uniform(5, 50)))
+    # 10 feed — meals offered / eaten / left, stamped at the fill
+    meal = {7: "morning", 12: "midday", 18: "evening"}.get(hour)
+    if meal:
+        at = back(50)
+        offered = random.uniform(1800, 2400)
+        refused = min(offered, max(0, random.uniform(-200, 400)))
+        meta = {"meal": meal, "mealId": f"sim-{horse_id}-{at.strftime('%Y%m%dT%H%M')}-{meal}"}
+        R("feed_offered_g", offered, "g", "feeder", at=at, meta=meta)
+        R("feed_intake_g", offered - refused, "g", "feeder", at=at, meta=dict(meta))
+        R("feed_refusal_g", refused, "g", "feeder", at=at, meta=dict(meta))
+    # hay from the weighed net, per hour
+    hay = random.uniform(150, 350) if night else random.uniform(350, 600)
+    R("hay_intake_g", hay * p.get("hay_scale", 1.0), "g", "feeder", at=back(60), meta={"periodMin": 60})
     # 8 vices (optical+audio)
     if p.get("vice") and random.random() < 0.12:
         R("vice_event", 1, "event", "optical_audio", conf=0.7, meta={"kind": p["vice"]})
@@ -215,7 +295,7 @@ def simulate(api_url, backfill_days, live, interval, token=""):
     now = dt.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     total = 0
     for hid, stall in ROSTER:
-        p = PROFILES.get(hid, {})
+        p = dict(PROFILES.get(hid, {}), _now=now)
         days = p.get("backfill_days", backfill_days)
         start = now - dt.timedelta(days=days)
         t = start
@@ -236,7 +316,7 @@ def simulate(api_url, backfill_days, live, interval, token=""):
         when = dt.datetime.utcnow().replace(second=0, microsecond=0)
         batch = []
         for hid, stall in ROSTER:
-            batch.extend(sim_hour(hid, stall, when, PROFILES.get(hid, {})))
+            batch.extend(sim_hour(hid, stall, when, dict(PROFILES.get(hid, {}), _now=now)))
         enqueue(batch)
         a, d = flush(api_url, token)
         print(f"[edge] tick {when.isoformat()}Z -> accepted {a}")
@@ -577,6 +657,166 @@ def modbus_read(host, port, unit, fn, address, count, timeout=4.0):
     if len(regs) < count:
         raise IOError(f"asked for {count} registers, got {len(regs)}")
     return regs
+
+
+# Modbus RTU over RS-485 — stall sensors (load cells, meters) often have no
+# network port, only a two-wire bus to the edge box's USB adapter. The framing
+# and CRC are ours (a few lines, pinned by edge/modbus_test.py); pyserial only
+# opens the port, so the rest of the agent keeps working without it.
+MODBUS_EXCEPTIONS = {1: "illegal function", 2: "illegal data address", 3: "illegal data value", 4: "device failure"}
+
+
+class NoReply(IOError):
+    """The line is fine, the sensor is silent (wiring, address, baud)."""
+
+
+def crc16(data):
+    """Modbus CRC-16 (reflected 0xA001, start 0xFFFF). Sent low byte first."""
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
+
+
+def rtu_request(unit, fn, address, count):
+    body = struct.pack(">BBHH", unit, fn, address, count)
+    return body + struct.pack("<H", crc16(body))
+
+
+def rtu_parse(frame, unit, fn, count):
+    """Registers from one reply frame, or an error staff can act on."""
+    if len(frame) < 5:
+        raise IOError(f"reply too short ({len(frame)} bytes)")
+    body = frame[:-2]
+    if crc16(body) != struct.unpack("<H", frame[-2:])[0]:
+        raise IOError("garbled reply (CRC error) — check the RS-485 wiring and the 120 Ω terminator, "
+                      "and that no two sensors share one unit address")
+    if body[0] != unit:
+        raise IOError(f"reply from unit {body[0]}, expected {unit} — two sensors at one address?")
+    if body[1] == fn | 0x80:
+        raise IOError(f"Modbus exception {body[2]} ({MODBUS_EXCEPTIONS.get(body[2], 'unknown')}) — "
+                      "check the register address and function")
+    if body[1] != fn or len(body) != 3 + body[2]:
+        raise IOError("unexpected reply — another master on the RS-485 line?")
+    regs = struct.unpack(">" + "H" * (body[2] // 2), body[3:3 + body[2] // 2 * 2])
+    if len(regs) < count:
+        raise IOError(f"asked for {count} registers, got {len(regs)}")
+    return regs
+
+
+def open_serial(path, baud, parity, stop_bits, timeout):
+    """The serial port, via pyserial — imported here so only a box with RS-485
+    sensors needs it installed."""
+    try:
+        import serial  # noqa: PLC0415
+    except ImportError:
+        raise RuntimeError("RS-485 (Modbus RTU) sensors need pyserial on the edge box: "
+                           "pip3 install pyserial") from None
+    return serial.Serial(path, baudrate=baud, bytesize=8, parity=parity, stopbits=stop_bits, timeout=timeout)
+
+
+class RtuBus:
+    """One RS-485 line. Several sensors (unit ids) share it, each polled by its
+    own worker thread, so every request/reply holds the line: two frames
+    interleaved on the wire corrupt both."""
+
+    def __init__(self, path, baud=9600, parity="N", stop_bits=1, timeout=1.0):
+        self.path, self.settings, self.timeout = path, (baud, parity, stop_bits), timeout
+        self.lock = threading.Lock()
+        self.users = set()
+        self.ser = None
+        # A frame ends after 3.5 character times of silence (11 bits each);
+        # the standard fixes 1.75 ms above 19200 baud.
+        self.gap = 1.75e-3 if baud > 19200 else 3.5 * 11 / baud
+
+    def describe(self):
+        baud, parity, stop = self.settings
+        return f"{self.path} at {baud} 8{parity}{stop}"
+
+    def _read(self, n, unit):
+        data = b""
+        while len(data) < n:
+            chunk = self.ser.read(n - len(data))
+            if not chunk:
+                raise NoReply(f"no reply from unit {unit} on {self.describe()} — check the A/B wiring, "
+                              "the sensor's unit address, baud rate and parity")
+            data += chunk
+        return data
+
+    def read_registers(self, unit, fn, address, count):
+        if unit == 0:
+            raise IOError("unit id 0 is the RS-485 broadcast address — nothing replies to it; "
+                          "set the sensor's own address (1–247)")
+        with self.lock:
+            try:
+                if self.ser is None:
+                    self.ser = open_serial(self.path, *self.settings, self.timeout)
+                self.ser.reset_input_buffer()      # a late reply to an earlier request is not this one's
+                self.ser.write(rtu_request(unit, fn, address, count))
+                head = self._read(3, unit)
+                # A transceiver turning the line round can leave a stray byte
+                # in front of the reply.
+                for _ in range(3):
+                    if head[0] == unit:
+                        break
+                    head = head[1:] + self._read(1, unit)
+                frame = head + self._read(2 if head[1] & 0x80 else head[2] + 2, unit)
+            except OSError as e:
+                if not isinstance(e, NoReply):
+                    self.close()                   # unplugged adapter: reopen on the next poll
+                raise
+            finally:
+                time.sleep(self.gap)
+        return rtu_parse(frame, unit, fn, count)
+
+    def close(self):
+        if self.ser is not None:
+            try:
+                self.ser.close()
+            except Exception:                                   # noqa: BLE001
+                pass
+            self.ser = None
+
+
+_RTU_BUSES, _RTU_LOCK = {}, threading.Lock()
+
+
+def rtu_bus_for(dev):
+    """The shared line for this sensor's serial port. Every sensor on one line
+    must use the same settings — refused clearly rather than flipping the
+    port between them."""
+    path = dev.get("serialPort")
+    if not path:
+        raise IOError("RS-485 sensor without a serial port — set it in the Hardware page (e.g. /dev/ttyUSB0)")
+    want = (int(dev.get("baud") or 9600), str(dev.get("parity") or "N").upper(), int(dev.get("stopBits") or 1))
+    with _RTU_LOCK:
+        bus = _RTU_BUSES.get(path)
+        if bus is not None and bus.settings != want:
+            if bus.users - {dev["id"]}:
+                raise IOError(f"{bus.describe()} is already used by another sensor — every sensor on one "
+                              "RS-485 line needs the same baud rate, parity and stop bits")
+            bus.close()
+            bus = None
+        if bus is None:
+            bus = _RTU_BUSES[path] = RtuBus(path, *want)
+        bus.users.add(dev["id"])
+        return bus
+
+
+def rtu_bus_release(dev_id):
+    with _RTU_LOCK:
+        for path, bus in list(_RTU_BUSES.items()):
+            bus.users.discard(dev_id)
+            if not bus.users:
+                with bus.lock:
+                    bus.close()
+                del _RTU_BUSES[path]
+
+
+def modbus_read_rtu(dev, unit, fn, address, count):
+    return rtu_bus_for(dev).read_registers(unit, fn, address, count)
 
 
 class NoRois(RuntimeError):
@@ -1238,28 +1478,85 @@ def camera_worker_for(dev, sink, window_s):
     return (MtrpcCameraWorker if proto == "mtrpc" else CameraWorker)(dev, sink, window_s)
 
 
+# Register `use` -> which intake processor turns its values into events
+# (edge/intake.py), and the source those events carry.
+USE_SOURCE = {"flow": "flow_meter", "bucket": "flow_meter", "feed_bowl": "feeder", "hay": "feeder", "fault": "feeder"}
+# The processors work in grams / ml; a register scaled to kg or litres in the
+# portal is converted here.
+TO_GRAMS = {"kg": 1000, "l": 1000, "litre": 1000, "litres": 1000, "liter": 1000, "liters": 1000}
+
+
+def iso_at(t):
+    return dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class ModbusWorker(Worker):
-    """Any Modbus/TCP sensor, per its register map.
+    """Any Modbus sensor, per its register map — over TCP, or RTU on an RS-485
+    line (`transport: "rtu"`, serialPort / baud / parity / stopBits).
 
     'gauge' registers report their value; 'counter' registers (a flow meter's
     running total) report the increase since the last poll. The first poll only
     sets the baseline, and a counter that goes backwards (meter reset, rollover)
-    re-baselines instead of reporting a negative intake."""
+    re-baselines instead of reporting a negative intake.
+
+    A register with a `use` is not reported value by value: its readings go
+    through an intake processor that keeps state across polls — "flow" (meter
+    total -> drinking bouts), "bucket" (weighed bucket -> bouts and refills),
+    "feed_bowl" (weigh-back bowl -> offered / eaten / left per meal), "hay"
+    (weighed net -> hay eaten per hour), "fault" (fault code -> feeder_fault).
+    Its `metric` is then ignored: the processor decides what it measured."""
 
     def __init__(self, dev, sink):
         super().__init__(dev, sink)
         self.last = {}
+        self.procs = {}            # register name -> (use, intake processor)
+        self.clock = time.time
+
+    def read(self, addr, count):
+        d = self.dev
+        if d.get("transport") == "rtu":
+            return modbus_read_rtu(d, d.get("unitId", 1), d.get("function", 3), addr, count)
+        return modbus_read(d["host"], d.get("port", 502), d.get("unitId", 1), d.get("function", 3), addr, count)
+
+    def processor(self, reg):
+        use = reg["use"]
+        have = self.procs.get(reg["name"])
+        if have is not None and have[0] == use:
+            return have[1]
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import intake  # noqa: PLC0415
+        if use not in intake.PROCESSORS:
+            raise ValueError(f"unknown register use \"{use}\" (one of {', '.join(intake.PROCESSORS)})")
+        key = f"{self.dev['id']}:{reg['name']}"
+        proc = (intake.FeederFault(key, codes=reg.get("faultCodes")) if use == "fault"
+                else intake.PROCESSORS[use](key))
+        self.procs[reg["name"]] = (use, proc)
+        return proc
+
+    def intake_readings(self, use, events):
+        return [dict(deviceId=self.dev["id"], metric=e["metric"], value=e["value"], unit=e["unit"],
+                     ts=iso_at(e["t"]), source=USE_SOURCE[use], confidence=0.9,
+                     **({"meta": e["meta"]} if e.get("meta") else {}))
+                for e in events]
 
     def run_once(self):
-        d, out, ts = self.dev, [], now_iso()
-        errors = []
+        d, out, ts, t = self.dev, [], now_iso(), self.clock()
+        errors, fed = [], set()
         for reg in d.get("registers", []):
             try:
                 addr = reg["address"] - 1 if d.get("addressing") == "one-based" else reg["address"]
-                regs = modbus_read(d["host"], d.get("port", 502), d.get("unitId", 1), d.get("function", 3),
-                                   addr, MODBUS_TYPES[reg["type"]])
+                regs = self.read(addr, MODBUS_TYPES[reg["type"]])
                 raw = modbus_decode(regs, reg["type"], reg.get("wordOrder", "high-first"))
                 value = raw * reg.get("scale", 1) + reg.get("offset", 0)
+                if reg.get("use"):
+                    if value != value or value in (float("inf"), float("-inf")):
+                        raise ValueError("the sensor sent no number (NaN) — check its wiring or its error register")
+                    proc = self.processor(reg)
+                    if reg["use"] != "fault":
+                        value *= TO_GRAMS.get(str(reg.get("unit") or "").lower(), 1)
+                    out += self.intake_readings(reg["use"], proc.add(t, value))
+                    fed.add(reg["name"])
+                    continue
             except Exception as e:                              # noqa: BLE001
                 errors.append(f"{reg.get('name')}: {e}")
                 continue
@@ -1271,10 +1568,28 @@ class ModbusWorker(Worker):
                 value = value - prev
             out.append(dict(deviceId=d["id"], metric=reg["metric"], value=round(value, 4), unit=reg.get("unit"),
                             ts=ts, source="modbus", confidence=0.95))
+        # A register that failed this round still closes what is due (a
+        # drinking bout whose 60 s gap has passed).
+        for name, (use, proc) in self.procs.items():
+            if name not in fed:
+                out += self.intake_readings(use, proc.tick(t))
         self.emit(out)
         if errors:
             raise RuntimeError("; ".join(errors)[:300])
         self.stop_evt.wait(d.get("pollSeconds", 10))
+
+    def warnings(self):
+        return [w for _, p in self.procs.values() if (w := getattr(p, "warning", None))]
+
+    def describe(self, e):
+        if self.dev.get("transport") == "rtu":
+            return str(e) or type(e).__name__               # RTU errors already name the port
+        return super().describe(e)
+
+    def stop(self):
+        super().stop()
+        if self.dev.get("transport") == "rtu":
+            rtu_bus_release(self.dev["id"])
 
 
 class EdgeRuntime:
@@ -1319,7 +1634,7 @@ class EdgeRuntime:
     def _fingerprint(d):
         keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
                 "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol", "rtspPort",
-                "behaviourStream", "colourStream")
+                "behaviourStream", "colourStream", "transport", "serialPort", "baud", "parity", "stopBits")
         return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
 
     def apply(self, cfg):
