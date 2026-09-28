@@ -160,6 +160,30 @@ footage from this camera at real stalls, with events marked.
 
 Ask the stable's permission before recording, and switch it off when not needed.
 
+**Colour detail** (Hardware → edit the camera): *Full HD* records the camera's
+1920 × 1080 colour stream instead of 704 × 576 — sharper footage to zoom into
+while labelling, and sharper report photos; files are several times larger.
+The measurements are the same either way; whether full HD helps breathing from
+the flank (less compression) is to be tested at the stall.
+
+## Live view zoom
+
+On **Live view**, scroll or pinch on either picture (or use **+**) to zoom
+towards the pointer, drag to move, double-click to zoom in. With **Zoom both
+pictures together** the thermal and colour pictures show the same spot. The
+pictures are the camera's full-resolution snapshots, so zooming shows real
+detail. It changes only what you see — not the recording or the measurements.
+
+## Client report (no terminal needed)
+
+**Session report** → pick the horse and the window → type any **notes from
+the stable** (feeding, visitors, anything seen) → **Client report**. A new tab
+opens with the five-page report; **Save as PDF** there (in the print window
+choose "Save as PDF"). Everything in it comes from the measurements: photos
+from the recording where the eye was in view, plain statements of what was and
+was not captured, and your notes shown as the stable's own. The same report
+from a terminal: `node tools/client_report_html.mjs --horse <id> --from <time> --minutes 60 --pdf`.
+
 ## What the behaviour models can and cannot do (tested 26 Sep)
 
 - **Activity (movement) is sound.** Checked against zoologists' labels on
