@@ -1,8 +1,8 @@
-# RFI — IMU leg wearable for equine monitoring (BSV EquiCare)
+# RFI — Equine motion sensors with live mobile data (LTE-M / NB-IoT) (BSV EquiCare)
 
 **To:** IMU / wearable-sensor vendor
 **From:** Bharat Sports Venture — EquiCare engineering
-**Covers client monitoring points:** 1 (steps / locomotion), 5 (activity), 6 (rest & lying), 7 (lameness / limb-favouring)
+**Covers client monitoring points:** steps/locomotion · general activity/abnormalities · resting pattern and duration · lameness/limb-favoring
 
 ---
 
@@ -32,34 +32,55 @@ one that unravels at integration.
 
 ## 1. What we are building
 
-A 24/7 monitoring system for stabled horses in India. Each stall has sensors feeding an
-**on-site edge computer** (NVIDIA Jetson); our software turns raw data into health and
-behaviour insights. We need a **leg-mounted IMU tag** (cannon bone) streaming **raw motion
-data** to that edge box.
+A 24/7 monitoring system for stabled horses in India. Our software turns raw motion data into
+steps, activity, lying time and lameness measures. **All analytics are done by us** — we are not
+buying your algorithms or dashboard. We need **raw, timestamped, per-axis data** and a documented
+way to receive it.
 
-**All analytics — step counting, gait analysis, lameness, lying detection — are done by us.**
-We are not buying your algorithms or dashboard. We need **raw, timestamped, per-axis data**
-and a documented way to read it on our own hardware.
+The data must be **live both in the barn and when the horse leaves it** — for an hour or more of
+exercise in an arena, on the lunge or out on a ride. So the horse's sensors must reach us over the
+**mobile network (LTE-M and/or NB-IoT)**, sending **directly to our own server in India**, not
+only to a gateway in the barn.
 
-## 2. Hard requirements — please confirm these first
+## 2. The sensor set we want quoted
+
+We are asking for **three devices per horse**. The split keeps weight off the leg, and puts
+sensors where lameness is measured: horses with a sore front leg **nod the head** when that leg
+lands, and horses with a sore hind leg **hike the hip** on that side. Measuring head and pelvic
+movement is the approach used by veterinary lameness systems.
+
+| Device | Worn | When | What it does |
+|---|---|---|---|
+| **A. Leg tag** | One front **cannon bone** (strap or boot pocket) | 24/7 | Steps, activity, standing / lying, that leg's stride timing. Light: **target ≤50 g**. |
+| **B. Halter hub with SIM** | On the **halter** (cheek piece or poll strap) | 24/7 | Relays A and C **live over LTE-M / NB-IoT**. Its own IMU measures **head movement** (front-leg lameness). **Target ≤150 g** (our target — state yours). |
+| **C. Pelvis sensor** | Over the **sacrum** (croup), on a pad, roller/surcingle or adhesive mount | Exercise and trot-ups | **Pelvic movement** (hind-leg lameness). |
+
+**Alternative:** if you offer an **all-in-one SIM leg tag**, please quote it as well, with its
+weight and battery life; we will compare it with the set above.
+
+**Reply (which devices you can supply, as-is or adapted):**
+
+## 3. Hard requirements — please confirm these first
 
 Pass/fail for us. If any cannot be met, please say so plainly rather than leaving it blank —
 it saves us both time.
 
 | # | Requirement | Why |
 |---|---|---|
-| **H1** | **Linux ARM64 (aarch64) support — NVIDIA Jetson.** Any SDK/driver must be *built and tested* for aarch64, not only x86-64. | Our edge box is a Jetson. A previous vendor shipped x86-only binaries and could not rebuild — it blocked us for weeks. If your tag speaks an open protocol (BLE GATT / serial / MQTT), say so and this is a non-issue. |
-| **H2** | **Raw per-axis time-series accessible** — not only step counts or vendor-computed summaries. | Our gait/lameness models need the waveform. A closed product that only returns "activity score" cannot work for us. |
-| **H3** | **No mandatory vendor cloud.** Data must reach our edge box over the local network. | India DPDP-2023 residency, and barns with unreliable internet. |
-| **H4** | **India WPC/ETA radio approval + BIS.** | Legal deployment requirement. |
+| **H1** | **Live data over LTE-M and/or NB-IoT on Indian networks**, with a fallback (e.g. LTE Cat-1 / Cat-1 bis) where those are not available. State the **networks and bands you have tested in India**. | The horse must stay monitored when it leaves the barn. LTE-M coverage in India is limited; NB-IoT and a fallback matter. |
+| **H2** | **Direct to our server**: the device sends to an **endpoint we configure** (MQTT or HTTPS over TLS) using a **documented protocol** — no mandatory vendor cloud in the data path. | India DPDP-2023 residency; our data, our server. |
+| **H3** | **Raw per-axis time-series accessible** — not only step counts or vendor-computed summaries. (Live summaries over the mobile link with raw uploaded later is acceptable — see section 6.) | Our gait / lameness models need the waveform. |
+| **H4** | **India approvals**: **TEC (MTCTE)** where it applies to the cellular device, **WPC/ETA** for every radio (including the link between the devices), **BIS**. | Legal deployment requirement. |
+| **H5** | Any SDK, driver or software for our on-site computer must be **built and tested for Linux ARM64 (NVIDIA Jetson)** — or use an open protocol. | A previous vendor shipped x86-only binaries and could not rebuild — it blocked us for weeks. |
 
-**Reply (H1–H4):**
+**Reply (H1–H5):**
 
 ---
 
-## 3. Sensing
+## 4. Sensing
 
-Please answer with **specific values / part numbers**, not "yes — supported".
+Please answer with **specific values / part numbers**, not "yes — supported", for **each device
+(A, B, C)** where they differ.
 
 1. **Sensor part number(s) + datasheet.** Is it **6-axis** (3-axis accel + 3-axis gyro) or
    **9-axis** (with magnetometer)? *6-axis is our minimum; 9-axis preferred.*
@@ -74,22 +95,22 @@ Please answer with **specific values / part numbers**, not "yes — supported".
    clipping at trot, canter or kick.
    **Reply:**
 
-4. **Configurable output data rate (ODR).** We require **≥100 Hz, target 100–200 Hz**. State
-   supported rates, whether it is configurable **over the air**, and the achievable rate
-   *while streaming raw*.
+4. **Configurable output data rate (ODR).** We require **≥100 Hz; 200 Hz preferred for the head
+   and pelvis during trot**. State supported rates, whether they can be changed **remotely**, and
+   the achievable rate *while recording raw*.
    **Reply:**
 
 5. **Noise density / RMS noise** for accel and gyro at our target ODR. State any on-chip
    filtering and whether it can be bypassed.
    **Reply:**
 
-6. **Gyro bias drift with temperature** (Indian barns reach 45–50 °C), and whether the tag can
+6. **Gyro bias drift with temperature** (Indian barns reach 45–50 °C), and whether a device can
    be **recalibrated in the field without removing it** from the horse.
    **Reply:**
 
 7. **On-firmware activity classification** (standing / lying / walking / trotting / restless) —
    do you provide it, is it **equine-validated or generic**, and **can it be disabled**? We
-   classify on our edge, so we need raw data regardless; we do not want firmware quietly
+   classify ourselves, so we need raw data regardless; we do not want firmware quietly
    pre-filtering it.
    **Reply:**
 
@@ -101,102 +122,136 @@ Please answer with **specific values / part numbers**, not "yes — supported".
    indicator per sample or per batch, that we can carry into our data model?
    **Reply:**
 
-## 4. Data access and integration
-
-10. **How does raw data leave the tag?** State the transport (BLE GATT, Wi-Fi, proprietary
-    radio → gateway, USB, serial) and **attach the protocol/API documentation or register map
-    with this reply**, not later.
+10. **On-device summaries for the live link.** NB-IoT is too slow for continuous raw data. Can
+    the hub (or each device) compute and send, **live**, per-minute summaries — steps, activity,
+    lying/standing — and **per-stride** measures during trot (head and pelvis vertical-movement
+    asymmetry, stride duration)? Or does it only forward raw data? If summaries are fixed by
+    you, list them; if programmable, say how.
     **Reply:**
 
-11. **Streaming vs. batch.** Can the tag **stream continuously** at ≥100 Hz, or only upload
-    periodic batches? If batched, state interval, payload format and throughput.
+## 5. The live mobile link
+
+11. **Modem and networks.** Module part number; **LTE-M / NB-IoT / fallback** modes; **bands**;
+    networks you have **tested in India**; behaviour when no network is available.
     **Reply:**
 
-12. **Documented output schema and units** — exact field names and units for accel (g or m/s²)
-    and gyro (°/s or rad/s). Confirm it can be mapped to our contract:
-    `{horseId, metric, value, unit, ts, source, confidence}`. Is the schema versioned?
-    Sample payload welcome.
+12. **What is sent live, and how often.** Our target: summaries at least **once a minute** while
+    the horse is active, and an **alert immediately** (e.g. device removed, no movement for a long
+    time outdoors). State achievable intervals and **end-to-end latency** to our server.
     **Reply:**
 
-13. **BLE specifics** (if BLE): version (4.2 / 5.x), **Coded-PHY / Long-Range** support, TX
-    power, and **realistic range through masonry and steel barn structure** — not open-field
-    figures.
+13. **Protocol to our server.** MQTT or HTTPS; **TLS** version; **configurable endpoint and
+    credentials** (per device or per fleet); **attach the payload schema** and a sample. Confirm
+    it can be mapped to our contract `{horseId, metric, value, unit, ts, source, confidence}`.
+    Is the schema versioned?
     **Reply:**
 
-14. **Gateway** (if required): model, **how many tags per gateway at our raw sample rate**,
-    uplink (Ethernet/PoE preferred, Wi-Fi, 4G), and confirmation of a **local-only path to our
-    edge box**.
+14. **SIM.** Physical SIM or eSIM; can we use **our own SIM / operator**; multi-operator
+    profiles; who manages SIM provisioning. If you offer a connectivity platform, confirm it
+    **does not hold or relay our data**.
     **Reply:**
 
-15. **Any vendor cloud in the data path** — and if so, where are those servers located? Can
-    the entire path be **edge-only / on-premise with no data leaving India**?
+15. **Data volume and cost.** Expected **MB per horse per day** in each mode (in the barn, during
+    exercise), and the data plan you recommend.
     **Reply:**
 
-## 5. Time synchronisation
-
-16. **Are samples timestamped on the tag** or on receipt? State the **clock-sync method
-    (PTP preferred, NTP acceptable)**, worst-case **drift/skew between tags over 24 h**, and
-    whether the gateway can discipline tag clocks.
-    *We must align IMU data with video frames, thermal ROI temperatures and audio on one
-    timeline — we are targeting tens of milliseconds.*
+16. **Link between the devices** (A and C to the hub B): radio (BLE version, Coded-PHY?), range
+    on the horse, and what happens when the hub loses a device.
     **Reply:**
 
-## 6. Resilience and power
-
-17. **On-tag buffering** — we require **≥24 h** with **automatic backfill using the original
-    timestamps** and acknowledged delivery (barns lose power and connectivity). State capacity
-    in hours **at 100 Hz raw**.
+17. **In the barn.** Is there an optional **local path** (BLE / Wi-Fi to a gateway or our
+    on-site computer) that saves mobile data while the horse is in its stall? If so, how do the
+    devices switch between the local path and mobile?
     **Reply:**
 
-18. **Battery life** at each mode (lying-detection only vs 100–200 Hz raw streaming);
-    chemistry/mAh; rechargeable or replaceable; charge time and cycle life.
+## 6. Raw data, gaps and buffering
+
+18. **How raw data reaches us.** The raw 100–200 Hz waveforms (especially of exercise and
+    trot-ups): sent over the mobile link, or **offloaded in the barn** over BLE / Wi-Fi? State the
+    **delay** before we have the raw data of a session, and the data volume per hour of raw.
     **Reply:**
 
-19. **Charging operations for a whole yard** — multi-bay dock, hot-swap spares, how data gaps
-    during a swap are handled, and how a replacement tag is **re-bound to the same horse**.
+19. **On-device buffering** — we require **≥24 h on every device** with **automatic backfill
+    using the original timestamps** and acknowledged delivery. State capacity in **hours at
+    100 Hz raw**, and whether it stores **raw or only summaries** when it cannot send.
     **Reply:**
 
-## 7. Fit, welfare and environment
-
-20. **IP rating — we require IP67 or better**, validated against wash-down, mud, urine/manure
-    and sweat. State operating temperature and humidity range (we need 45 °C+ and monsoon).
+20. **The exercise scenario.** A horse leaves the barn for **1–2 hours** of exercise; mobile
+    coverage in the arena or on a ride is **patchy**. State exactly: what is **sent live**, what
+    is **stored**, how and when **gaps are filled**, and whether anything can be **lost**.
     **Reply:**
 
-21. **Attachment** to the cannon bone (strap / boot pocket), size range **pony → draft**, and
-    expected strap service life.
+## 7. Time synchronisation
+
+21. **Timestamps on the device** or on receipt? State the **time source** (network time, NTP
+    over the mobile link, GNSS), worst-case **drift over 24 h** while out of coverage, and how
+    closely the **three devices on one horse are aligned** with each other. *We relate head and
+    pelvis movement to the leg's stride, so we are targeting ≤10 ms between devices, and tens of
+    milliseconds against our camera video.*
     **Reply:**
 
-22. **Welfare** — tag weight and dimensions (*target ≤50 g*), and any 24/7 wear assessment
-    showing no rub sores or skin damage. Please share equine field-trial or welfare data.
+## 8. Location (optional)
+
+22. **GNSS in the hub** for position, speed and distance during exercise and rides: available?
+    Accuracy, power cost, and can it be **switched off** (privacy)?
     **Reply:**
 
-23. **Loss prevention** — **tamper/detach alert**, and your observed **tag-loss rate per
-    tag-year** in field deployments.
+## 9. Power
+
+23. **Battery life for each device in each mode** — hub with live reporting every 1 minute and
+    every 5 minutes; power-saving (PSM / eDRX) support; leg tag and pelvis sensor at 100–200 Hz
+    raw recording. Chemistry/mAh; rechargeable or replaceable; charge time and cycle life.
     **Reply:**
 
-## 8. Identity and fleet management
-
-24. **Globally unique immutable hardware ID** present in every record, and how we **bind
-    tag → horseId** via API (queryable mapping).
+24. **Charging operations for a whole yard** — multi-bay dock, hot-swap spares, how data gaps
+    during a swap are handled, and how a replacement device is **re-bound to the same horse**.
     **Reply:**
 
-25. **Fleet management** — firmware OTA, battery/health monitoring, remote configuration, and
-    and what data (if any) passes through systems you host.
+## 10. Fit, welfare and environment
+
+25. **IP rating — we require IP67 or better** on all three devices, validated against
+    wash-down, mud, urine/manure and sweat. State operating temperature and humidity range (we
+    need 45 °C+ and monsoon).
     **Reply:**
 
-## 9. Evaluation
+26. **Attachment** — leg tag to the cannon bone (sizes **pony → draft**), hub to a standard
+    halter, pelvis sensor over the sacrum (pad, roller or adhesive). Expected strap and mount
+    service life.
+    **Reply:**
 
-We would like **3–5 evaluation tags + 1 gateway + charging dock**, together with the
-**SDK/driver, protocol documentation and sample code** for Linux/ARM64, so we can validate on
-our Jetson bench before committing to a design.
+27. **Welfare** — weight and dimensions of each device, and any 24/7 wear assessment showing no
+    rub sores or skin damage (leg and halter). Please share equine field-trial or welfare data.
+    **Reply:**
+
+28. **Loss prevention** — **tamper / detach alert**, sent **live by the hub** when a leg tag or
+    pelvis sensor goes silent or comes off; your observed **device-loss rate per device-year**.
+    **Reply:**
+
+## 11. Identity and fleet management
+
+29. **Unique immutable hardware ID** in every record (plus IMEI/ICCID for the hub); how the three
+    devices are **paired** and how the set is **bound to a horseId** via API.
+    **Reply:**
+
+30. **Fleet management** — firmware **OTA over the mobile link**, battery/health monitoring,
+    remote configuration (sample rates, reporting interval), and what data (if any) passes
+    through systems you host.
+    **Reply:**
+
+## 12. Evaluation
+
+We would like **3–5 leg tags + 2 halter hubs (with SIMs or eSIM profiles that work in India) +
+1–2 pelvis sensors + a charging dock**, together with the **protocol documentation, payload
+schema and sample code**, so we can validate on real horses before committing to a design.
 
 **Reply (availability + lead time for evaluation hardware):**
 
-## 10. Optional — equine validation data
+## 13. Optional — equine validation data
 
-If you hold any **equine** reference or validation data (step counts, lying time, gait
-asymmetry against a gold standard), please share it. Most tags are validated on cattle or
-humans; equine gait differs, and this would materially reduce our modelling risk.
+If you hold any **equine** reference or validation data — step counts, lying time, gait
+asymmetry, or **lameness measures against a veterinarian's lameness grading** — please share it.
+Most devices are validated on cattle or humans; equine gait differs, and this would materially
+reduce our modelling risk.
 
 **Reply:**
 
@@ -212,10 +267,12 @@ Please confirm each item is attached or answered, so we can evaluate in a single
 |---|---|
 | ☐ | Every numbered question answered (or marked "not supported" / "N/A") |
 | ☐ | All hard requirements (H-numbers) explicitly confirmed or declined |
-| ☐ | Sensor / component **datasheets** |
-| ☐ | **Protocol document, register map or API reference** — the actual file |
-| ☐ | **ARM64 (aarch64) build** attached or download link — *or* a plain statement that none exists |
-| ☐ | **Sample data payload** showing real field names and units |
+| ☐ | Sensor / component **datasheets** for each device, and the **modem module** datasheet |
+| ☐ | **Protocol document and payload schema** for the live link — the actual file |
+| ☐ | **Sample live payload** and sample raw data, showing real field names and units |
+| ☐ | **Networks and bands tested in India**, and **TEC / WPC / BIS** certificates (or their status) |
+| ☐ | Expected **mobile data per horse per day** |
+| ☐ | **ARM64 (aarch64) build** of any on-site software, or a plain statement that none is needed / none exists |
 | ☐ | Sample code, if you provide any |
 | ☐ | Evaluation-unit availability and lead time |
 | ☐ | A named technical contact we can reach directly with any single clarification |

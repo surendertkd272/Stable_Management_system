@@ -1,35 +1,39 @@
-Hi — we're building a 24/7 monitoring system for stabled horses (Bharat Sports Venture). We need a *leg-mounted IMU tag* that streams raw motion data to an on-site edge computer. All analytics (steps, lying time, gait/lameness) are done by our software — we only need raw data + docs.
+Hi — we're building a 24/7 monitoring system for stabled horses in India (Bharat Sports Venture). We need *motion sensors (IMU) worn by the horse* that send raw, timestamped data to *our own server over the mobile network (LTE-M / NB-IoT)* — so the data stays live when the horse leaves the barn for an hour or more of exercise. All analytics (steps, lying time, gait/lameness) are done by our software — we only need the data + docs.
 
-*The 2 biggest pass/fail items (full list H1–H4 in the attached PDF):*
+*The set we want quoted, per horse:*
+A. *Leg tag* — one front cannon bone, 24/7 — steps, activity, lying. Target ≤50 g.
+B. *Halter hub with SIM* — on the halter, 24/7 — relays A and C live over LTE-M/NB-IoT, and its own IMU measures head movement (front-leg lameness). Target ≤150 g.
+C. *Pelvis sensor* — over the croup, during exercise/trot-ups — hip movement (hind-leg lameness).
+If you make an all-in-one SIM leg tag, quote that too with weight and battery.
 
-*1. Linux ARM64 (aarch64) support* — our edge box is an NVIDIA Jetson. Your SDK/driver must be built and tested for aarch64, not x86-64 only. (A previous vendor shipped x86-only binaries and couldn't rebuild — it cost us weeks.) If it's an open protocol like BLE GATT or serial, that's even better — just tell us.
-
-*2. Raw per-axis data* — we need the actual accel/gyro waveform, not only step counts or your computed summaries.
+*Pass/fail items (full list in the attached PDF):*
+1. *LTE-M and/or NB-IoT on Indian networks*, with a fallback (e.g. Cat-1). Which networks and bands have you tested in India?
+2. *Sends directly to a server address we set* (MQTT or HTTPS over TLS), documented protocol — *no mandatory vendor cloud*.
+3. *Raw per-axis data* available (live summaries + raw uploaded later is fine).
+4. India *TEC (MTCTE) / WPC-ETA / BIS* approvals.
 
 *Technical questions:*
-1. IMU part number + datasheet. 6-axis (accel+gyro) or 9-axis?
-2. Accel range? We need *≥ ±16 g* (a horse kicking a wall clips lower ranges).
-3. Gyro range? We need *≥ ±2000 °/s*.
-4. Sample rate — we need *≥100 Hz (target 100–200 Hz)*, configurable. Which rates?
-5. How does raw data leave the tag (BLE / Wi-Fi / gateway / USB)? Please *send the protocol doc or API reference with your reply.*
-6. Can it *stream continuously* at 100 Hz, or only upload batches? If batches, what interval?
-7. Are samples timestamped *on the tag*? Clock sync method (*PTP preferred, NTP ok*) and drift over 24h? We must align IMU data with video + thermal.
-8. On-tag buffering — we need *≥24h* with auto-backfill (barns lose power/network). How many hours at 100 Hz?
-9. Unique hardware ID per tag, readable via API (so we can bind a tag to one horse)?
-10. Battery life at 100 Hz continuous + charging method. Tag weight (target ≤50 g)?
-11. IP rating — we need *IP67+* (washdown, mud, ammonia). Strap equine-rated?
-12. India *WPC/ETA + BIS* approval for the radio?
-13. If a gateway is needed: tags per gateway, gateway-to-edge interface (PoE preferred), range through barn walls?
-14. Can any on-firmware activity classification be *disabled*? We classify on our edge and don't want firmware pre-filtering the raw data.
-15. Gyro bias drift at *45–50 °C* (Indian barns), and can it be recalibrated in the field *without removing the tag*?
-16. Welfare: any 24/7 wear data showing no rub sores? Observed *tag-loss rate per tag-year*?
+1. IMU part numbers + datasheets. 6-axis or 9-axis? Accel *≥ ±16 g*, gyro *≥ ±2000 °/s*, sample rate *≥100 Hz (200 Hz preferred for head/pelvis)*?
+2. Modem part number, modes (LTE-M / NB-IoT / fallback) and bands?
+3. What is sent live and how often? We want summaries *at least once a minute* and alerts immediately. Latency to our server?
+4. Can the hub compute live per-minute summaries (steps, activity, lying) and per-stride trot measures (head/pelvis asymmetry)? Or only forward raw?
+5. How does the raw 100–200 Hz data reach us — over mobile, or offloaded in the barn by BLE/Wi-Fi? Delay?
+6. *Exercise scenario:* the horse is out 1–2 hours with patchy coverage — what is sent live, what is stored, how are gaps filled, can anything be lost?
+7. On-device buffering *≥24 h* with original timestamps + auto-backfill — hours at 100 Hz raw?
+8. Timestamps on the device? Time source (network / NTP / GNSS), drift out of coverage, alignment between the three devices (we target ≤10 ms)?
+9. SIM: physical or eSIM, can we use our own operator? Mobile data per horse per day?
+10. Battery life per device (hub reporting every 1 min and every 5 min), charging / hot-swap dock?
+11. *IP67+* on all devices (wash-down, mud, ammonia)? Weights? Straps/mounts for leg, halter and croup?
+12. Detach alert sent live by the hub when a device goes silent? Device-loss rate per year?
+13. Unique IDs (and IMEI/ICCID) and pairing/binding the set to one horse via API? OTA updates over mobile?
+14. Optional: GNSS in the hub (position/speed on rides), and can it be switched off?
 
-*Please reply once, covering everything.* We're evaluating a few suppliers in parallel and won't be sending rounds of follow-ups. If something isn't supported, just write that — "not supported" is a fine answer. A skipped item we have to record as not supported, because we can't tell the difference. And please *attach the actual files* (datasheet, protocol doc/register map, ARM64 build or a clear statement that none exists) rather than "available on request" — with a previous supplier we were told "Linux SDK yes", the package arrived x86-only, and it cost both sides weeks.
+*Please reply once, covering everything.* We're evaluating a few suppliers in parallel and won't be sending rounds of follow-ups. If something isn't supported, just write that — "not supported" is a fine answer. A skipped item we have to record as not supported, because we can't tell the difference. And please *attach the actual files* (datasheets, protocol doc and payload schema, sample data) rather than "available on request" — with a previous supplier we were told "Linux SDK yes", the package arrived x86-only, and it cost both sides weeks.
 
-*Evaluation:* we'd like *3–5 tags + 1 gateway + charging dock* with SDK/docs/sample code for ARM64, to validate on our Jetson bench.
+*Evaluation:* we'd like *3–5 leg tags + 2 halter hubs (with SIMs that work in India) + 1–2 pelvis sensors + a charging dock*, with protocol docs and sample code.
 
 Commercial terms we can discuss separately once technical fit is clear.
 
-Also: if you have any *equine* validation data (steps, lying time, gait), please share — most tags are validated on cattle or humans and horse gait differs.
+Also: if you have any *equine* validation data (steps, lying time, gait, lameness vs a vet's grading), please share — most devices are validated on cattle or humans and horse gait differs.
 
 Thanks!

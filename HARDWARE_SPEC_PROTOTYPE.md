@@ -7,7 +7,7 @@
 ## 0. Prototype goal
 A **single-stall (scalable to 2) test rig** that captures all 12 data streams and emits them to one edge box in a common data contract, so the AI/backend can be validated on real horses before volume rollout.
 
-**Per-stall device set:** 1 dual thermal+optical camera · 1 IMU leg wearable · 1 metered/weighed feeder + 1 water sensor · 1 microphone. **Shared:** 1 edge box + PoE switch + 4G router + UPS.
+**Per-stall device set:** 1 dual thermal+optical camera · 1 IMU set per horse (leg tag + halter hub with SIM + pelvis sensor for exercise) · 1 metered/weighed feeder + 1 water sensor · 1 microphone. **Shared:** 1 edge box + PoE switch + 4G router + UPS.
 
 ---
 
@@ -52,19 +52,20 @@ A **single-stall (scalable to 2) test rig** that captures all 12 data streams an
 
 ---
 
-## 3. Device B — IMU leg wearable
-**Covers points 1, 5, 6, 7 (motion/lameness)**
+## 3. Device B — IMU motion sensors, live over the mobile network
+**Covers points 1, 5, 6, 7 (motion/lameness)** — decided 28 Sep 2026: live data over **LTE-M / NB-IoT** so the horse stays monitored when it leaves the barn for exercise (full questions: `RFI_IMU`).
+- **Three devices per horse:** **A. leg tag** (one front cannon bone, 24/7, ≤50 g) — steps, activity, lying; **B. halter hub with SIM** (24/7, target ≤150 g) — relays A and C live, and its IMU measures **head movement** (front-leg lameness); **C. pelvis sensor** (over the sacrum, exercise/trot-ups) — **pelvic movement** (hind-leg lameness). An all-in-one SIM leg tag may be quoted as an alternative.
 - **6-axis min (3-axis accel + 3-axis gyro)**, 9-axis preferred; provide part numbers + datasheets.
 - Accel range **≥ ±16 g**; gyro **≥ ±2000 °/s** (no clip at trot/canter/kick).
-- Sample rate configurable **≥100 Hz (target 100–200 Hz)**.
-- **Raw per-axis time-series** accessible; optional on-tag activity classification (disable-able).
-- **BLE 5.x**, range to cover a stall through barn walls; **BLE-to-IP gateway** (state tags/gateway); local path to edge.
-- On-tag **buffer ≥24 h** + timestamped backfill; clock sync (gateway beacon/NTP), skew ≤tens of ms.
-- **Battery ≥7 days** at chosen rate, **or** rechargeable + hot-swap dock (no data gap); **IP67/68**.
-- **Cannon-bone strap**, sizes pony→draft; **loss/detach alert**; weight ≤ ~50 g; welfare-safe for 24/7 wear.
-- Unique HW ID → `horseId` binding via API; documented schema (units for accel/gyro/steps).
-- **WPC/ETA + BIS**; on-prem/India data path.
-**Prototype:** 3–5 tags + 1 gateway + SDK + samples + charging dock.
+- Sample rate configurable **≥100 Hz** (200 Hz preferred for head/pelvis at trot).
+- **Raw per-axis time-series** accessible; live per-minute and per-stride summaries over the mobile link; raw uploaded later is acceptable.
+- **LTE-M / NB-IoT on Indian networks** with a fallback (e.g. Cat-1); sends **directly to our server** (MQTT/HTTPS over TLS) — no mandatory vendor cloud; own-operator SIM / eSIM preferred.
+- On-device **buffer ≥24 h** + timestamped backfill; timestamps on the device; the three devices aligned ≤10 ms.
+- Battery per device stated (hub at 1-min and 5-min reporting); rechargeable + hot-swap dock; **IP67+**.
+- Straps/mounts: cannon bone (pony→draft), standard halter, croup pad/roller/adhesive; **detach alert** sent live by the hub; welfare-safe for 24/7 wear.
+- Unique HW ID (+ IMEI/ICCID) → `horseId` binding via API; documented schema (units for accel/gyro/steps).
+- **TEC (MTCTE) + WPC/ETA + BIS**; India data path.
+**Prototype:** 3–5 leg tags + 2 halter hubs (with SIMs) + 1–2 pelvis sensors + charging dock + protocol docs + samples.
 
 ---
 

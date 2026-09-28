@@ -49,20 +49,29 @@ A 24/7 monitoring system for stabled horses. Each stall is fitted with sensors t
 
 ---
 
-## 4. IMU LEG WEARABLE (covers points 1,5,6,7)
+## 4. IMU MOTION SENSORS WITH LIVE MOBILE DATA (covers points 1,5,6,7)
 
-**Recommended configuration**
-- **9-axis BLE 5.x leg tag** (cannon bone) — accel **±16 g**, gyro **±2000 °/s**.
-- **Sample rate configurable ≥100 Hz (target 100–200 Hz)** with **raw per-axis data access**.
-- **IP68**, **rechargeable + hot-swap dock**, ≥7-day battery (or hot-swap), ~≤50 g, **loss/detach alert**.
-- **1 BLE-to-IP gateway per barn** with a local path to the edge.
+**Recommended configuration** — three devices per horse, live over the mobile network so the
+horse stays monitored when it leaves the barn for exercise (full questions: `RFI_IMU`):
+- **A. Leg tag** on one front cannon bone, 24/7 — steps, activity, lying; **≤50 g**.
+- **B. Halter hub with SIM (LTE-M / NB-IoT, with a fallback)** — relays A and C live **directly
+  to our server** (MQTT/HTTPS over TLS, no mandatory vendor cloud); its own IMU measures **head
+  movement** (front-leg lameness); target **≤150 g**.
+- **C. Pelvis sensor** over the sacrum during exercise / trot-ups — **pelvic movement**
+  (hind-leg lameness).
+- All: 9-axis preferred (6-axis minimum), accel **±16 g**, gyro **±2000 °/s**, **≥100 Hz**
+  (200 Hz preferred for head/pelvis), **raw per-axis data**, **≥24 h buffer** with original
+  timestamps, **IP67+**, rechargeable + hot-swap dock, **detach alert** sent live by the hub.
 
 **What we need before development**
-1. **3–5 eval tags + 1 gateway + charging dock + SDK/API** (Linux/Jetson) + docs/sample.
-2. Confirm **raw streaming**, **on-tag ≥24 h buffer**, and the **timestamp/clock-sync** method.
-3. Confirm **unique tag ID → horse mapping via API** + documented data schema/units (accel/gyro/steps).
-4. Confirm **India WPC/ETA + BIS**.
-5. Share any **equine validation/reference** data (steps, lying time, gait/lameness).
+1. **3–5 leg tags + 2 halter hubs (SIMs that work in India) + 1–2 pelvis sensors + charging
+   dock**, with the **protocol document and payload schema** for the live link + sample code.
+2. Confirm **networks and bands tested in India**, what is sent live and how often, and how raw
+   data reaches us (mobile, or offloaded in the barn).
+3. Confirm **timestamps on the device**, time source, and alignment between the three devices.
+4. Confirm **unique IDs (+ IMEI/ICCID) → horse binding via API** + data schema/units.
+5. Confirm India **TEC (MTCTE) / WPC-ETA / BIS**.
+6. Share any **equine validation** data (steps, lying time, gait, lameness vs vet grading).
 
 ---
 
