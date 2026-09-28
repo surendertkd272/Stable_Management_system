@@ -28,6 +28,15 @@ export function MonitoringPill({ monitoring }: { monitoring?: Monitoring }) {
 /** True when readings are too old to trust the clinical summary. */
 export const isBlind = (m?: Monitoring) => m === "offline" || m === "no-data";
 
+/** Says plainly that what a page shows is sample records, not the stable's. */
+export function SampleNote({ children }: { children?: ReactNode }) {
+  return (
+    <div className="sample-note" role="note">
+      <b>Sample records</b> {children ?? "— examples of how this page works, not your stable's data."}
+    </div>
+  );
+}
+
 /** "Marwari · Mare · 7 yr" — parts that are empty or "—" are left out, so an
  *  unknown age never leaves "Gelding · · Stall 01". */
 export const details = (...parts: (string | null | undefined)[]) =>

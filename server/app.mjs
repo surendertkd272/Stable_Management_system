@@ -83,7 +83,9 @@ const roster = () => store.list("horses");
 const KINDS = {
   horses:    { path: "horses",    required: ["name"] },
   diary:     { path: "diary",     required: ["horse", "note"] },
-  health:    { path: "health",    required: ["horse", "type"] },
+  // Not "/api/health": that is the server's status check, which answered
+  // every request there — health tasks were never saved.
+  health:    { path: "health-tasks", required: ["horse", "type"] },
   feed:      { path: "feed",      required: ["horse", "feed"] },
   invoices:  { path: "invoices",  required: ["owner", "amount"] },
   coverings: { path: "coverings", required: ["mare", "stallion"] },
@@ -573,9 +575,10 @@ export async function handle(req) {
     // POST   /api/<kind>            create
     // PATCH  /api/<kind>/:id        partial update
     // DELETE /api/<kind>/:id        delete
-    const crud = path.match(/^\/api\/([a-z]+)(?:\/(.+))?$/);
-    if (crud && KINDS[crud[1]]) {
-      const kind = crud[1], id = crud[2] ? decodeURIComponent(crud[2]) : null;
+    const crud = path.match(/^\/api\/([a-z-]+)(?:\/(.+))?$/);
+    const crudKind = crud && Object.keys(KINDS).find((k) => KINDS[k].path === crud[1]);
+    if (crudKind) {
+      const kind = crudKind, id = crud[2] ? decodeURIComponent(crud[2]) : null;
       const spec = KINDS[kind];
 
       if (method === "GET" && !id) {

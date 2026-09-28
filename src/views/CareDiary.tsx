@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Truck, Wheat, Stethoscope, Hammer, Pill, Plus, Sparkles } from "lucide-react";
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { Modal } from "../components/ui";
+import { Modal, SampleNote } from "../components/ui";
+import { apiConfigured } from "../data/api";
 
 const ICON: Record<DiaryEntry["icon"], React.ReactNode> = {
   travel: <Truck size={18} />,
@@ -41,6 +42,7 @@ export default function CareDiary() {
 
   return (
     <>
+      {!apiConfigured && <SampleNote />}
       <div className="card" style={{ marginBottom: 22 }}>
         <div className="flex between center wrap" style={{ gap: 12 }}>
           <div className="flex gap-md center">
@@ -67,6 +69,9 @@ export default function CareDiary() {
       </div>
 
       <h3 className="section-title">Recent records</h3>
+      {diary.length === 0 && (
+        <p className="muted" style={{ fontSize: 13.5 }}>No records yet — add the first with <b>New record</b>.</p>
+      )}
       {diary.map((d) => (
         <div className="row" key={d.id}>
           <div className="chip sm">{ICON[d.icon]}</div>

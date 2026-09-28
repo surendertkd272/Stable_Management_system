@@ -20,7 +20,7 @@ import {
 import { StatCard, RadialGauge, Sparkline, statusColor, Modal, riskScore, riskBand, details } from "../components/ui";
 import { yardSlots, breedingMares, highlight } from "../data/mock";
 import { useStable } from "../store";
-import { getCoverage, type CoverageRow } from "../data/api";
+import { getCoverage, apiConfigured, type CoverageRow } from "../data/api";
 
 /** One yard-wide average. Says "needs <sensor>" rather than showing a zero. */
 function YardAvg({
@@ -84,7 +84,9 @@ export default function Dashboard() {
   const nextDue = [...breedingMares].sort((a, b) => a.daysToDue - b.daysToDue)[0];
   const count = (s: string) => horses.filter((h) => h.status === s).length;
   const [clip, setClip] = useState(false);
-  const star = horses.find((h) => h.name === highlight.horse) ?? horses[0];
+  const star = apiConfigured
+    ? horses.find((h) => h.monitoring && h.monitoring !== "no-data") ?? horses[0]
+    : horses.find((h) => h.name === highlight.horse) ?? horses[0];
   const blindness = (h: (typeof horses)[number]) =>
     h.monitoring === "no-data" ? 2 : h.monitoring === "offline" ? 1 : 0;
   const topRisk = [...horses]
@@ -279,22 +281,23 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* highlights feature card */}
+      {/* highlights feature card — the demo's sample clip; a connected stable
+          gets its own recordings instead of a clip that never happened */}
       <div className="feature span-1">
         <div>
           <span className="pill" style={{ background: "rgba(255,255,255,0.22)", color: "#fff" }}>
-            Highlights
+            {apiConfigured ? "Recordings" : "Highlights · sample"}
           </span>
-          <h3 style={{ marginTop: 12 }}>{highlight.title}</h3>
-          <p>{highlight.caption}</p>
+          <h3 style={{ marginTop: 12 }}>{apiConfigured ? "Camera recordings" : highlight.title}</h3>
+          <p>{apiConfigured ? "Watch and label what the stall camera recorded." : highlight.caption}</p>
         </div>
-        <button className="play" onClick={() => setClip(true)} title="Play highlight">
+        <button className="play" onClick={() => (apiConfigured ? nav("/footage") : setClip(true))} title={apiConfigured ? "Open recordings" : "Play highlight"}>
           <Play size={20} fill="currentColor" />
         </button>
         <button
           className="thumb"
-          onClick={() => setClip(true)}
-          title="Play highlight"
+          onClick={() => (apiConfigured ? nav("/footage") : setClip(true))}
+          title={apiConfigured ? "Open recordings" : "Play highlight"}
           style={{ backgroundImage: `url(${star.photo})` }}
         >
           <Play size={34} color="#fff" fill="#fff" />
@@ -403,7 +406,7 @@ export default function Dashboard() {
           {labourMare ? (
             <span className="pill alert">Labour detected</span>
           ) : (
-            <span className="pill muted">Monitoring by records only</span>
+            <span className="pill muted">{apiConfigured ? "Sample records — breeding not connected yet" : "Monitoring by records only"}</span>
           )}
         </div>
         <div className="flex between center wrap" style={{ gap: 20 }}>

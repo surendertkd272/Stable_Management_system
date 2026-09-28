@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Syringe, Pill, Hammer, Stethoscope, Bone, Plus, Check, CalendarClock, AlertTriangle } from "lucide-react";
 import { HealthTask } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { Modal } from "../components/ui";
+import { Modal, SampleNote } from "../components/ui";
+import { apiConfigured } from "../data/api";
 
 const ICON: Record<HealthTask["icon"], React.ReactNode> = {
   vaccine: <Syringe size={18} />,
@@ -82,6 +83,7 @@ export default function Health() {
 
   return (
     <>
+      {!apiConfigured && <SampleNote />}
       {/* summary */}
       <div className="grid cols-3 kpi-row" style={{ marginBottom: 22 }}>
         <SummaryCard icon={<AlertTriangle size={20} />} tone="alert" value={overdue} label="Overdue" />

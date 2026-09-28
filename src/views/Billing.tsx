@@ -4,7 +4,8 @@ import { useState } from "react";
 import { Receipt, IndianRupee, AlertTriangle, CheckCircle2, Plus, Smartphone } from "lucide-react";
 import { Invoice } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { Modal } from "../components/ui";
+import { Modal, SampleNote } from "../components/ui";
+import { apiConfigured } from "../data/api";
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const DAY = 86400000;
@@ -71,6 +72,7 @@ export default function Billing() {
 
   return (
     <>
+      {!apiConfigured && <SampleNote />}
       <div className="grid cols-3 kpi-row" style={{ marginBottom: 22 }}>
         <SummaryCard icon={<IndianRupee size={20} />} tone="warn" value={inr(outstanding)} label="Outstanding" />
         <SummaryCard icon={<AlertTriangle size={20} />} tone="alert" value={String(overdueCount)} label="Overdue invoices" />

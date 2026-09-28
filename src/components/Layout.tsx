@@ -34,6 +34,7 @@ import { useTheme } from "../theme";
 import { useAuth } from "../auth";
 import { useStable, useToast } from "../store";
 import { breedingMares, Horse } from "../data/mock";
+import { apiConfigured } from "../data/api";
 import { Modal } from "./ui";
 import { useT } from "../i18n";
 
@@ -244,7 +245,8 @@ function TopBar() {
     },
     "/alerts": { h1: "Alerts", p: `${openAlerts} unacknowledged` },
     "/yard": { h1: "Yard View", p: "Ranked by who needs attention first" },
-    "/breeding": { h1: "Breeding", p: `${breedingMares.length} mares in foal · ${inLabour} in active labour` },
+    "/breeding": { h1: "Breeding", p: apiConfigured ? "Sample records — breeding is not connected to this stable's data yet"
+      : `${breedingMares.length} mares in foal · ${inLabour} in active labour` },
     "/reports": { h1: "Reports", p: "Vet-ready 7 & 30-day summaries" },
     // Matches the corrected line on the Care Diary card itself — the rule
     // engine does not read diary entries, so this used to promise the same

@@ -23,3 +23,20 @@ test("flags count vices and possible rolls / casts only, per day; activity says 
   assert.equal(s.activity.at(-1), null, "no activity reading today: null, not 0");
   assert.equal(s.activity[0], null);
 });
+
+import { buildAlerts, relTime } from "./rollup.mjs";
+
+test("alert times: local clock, calendar days, and when an outage began", () => {
+  const now = Date.parse("2026-09-28T08:11:00Z");
+  const hm = (iso) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  assert.equal(relTime("2026-09-28T08:10:30Z", now), `${hm("2026-09-28T08:10:30Z")} · just now`);
+  const y = new Date(now - 86400000); y.setHours(18, 0, 0, 0);            // yesterday evening, local
+  assert.match(relTime(y.toISOString(), now), /^Yesterday · /, "yesterday evening is not 'Today'");
+  const last = new Date(Date.now() - 20 * 3600000).toISOString();
+  const alerts = buildAlerts([{ id: "a", name: "A" }, { id: "b", name: "B" }],
+    [{ horseId: "a", metric: "activity_index", value: 0.2, ts: last, meta: {}, source: "visible_video" }], () => false);
+  const off = alerts.find((x) => x.horse === "A" && x.type === "Monitoring offline");
+  assert.ok(off && off.time.startsWith("since "), off?.time);
+  assert.ok(off.time.includes(hm(last)), "the time the data stopped, not now");
+  assert.equal(alerts.find((x) => x.horse === "B").time, "no data yet");
+});

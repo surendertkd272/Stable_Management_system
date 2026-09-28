@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { breedingMares, Covering } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { Modal } from "../components/ui";
+import { Modal, SampleNote } from "../components/ui";
+import { apiConfigured } from "../data/api";
 
 type Tab = "foaling" | "mares" | "stallions";
 
@@ -33,6 +34,9 @@ export default function Breeding() {
   const [tab, setTab] = useState<Tab>("foaling");
   return (
     <>
+      {apiConfigured
+        ? <SampleNote>— the mares, due dates and stages here are examples. Breeding is not connected to this stable&apos;s data yet; coverings and stallions you add are saved.</SampleNote>
+        : <SampleNote />}
       <div className="tabs" style={{ marginBottom: 20 }}>
         <button className={tab === "foaling" ? "on" : ""} onClick={() => setTab("foaling")}>
           Foaling watch

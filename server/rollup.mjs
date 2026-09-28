@@ -129,24 +129,28 @@ export function eyeBaseline(rd, cur) {
 /** Evaluate all rule checks for one horse -> list of {type, severity, detail, ts}. */
 function evaluate(bio, rd) {
   const out = [];
-  const push = (type, severity, detail, ts) => out.push({ type, severity, detail, ts: ts || new Date().toISOString() });
+  // since: when the condition began, for the alert's time ("since yesterday
+  // 17:57"); null = never (no data ever received). The key still uses ts.
+  const push = (type, severity, detail, ts, since) =>
+    out.push({ type, severity, detail, ts: ts || new Date().toISOString(), ...(since !== undefined ? { since } : {}) });
 
   // ---- monitoring gap (checked FIRST; stale data must never read as calm) -- //
   const seen = lastSeenMs(rd);
   if (seen === null) {
     push("No monitoring data", "warn",
-      `No sensor data has ever been received for ${bio.name} — check the stall's devices and the edge agent.`);
+      `No sensor data has ever been received for ${bio.name} — check the stall's devices and the edge agent.`, undefined, null);
     return out; // nothing else is meaningful without data
   }
   const gap = Date.now() - seen;
   if (gap >= STALE_ALERT_MS) {
     push("Monitoring offline", "alert",
-      `No sensor data for ${gapText(gap)} — this horse is NOT being monitored. Check camera/edge box/network.`);
+      `No sensor data for ${gapText(gap)} — this horse is NOT being monitored. Check camera/edge box/network.`,
+      undefined, new Date(seen).toISOString());
     return out; // suppress downstream rules: they'd be judging stale data
   }
   if (gap >= STALE_WARN_MS) {
     push("Monitoring gap", "warn",
-      `No sensor data for ${gapText(gap)} — readings below may be out of date.`);
+      `No sensor data for ${gapText(gap)} — readings below may be out of date.`, undefined, new Date(seen).toISOString());
     // fall through: recent-ish data is still worth evaluating
   }
 
@@ -330,14 +334,18 @@ function distinctDays(rd) {
   return new Set(rd.map((r) => dayKey(r.ts))).size;
 }
 
-function relTime(ts) {
-  const diff = Date.now() - Date.parse(ts);
-  const hm = new Date(ts).toISOString().slice(11, 16);
+// The site server's clock and calendar (it runs at the stable). The time
+// used to be UTC ("08:11" at 13:41 in India), and "Today" meant "within 24 h".
+const localHm = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const localDay = (ms) => new Date(ms).toLocaleDateString("en-CA");
+export function relTime(ts, now = Date.now()) {
+  const t = Date.parse(ts), diff = now - t, hm = localHm(t);
   if (diff < 2 * 60 * 1000) return `${hm} · just now`;
   if (diff < 3600 * 1000) return `${hm} · ${Math.round(diff / 60000)} min ago`;
-  if (diff < DAY_MS) return `Today · ${hm}`;
-  if (diff < 2 * DAY_MS) return `Yesterday · ${hm}`;
-  return `${Math.floor(diff / DAY_MS)} days ago · ${hm}`;
+  if (localDay(t) === localDay(now)) return `Today · ${hm}`;
+  if (localDay(t) === localDay(now - DAY_MS)) return `Yesterday · ${hm}`;
+  const days = Math.round((Date.parse(localDay(now)) - Date.parse(localDay(t))) / DAY_MS);
+  return `${days} days ago · ${hm}`;
 }
 
 /** Build one Horse summary object (matches src/data/mock.ts `Horse`). */
@@ -548,7 +556,7 @@ export function buildAlerts(roster, allReadings, isAcked) {
         horse: bio.name,
         type: c.type,
         severity: c.severity,
-        time: relTime(c.ts),
+        time: c.since === null ? "no data yet" : c.since ? `since ${relTime(c.since)}` : relTime(c.ts),
         detail: c.detail,
         acknowledged: isAcked(key),
         _ts: c.ts,

@@ -91,12 +91,16 @@ const Ctx = createContext<StableCtx | null>(null);
 export function StableProvider({ children }: { children: ReactNode }) {
   const [horses, setHorses] = useState<Horse[]>(() => load("horses", seedHorses));
   const [alerts, setAlerts] = useState<Alert[]>(() => load("alerts", seedAlerts));
-  const [diary, setDiary] = useState<DiaryEntry[]>(() => load("diary", seedDiary));
-  const [health, setHealth] = useState<HealthTask[]>(() => load("health", seedHealth));
-  const [feed, setFeed] = useState<FeedItem[]>(() => load("feed", seedFeed));
-  const [invoices, setInvoices] = useState<Invoice[]>(() => load("invoices", seedInvoices));
-  const [coverings, setCoverings] = useState<Covering[]>(() => load("coverings", seedCoverings));
-  const [stallions, setStallions] = useState<Stallion[]>(() => load("stallions", seedStallions));
+  // With a backend, a stable's records are its own — none until someone adds
+  // them. The sample records (and a browser cache that may still hold them)
+  // are only for the standalone demo.
+  const own = <T,>(name: string, seed: T[]): T[] => (api.apiConfigured ? [] : load(name, seed));
+  const [diary, setDiary] = useState<DiaryEntry[]>(() => own("diary", seedDiary));
+  const [health, setHealth] = useState<HealthTask[]>(() => own("health", seedHealth));
+  const [feed, setFeed] = useState<FeedItem[]>(() => own("feed", seedFeed));
+  const [invoices, setInvoices] = useState<Invoice[]>(() => own("invoices", seedInvoices));
+  const [coverings, setCoverings] = useState<Covering[]>(() => own("coverings", seedCoverings));
+  const [stallions, setStallions] = useState<Stallion[]>(() => own("stallions", seedStallions));
   const [series, setSeries] = useState<typeof seedSeries>(seedSeries);
 
   useEffect(() => persist("horses", horses), [horses]);
@@ -119,12 +123,14 @@ export function StableProvider({ children }: { children: ReactNode }) {
         api.getEntities<Stallion>("stallions"),
       ]);
       if (stop) return;
-      if (d?.length) setDiary(d);
-      if (he?.length) setHealth(he);
-      if (f?.length) setFeed(f);
-      if (inv?.length) setInvoices(inv);
-      if (cov?.length) setCoverings(cov);
-      if (st?.length) setStallions(st);
+      // An empty list from the server is an answer ("no records yet"), not a
+      // reason to fall back to samples; null means the server did not answer.
+      if (Array.isArray(d)) setDiary(d);
+      if (Array.isArray(he)) setHealth(he);
+      if (Array.isArray(f)) setFeed(f);
+      if (Array.isArray(inv)) setInvoices(inv);
+      if (Array.isArray(cov)) setCoverings(cov);
+      if (Array.isArray(st)) setStallions(st);
     })();
 
     const poll = async () => {

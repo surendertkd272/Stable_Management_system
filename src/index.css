@@ -1602,3 +1602,8 @@ button {
   .guide-tabs { flex-wrap: nowrap !important; flex: 1 1 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
   .guide-tabs button { flex: 0 0 auto; white-space: nowrap; padding: 7px 12px; }
 }
+
+/* Sample records (demo mode, and breeding until it is connected) */
+.sample-note { margin: 0 0 16px; padding: 10px 14px; border-radius: var(--radius-inner); background: var(--surface-muted);
+  border: 1px dashed var(--border); color: var(--text-secondary); font-size: 13px; }
+.sample-note b { color: var(--ink); }

@@ -6,7 +6,8 @@ import { FeedItem } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { getHorseDetail } from "../data/api";
 import { Sparkline } from "../components/ui";
-import { Modal } from "../components/ui";
+import { Modal, SampleNote } from "../components/ui";
+import { apiConfigured } from "../data/api";
 
 const KIND_ICON: Record<FeedItem["kind"], React.ReactNode> = {
   forage: <Leaf size={16} />,
@@ -86,6 +87,7 @@ export default function Feed() {
 
   return (
     <>
+      {!apiConfigured && <SampleNote />}
       <div className="flex between center wrap" style={{ marginBottom: 18, gap: 12 }}>
         <div className="flex gap-sm wrap">
           {horses.map((h) => (
@@ -227,8 +229,8 @@ export default function Feed() {
       </div>
 
       <p className="muted" style={{ fontSize: 12, marginTop: 18, lineHeight: 1.5 }}>
-        Ration changes logged here can be cross-posted to the Care Diary so the AI can explain a restless night after a
-        feed switch instead of raising a false alarm.
+        Note a ration change in the Care Diary too: whoever reviews an alert then knows about the feed switch. The
+        alerting rules do not read feed records.
       </p>
 
       <Modal

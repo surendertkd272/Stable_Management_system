@@ -183,7 +183,11 @@ export async function ackAlert(id: string): Promise<void> {
 export type Kind =
   | "horses" | "diary" | "health" | "feed" | "invoices" | "coverings" | "stallions";
 
-export const getEntities = <T,>(kind: Kind) => get<T[]>(`/api/${kind}`);
+// Where each collection lives on the server (health tasks are not /api/health,
+// the server's status check).
+const kindPath = (kind: Kind) => (kind === "health" ? "health-tasks" : kind);
+
+export const getEntities = <T,>(kind: Kind) => get<T[]>(`/api/${kindPath(kind)}`);
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T | null> {
   if (!apiConfigured) return null;
@@ -201,13 +205,13 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T 
 }
 
 export const createEntity = <T,>(kind: Kind, body: unknown) =>
-  send<T>("POST", `/api/${kind}`, body);
+  send<T>("POST", `/api/${kindPath(kind)}`, body);
 
 export const patchEntity = <T,>(kind: Kind, id: string, patch: unknown) =>
-  send<T>("PATCH", `/api/${kind}/${encodeURIComponent(id)}`, patch);
+  send<T>("PATCH", `/api/${kindPath(kind)}/${encodeURIComponent(id)}`, patch);
 
 export const deleteEntity = (kind: Kind, id: string) =>
-  send<{ ok: boolean }>("DELETE", `/api/${kind}/${encodeURIComponent(id)}`);
+  send<{ ok: boolean }>("DELETE", `/api/${kindPath(kind)}/${encodeURIComponent(id)}`);
 
 /** Download raw readings as CSV. Returns false when no backend is configured. */
 export async function exportReadingsCsv(horseId: string, days = 30): Promise<boolean> {
