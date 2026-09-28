@@ -1,0 +1,34 @@
+# /etc/systemd/system/equicare-site.service — the site server at the stable
+# (the Next.js app with its backend), set up to pull from the relay.
+# It only ever calls OUT to the relay: no port is opened to the internet.
+#
+#   cd /opt/equicare && npm ci && npm run build
+#   sudo systemctl daemon-reload && sudo systemctl enable --now equicare-site
+
+[Unit]
+Description=EquiCare site server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=equicare
+Group=equicare
+WorkingDirectory=/opt/equicare
+# EQUICARE_RELAY_URL, EQUICARE_RELAY_KEY, EQUICARE_DATA_DIR, DATABASE_URL, …
+# (root-owned, mode 600). See site.env.example.
+EnvironmentFile=/etc/equicare/site.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+# The data directory (EQUICARE_DATA_DIR) — readings, raw recordings, footage.
+ReadWritePaths=/var/lib/equicare
+
+[Install]
+WantedBy=multi-user.target

@@ -23,10 +23,35 @@ export const METRICS = {
   posture_event:        { point: 6,  label: "Lies down / gets up",  unit: "event", source: "visible_video",  kind: "event" },  // meta.kind: lie_down|get_up|possible_roll|possible_cast
   gait_asymmetry:       { point: 7,  label: "Lameness / gait",      unit: "0..1",  source: "imu_optical",    kind: "sample" },
   vice_event:           { point: 8,  label: "Stable vice",          unit: "event", source: "visible_video", kind: "event" }, // meta.kind: weaving|box_walking|head_tossing (video); crib_biting needs a model / microphone
+  // Drinking: one water_visit (value 1) plus one water_ml per bout, both
+  // stamped at the bout start with meta { ml, durationS, boutId }.
   water_ml:             { point: 9,  label: "Water intake",         unit: "ml",    source: "flow_meter",     kind: "sample" },
   water_visit:          { point: 9,  label: "Water visit",          unit: "event", source: "flow_meter",     kind: "event" },
+  // A bucket refilled by staff — water added, NOT drunk. value = ml added.
+  water_refill:         { point: 9,  label: "Water refill",         unit: "ml",    source: "flow_meter",     kind: "event" },
+  // Per meal (meta.meal morning|midday|evening|other, meta.mealId): what was
+  // put in the bowl, what was eaten, what was left.
+  feed_offered_g:       { point: 10, label: "Feed offered",         unit: "g",     source: "feeder",         kind: "sample" },
   feed_intake_g:        { point: 10, label: "Feed intake",          unit: "g",     source: "feeder",         kind: "sample" },
   feed_refusal_g:       { point: 10, label: "Feed refusal",         unit: "g",     source: "feeder",         kind: "sample" },
+  hay_intake_g:         { point: 10, label: "Hay eaten",            unit: "g",     source: "feeder",         kind: "sample" },  // meta.periodMin
+  feeder_fault:         { point: 10, label: "Feeder fault",         unit: "event", source: "feeder",         kind: "event" },   // meta.kind: FEEDER_FAULTS
+
+  // ---- the wearable set (leg tag + halter hub + pelvis sensor) ----------- //
+  // Everything a wearable derives carries meta.prototype = true until it is
+  // validated on real horses, and meta.sensor = leg|head|pelvis where it applies.
+  // One per analysed straight trot: value = the largest absolute asymmetry
+  // (mm); meta { limb LF|RF|LH|RH|null, head/pelvis { minDiffMm, maxDiffMm }|null,
+  // strides, durationS, prototype }.
+  lameness_result:      { point: 7,  label: "Lameness (trot)",      unit: "mm",    source: "imu",            kind: "event" },
+  // value = minutes; meta { start, end, steps, distanceM|null, trotMin, prototype }.
+  exercise_session:     { point: 5,  label: "Exercise session",     unit: "min",   source: "imu",            kind: "event" },
+  // value = battery %; meta { sensor, hardwareId, signalDbm|null, attached|null, firmware|null }.
+  device_status:        { point: 1,  label: "Wearable status",      unit: "%",     source: "imu",            kind: "diagnostic" },
+  device_detached:      { point: 1,  label: "Wearable came off",    unit: "event", source: "imu",            kind: "event" },   // meta.sensor
+  // value = speed m/s; meta { lat, lon, accuracyM }. Where the horse is is
+  // not a health measure — a diagnostic, like device_status.
+  gps_fix:              { point: 5,  label: "Position (exercise)",  unit: "m/s",   source: "imu",            kind: "diagnostic" },
   // Why breathing was or was not measured in each minute's window: value 1 a
   // rate was found, 0 not; meta.nostril / meta.flank say why (BREATHING_WHY).
   // A diagnostic — never a vital sign, never in coverage or alerts.
@@ -80,6 +105,26 @@ export const BREATHING_WHY = {
 };
 
 export const isDiagnostic = (metric) => METRICS[metric]?.kind === "diagnostic";
+
+/** A reading's identity for de-duplication: a device re-sending the same
+ *  reading (a retry, the relay after a lost ack) produces the same key. Only
+ *  readings from a known device get one (meta.deviceId). */
+export function dedupKey(r) {
+  const dev = r?.meta?.deviceId;
+  if (!dev) return null;
+  const t = Date.parse(r.ts);
+  const ts = Number.isFinite(t) ? new Date(t).toISOString() : String(r.ts ?? "");
+  const m = r.meta;
+  return `${dev}|${r.metric}|${ts}|${m.sensor ?? ""}|${m.kind ?? ""}|${m.seq ?? ""}`;
+}
+
+/** Where a wearable sensor sits: the leg tag (left front cannon), the halter
+ *  hub (head) and the pelvis sensor. Readings carry it as meta.sensor. */
+export const WEARABLE_SENSORS = ["leg", "head", "pelvis"];
+/** feeder_fault meta.kind values. */
+export const FEEDER_FAULTS = ["empty", "jam", "motor_stall", "under_run", "over_run", "sensor"];
+/** feed_* meta.meal values (from the time of day at the feeder). */
+export const MEALS = ["morning", "midday", "evening", "other"];
 
 export function coverage() {
   return Object.entries(METRICS).filter(([, m]) => m.kind !== "diagnostic").map(([key, m]) => ({

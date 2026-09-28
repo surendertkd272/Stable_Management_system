@@ -1,0 +1,31 @@
+# /etc/caddy/Caddyfile on the relay VM (DEPLOY_CLOUD.md).
+# Caddy gets and renews the TLS certificate itself (Let's Encrypt) once the
+# DNS name points at this machine and ports 80 and 443 are open.
+# Replace relay.example.in with your name.
+
+relay.example.in {
+	# A raw motion upload is at most 50 MB; the relay enforces its own limits
+	# (1 MB per readings request, 50 MB per raw upload) — this only stops
+	# anything bigger at the door.
+	request_body {
+		max_size 51MB
+	}
+
+	# Only what the hubs and the site server call. Everything else: 404.
+	@relay path /ingest/readings /ingest/raw /relay/pull /relay/ack /relay/health
+	handle @relay {
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle {
+		respond 404
+	}
+
+	# Authorization carries hub device tokens and the relay key. Caddy 2.5+
+	# redacts it in access logs by default — do NOT turn on log_credentials.
+	log {
+		output file /var/log/caddy/relay.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+	}
+}

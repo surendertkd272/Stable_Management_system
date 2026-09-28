@@ -1,7 +1,8 @@
 // BSV EquiCare backend — a Web-standard request handler (JSON store default;
 // Postgres via DATABASE_URL). Served by the Next.js route handlers under
 // src/app/{api,auth,ingest}; `handle(request) -> Response` is the whole API.
-//   ingest:  POST /ingest/readings         (edge agent -> cloud; device token)
+//   ingest:  POST /ingest/readings         (edge agent / devices -> cloud; device token)
+//            POST /ingest/raw              (a wearable hub's raw motion recording)
 //   query :  GET  /api/horses | /api/horses/:id | /api/alerts | /api/series
 //            GET  /api/coverage             (which of the 12 points are live yet)
 //            POST /api/alerts/:id/ack
@@ -10,10 +11,15 @@
 //   AUTH_INGEST_TOKEN   required as `Authorization: Bearer <token>` on /ingest/*
 //   AUTH_API_TOKEN      required as `Authorization: Bearer <token>` on /api/*
 //
+// The SIM hubs reach the site through a relay (server/relay.mjs, DEPLOY_CLOUD.md):
+//   EQUICARE_RELAY_URL + EQUICARE_RELAY_KEY   pull from it every 15 s
+//   EQUICARE_SENSOR_TICK_MS                   that tick (default 15000; 0 = off)
+//   EQUICARE_RAW_DAYS                         raw recordings kept (default 30)
+//
 // Run:  npm run dev   /   npm run build && npm start   (port 8080)
 
-import { isKnownMetric, coverage } from "./contract.mjs";
-import { createStore } from "./store.mjs";
+import { isKnownMetric, coverage, dedupKey } from "./contract.mjs";
+import { createStore, dataDir } from "./store.mjs";
 import { dispatch, notifyStatus, tick } from "./notify.mjs";
 import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
 import { sessionReport } from "./session.mjs";
@@ -23,12 +29,18 @@ import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
 import {
   summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries, behaviourForHorse, configureRollup,
 } from "./rollup.mjs";
+// The wearable / stall-sensor summaries (motionForHorse, intakeForHorse) are
+// looked up on the module, so a rollup without them yet still serves.
+import * as rollupModule from "./rollup.mjs";
 import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labelsCsv, frameGrabber,
   BOX_LABELS, validateBox, boxesExport, labellingQueue } from "./footage.mjs";
 import { randomBytes as footageRandom } from "node:crypto";
 import { SC_IT6420_HB_V2 } from "./hardware-spec.mjs";
 import { knowledge } from "./knowledge.mjs";
 import { deviceApi } from "./devices.mjs";
+import { adapt, AdapterError, DEFAULT_FORMAT, isKnownFormat, knownFormats } from "./adapters.mjs";
+import { rawStore, RawError, MAX_RAW_BYTES } from "./raw.mjs";
+import { gunzipSync } from "node:zlib";
 
 import SEED_ROSTER from "./roster.mjs";
 
@@ -51,6 +63,12 @@ async function ready() {
     ensureAdmin(s);   // first boot only; prints a generated password once
     G.devices = deviceApi({ store: s, json, CORS });
     G.devices.migrate();           // camera-only records from the first hardware version
+    // A leg recording waits for the hub's own (head) recording, and the
+    // pelvis sensor's when the hub has one paired.
+    G.raw = rawStore({ store: s, dataDir: dataDir(), expectedSensors: (sess) => {
+      const hub = s.list("devices").find((d) => d.id === sess.deviceId);
+      return ["head", ...(hub?.sensors?.pelvis?.length ? ["pelvis"] : [])];
+    } });
     configureRollup({ activity: activityBands(currentSettings(s).sensitivity) });
     // Escalation and the daily digest must run with nobody's browser open:
     // a server tick, once a minute (EQUICARE_NOTIFY_TICK_MS=0 turns it off).
@@ -64,6 +82,12 @@ async function ready() {
           .catch((e) => console.error("[notify]", e.message));
       }, every);
       G.notifyTimer.unref?.();
+    }
+    // The wearable side: pull the relay, analyse raw recordings, prune them.
+    const sensorEvery = Number(process.env.EQUICARE_SENSOR_TICK_MS ?? 15000);
+    if (sensorEvery > 0 && !G.sensorTimer) {
+      G.sensorTimer = setInterval(() => sensorTick().catch((e) => console.error("[sensors]", e.message)), sensorEvery);
+      G.sensorTimer.unref?.();
     }
     const st = s.statsSummary();
     console.log(`[equicare] store=${st.backend} auth=${API_TOKEN ? "token+sessions" : "sessions"} roster=${s.list("horses").length}`);
@@ -151,6 +175,202 @@ const slugId = (name, kind) => {
 const bioById = (id) => roster().find((h) => h.id === id);
 
 // --------------------------------------------------------------------------- //
+// Ingest — one path for everything a device sends, whether it arrives here
+// directly or through the relay (which hands over the sender's token hash).
+// --------------------------------------------------------------------------- //
+const MAX_READINGS_BODY = 16 * 1024 * 1024;       // a 2000-reading edge flush is ~600 kB
+const MAX_UNZIPPED = 64 * 1024 * 1024;
+
+/** A request body, refusing to hold more than `max` bytes of it. */
+async function readLimited(req, max) {
+  const len = Number(req.headers.get("content-length"));
+  if (Number.isFinite(len) && len > max) throw Object.assign(new Error("too large"), { status: 413 });
+  if (!req.body) return Buffer.alloc(0);
+  const reader = req.body.getReader();
+  const chunks = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > max) { reader.cancel().catch(() => {}); throw Object.assign(new Error("too large"), { status: 413 }); }
+    chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Text of a readings body; `Content-Encoding: gzip` saves a SIM hub data. */
+function bodyText(bytes, headers) {
+  const gz = /gzip/i.test(headers.get("content-encoding") || "") && bytes[0] === 0x1f && bytes[1] === 0x8b;
+  return (gz ? gunzipSync(bytes, { maxOutputLength: MAX_UNZIPPED }) : bytes).toString("utf8");
+}
+
+/**
+ * Readings from `sender` (a device principal, or null on the legacy ingest
+ * path): decoded by format, attributed by the registry, de-duplicated,
+ * stored. Returns { status, body }.
+ */
+function ingestReadings({ headers, bytes, sender }) {
+  const devices = G.devices;
+  const format = headers.get("x-equicare-format") || DEFAULT_FORMAT;
+  if (!isKnownFormat(format))
+    return { status: 400, body: { error: `unknown payload format "${format.slice(0, 60)}"`, formats: knownFormats() } };
+  let batch;
+  try {
+    batch = adapt(format, bodyText(bytes, headers));
+  } catch (e) {
+    if (e instanceof AdapterError) return { status: 400, body: { error: e.message, ...(e.detail ? { detail: e.detail } : {}) } };
+    return { status: 400, body: { error: "the body could not be read", detail: String(e.message) } };
+  }
+  // The registry decides whose readings they are: a device token's horseId
+  // claims are removed here (devices.attribute), only the legacy path keeps them.
+  const { clean: known, rejected } = devices.attribute(batch.filter((r) => r && isKnownMetric(r.metric)), sender);
+
+  // A camera knows its STALL, not which horse is standing in it, and horses
+  // change stalls routinely. Resolve stall -> horse here, against the
+  // current roster, so the edge never has to hardcode that mapping.
+  const byStall = new Map(roster().filter((h) => h.stall).map((h) => [h.stall, h.id]));
+  const unattributed = [];
+  const clean = [];
+  for (const r of known) {
+    if (r.horseId) { clean.push(r); continue; }
+    const horseId = r.stallId ? byStall.get(r.stallId) : undefined;
+    if (horseId) clean.push({ ...r, horseId });
+    // Previously a stall-only reading was counted as accepted and then
+    // silently never reached any horse — a fever could vanish. Report it.
+    else unattributed.push(r.stallId ?? null);
+  }
+  // Calibration cross-check. The edge agent tags readings taken through
+  // default ROIs, but it cannot know the camera was moved after it was
+  // aimed — the Hardware page does (rois.stale). Either source saying
+  // "uncalibrated" wins: the cost of wrongly flagging is a warning, the
+  // cost of wrongly trusting is a false clinical alarm.
+  const camByStall = new Map(store.list("devices").filter((d) => d.kind === "thermal_camera").map((c) => [c.stall, c]));
+  for (const r of clean) {
+    // A reading from a known device was already judged by THAT device's
+    // calibration; the stall lookup is only for senders that don't say
+    // which camera they are (the command-line edge agent).
+    if (r.deviceId || r.source !== "thermal_camera" || !r.stallId) continue;
+    const cam = camByStall.get(r.stallId);
+    if (cam && (!cam.rois || cam.rois.stale)) r.meta = { ...(r.meta || {}), calibrated: false };
+  }
+  // A device re-sending what it already sent (a retry after a timeout, the
+  // relay after a lost ack) is recognised by the key and stored once.
+  for (const r of clean) {
+    r.ts ??= new Date().toISOString();
+    r.meta = { ...(r.meta || {}) };
+    const k = dedupKey(r);
+    if (k) r.meta.dedupKey = k; else delete r.meta.dedupKey;
+  }
+  const stats = {};
+  const accepted = store.appendReadings(clean, stats);
+  const resBody = { accepted, dropped: batch.length - known.length - rejected.length, duplicates: stats.duplicates || 0 };
+  if (rejected.length) { resBody.rejected = rejected.length; resBody.rejections = rejected.slice(0, 20); }
+  if (unattributed.length) {
+    resBody.unattributed = unattributed.length;
+    resBody.unknownStalls = [...new Set(unattributed)];
+    console.warn(`[ingest] ${unattributed.length} reading(s) with no horse for stall(s): ${resBody.unknownStalls.join(", ")}`);
+  }
+  return { status: 200, body: resBody };
+}
+
+/** A raw motion recording from a wearable hub (server/raw.mjs). */
+function ingestRaw({ headers, bytes, sender }) {
+  if (sender?.kind !== "wearable_hub")
+    return { status: 403, body: { error: "only a wearable hub uploads raw motion recordings" } };
+  const horse = bioById(sender.horseId);
+  if (!horse) return { status: 409, body: { error: "this wearable's horse is no longer in the roster — edit the wearable" } };
+  let out;
+  try {
+    out = G.raw.upload({ horseId: horse.id, deviceId: sender.id, headers, bytes });
+  } catch (e) {
+    if (e instanceof RawError) return { status: e.status, body: { error: e.message } };
+    throw e;
+  }
+  store.update("devices", sender.id, { lastSeen: new Date().toISOString() });
+  // Analysed in the background (and on the tick): the upload is answered now.
+  if (out.status === 201) setImmediate(() => G.raw.processPending().catch((e) => console.error("[raw]", e.message)));
+  return out;
+}
+
+// ---- the relay (SIM hubs -> relay in India -> this server) ----------------- //
+const relayConf = () => {
+  const url = process.env.EQUICARE_RELAY_URL, key = process.env.EQUICARE_RELAY_KEY;
+  return url && key ? { url: url.replace(/\/+$/, ""), key } : null;
+};
+G.relay ??= { lastPullAt: null, lastOkAt: null, lastError: null, received: 0, rejected: 0, busy: null };
+
+/** One item the relay held: through the same ingest path as a direct send,
+ *  as the device whose token it came with. "retry" leaves it on the relay. */
+function relayItem(it) {
+  const sender = G.devices.deviceByTokenHash(it.tokenHash);
+  const tag = `[relay] item ${String(it.id).slice(0, 40)}`;
+  if (!sender) { console.warn(`${tag} rejected: unknown or revoked device token`); return "rejected"; }
+  let headers;
+  try { headers = new Headers(Object.entries(it.headers || {}).filter(([, v]) => typeof v === "string")); }
+  catch { console.warn(`${tag} rejected: unusable headers`); return "rejected"; }
+  const bytes = Buffer.from(String(it.body ?? ""), it.encoding === "base64" ? "base64" : "utf8");
+  let res;
+  try {
+    res = it.kind === "raw" ? ingestRaw({ headers, bytes, sender }) : ingestReadings({ headers, bytes, sender });
+  } catch (e) {
+    console.error(`${tag} failed, will retry: ${e.message}`);
+    return "retry";
+  }
+  if (res.status >= 500) return "retry";
+  if (res.status >= 400) { console.warn(`${tag} from "${sender.name}" rejected: ${res.body?.error}`); return "rejected"; }
+  return "ok";
+}
+
+/** Pull everything waiting on the relay, ingest it, ack it. */
+export async function pullRelay() {
+  const conf = relayConf();
+  if (!conf) return null;
+  await ready();
+  G.relay.busy ??= (async () => {
+    const st = G.relay;
+    const auth = { Authorization: `Bearer ${conf.key}` };
+    let got = 0, rejected = 0;
+    try {
+      for (let round = 0; round < 10; round++) {
+        st.lastPullAt = new Date().toISOString();
+        const res = await fetch(`${conf.url}/relay/pull?max=500`, { headers: auth, signal: AbortSignal.timeout(60_000) });
+        if (!res.ok) throw new Error(`the relay answered HTTP ${res.status}`);
+        const { items = [] } = await res.json();
+        const ack = [];
+        for (const it of items) {
+          const outcome = relayItem(it);
+          if (outcome === "retry") continue;
+          ack.push(it.id);
+          if (outcome === "rejected") rejected++; else got++;
+        }
+        if (ack.length) {
+          const a = await fetch(`${conf.url}/relay/ack`, { method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: ack }), signal: AbortSignal.timeout(30_000) });
+          if (!a.ok) throw new Error(`the relay refused the ack (HTTP ${a.status})`);
+        }
+        if (items.length < 500 || ack.length < items.length) break;
+      }
+      st.lastOkAt = new Date().toISOString(); st.lastError = null;
+    } catch (e) {
+      st.lastError = String(e.message || e).slice(0, 200);
+      console.error("[relay] pull failed:", st.lastError);
+    } finally {
+      st.received += got; st.rejected += rejected; st.busy = null;
+    }
+    return { received: got, rejected };
+  })();
+  return G.relay.busy;
+}
+
+async function sensorTick() {
+  await ready();
+  if (relayConf()) await pullRelay();
+  await G.raw.processPending();
+  if (Date.now() - (G.rawPrunedAt ?? 0) > 3600_000) { G.raw.prune(); G.rawPrunedAt = Date.now(); }
+}
+
+// --------------------------------------------------------------------------- //
 export async function handle(req) {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -174,7 +394,13 @@ export async function handle(req) {
     // /health is now a page (Health Scheduling) on the same origin, so the
     // service health check moved under /api. It is answered before the auth
     // gate on purpose: monitoring must be able to poll it without a session.
-    if (path === "/api/health") return json(200, { ok: true, ...store.statsSummary(), sessions: sessionCount(), authRequired: authRequired() });
+    // storage: how full the reading store is, and advice when it is dropping
+    // readings (the Hardware page shows it). relay: only when one is set up.
+    if (path === "/api/health") {
+      const { busy, ...relay } = G.relay;
+      return json(200, { ok: true, ...store.statsSummary(), sessions: sessionCount(), authRequired: authRequired(),
+        storage: store.storage?.() ?? null, ...(relayConf() ? { relay } : {}) });
+    }
     if (path === "/api/coverage") return json(200, coverage());
     if (path === "/api/knowledge" && method === "GET") return json(200, knowledge());
     const devices = G.devices;
@@ -191,54 +417,22 @@ export async function handle(req) {
       const sender = devices.deviceByToken(bearer(req));
       const legacyOk = INGEST_TOKEN ? bearer(req) === INGEST_TOKEN : !devices.anyDeviceTokens();
       if (!sender && !legacyOk) return json(401, { error: "unauthorized" });
-      let body;
-      try {
-        body = JSON.parse((await req.text()) || "{}");
-      } catch (e) {
-        return json(400, { error: "malformed JSON", detail: String(e.message) });
-      }
-      const raw = Array.isArray(body) ? body : body.readings || [];
-      const { clean: vetted, rejected } = devices.attribute(raw.filter((r) => r && isKnownMetric(r.metric)), sender);
-      const batch = raw;
-      const known = vetted;
+      let bytes;
+      try { bytes = await readLimited(req, MAX_READINGS_BODY); }
+      catch (e) { if (e.status === 413) return json(413, { error: `a readings batch is at most ${MAX_READINGS_BODY / 1048576} MB — send smaller batches` }); throw e; }
+      const r = ingestReadings({ headers: req.headers, bytes, sender });
+      return json(r.status, r.body);
+    }
 
-      // A camera knows its STALL, not which horse is standing in it, and horses
-      // change stalls routinely. Resolve stall -> horse here, against the
-      // current roster, so the edge never has to hardcode that mapping.
-      const byStall = new Map(roster().filter((h) => h.stall).map((h) => [h.stall, h.id]));
-      const unattributed = [];
-      const clean = [];
-      for (const r of known) {
-        if (r.horseId) { clean.push(r); continue; }
-        const horseId = r.stallId ? byStall.get(r.stallId) : undefined;
-        if (horseId) clean.push({ ...r, horseId });
-        // Previously a stall-only reading was counted as accepted and then
-        // silently never reached any horse — a fever could vanish. Report it.
-        else unattributed.push(r.stallId ?? null);
-      }
-      // Calibration cross-check. The edge agent tags readings taken through
-      // default ROIs, but it cannot know the camera was moved after it was
-      // aimed — the Hardware page does (rois.stale). Either source saying
-      // "uncalibrated" wins: the cost of wrongly flagging is a warning, the
-      // cost of wrongly trusting is a false clinical alarm.
-      const camByStall = new Map(store.list("devices").filter((d) => d.kind === "thermal_camera").map((c) => [c.stall, c]));
-      for (const r of clean) {
-        // A reading from a known device was already judged by THAT device's
-        // calibration; the stall lookup is only for senders that don't say
-        // which camera they are (the command-line edge agent).
-        if (r.deviceId || r.source !== "thermal_camera" || !r.stallId) continue;
-        const cam = camByStall.get(r.stallId);
-        if (cam && (!cam.rois || cam.rois.stale)) r.meta = { ...(r.meta || {}), calibrated: false };
-      }
-      const accepted = store.appendReadings(clean);
-      const resBody = { accepted, dropped: batch.length - known.length - rejected.length };
-      if (rejected.length) { resBody.rejected = rejected.length; resBody.rejections = rejected.slice(0, 20); }
-      if (unattributed.length) {
-        resBody.unattributed = unattributed.length;
-        resBody.unknownStalls = [...new Set(unattributed)];
-        console.warn(`[ingest] ${unattributed.length} reading(s) with no horse for stall(s): ${resBody.unknownStalls.join(", ")}`);
-      }
-      return json(200, resBody);
+    // ---- raw motion recordings (a wearable hub's own token) --------------- //
+    if (path === "/ingest/raw" && method === "POST") {
+      const sender = devices.deviceByToken(bearer(req));
+      if (!sender) return json(401, { error: "unauthorized — a wearable hub's device token is required" });
+      let bytes;
+      try { bytes = await readLimited(req, MAX_RAW_BYTES); }
+      catch (e) { if (e.status === 413) return json(413, { error: `an upload is at most ${MAX_RAW_BYTES / 1048576} MB` }); throw e; }
+      const r = ingestRaw({ headers: req.headers, bytes, sender });
+      return json(r.status, r.body);
     }
 
     // ---- authentication ------------------------------------------------- //
@@ -327,10 +521,15 @@ export async function handle(req) {
       if (who?.role === "owner" && bio.owner !== who.owner)
         return json(404, { error: "unknown horse" });
       const rd = store.readingsForHorse(bio.id);
+      const helper = (name) => (typeof rollupModule[name] === "function" ? rollupModule[name] : () => null);
       return json(200, {
         ...summarizeHorse(bio, store.allReadings()),
         vitals: vitalsForHorse(rd),
         behaviour: behaviourForHorse(rd),
+        // Wearable (steps, lameness, exercise) and stall sensors (water, feed,
+        // hay); null when the horse has none of those readings.
+        motion: helper("motionForHorse")(rd),
+        intake: helper("intakeForHorse")(rd),
         charts: {
           body_temp_c: metricSeries(rd, "body_temp_c", 7, "avg"),
           respiratory_rate_bpm: metricSeries(rd, "respiratory_rate_bpm", 7, "avg"),
@@ -462,6 +661,16 @@ export async function handle(req) {
           ...CORS,
         },
       });
+    }
+
+    // ---- raw motion recordings (wearable hubs) ----------------------------- //
+    // GET /api/raw?horse=<id>: what was uploaded and what the analysis made
+    // of it. The yard's people only, like footage.
+    if (path === "/api/raw" && method === "GET") {
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      const horseId = url.searchParams.get("horse") || null;
+      if (horseId && !bioById(horseId)) return json(404, { error: "unknown horse" });
+      return json(200, G.raw.list({ horseId }));
     }
 
     // ---- hardware (device registry) ---------------------------------------- //

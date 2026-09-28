@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS readings (
 CREATE INDEX IF NOT EXISTS readings_horse_ts_idx ON readings (horse_id, ts DESC);
 CREATE INDEX IF NOT EXISTS readings_metric_ts_idx ON readings (metric, ts DESC);
 CREATE INDEX IF NOT EXISTS readings_ts_idx ON readings (ts DESC);
+-- A device re-sending after a gap must not be counted twice (the store also
+-- creates this at boot, for databases made before it was added here).
+CREATE UNIQUE INDEX IF NOT EXISTS readings_dedup_key_idx
+  ON readings ((meta->>'dedupKey')) WHERE meta ? 'dedupKey';
 
 CREATE TABLE IF NOT EXISTS alert_acks (
   alert_key   TEXT PRIMARY KEY,

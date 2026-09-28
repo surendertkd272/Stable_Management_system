@@ -16,6 +16,29 @@ export const dataDir = () =>
   process.env.EQUICARE_DATA_DIR || join(process.cwd(), "server", "data");
 const RETENTION_MS = 21 * 24 * 3600 * 1000; // ~3 weeks (covers 14-day baseline)
 const MAX_READINGS = 300_000;
+// The cap, overridable for tests and for a server with memory to spare.
+const readingsCap = () => Math.max(1, Math.floor(Number(process.env.EQUICARE_MAX_READINGS) || MAX_READINGS));
+
+// A reading re-sent by a device (the edge outbox after a timeout, the relay
+// after a lost ack, a hub replaying its buffer) must not count twice. The
+// ingest path stamps meta.dedupKey on every reading from a known device; a
+// store keeps each key once.
+const dedupKeyOf = (r) => (typeof r?.meta?.dedupKey === "string" && r.meta.dedupKey ? r.meta.dedupKey : null);
+
+/** The /api/health storage block: how full the store is, and what to do. */
+function storageView({ backend, readings, cap, droppedByCap, lastDropAt = null, cacheEvicted = 0 }) {
+  let advice = null;
+  if (backend === "json" && droppedByCap > 0)
+    advice = `The JSON store is full: the oldest readings are being dropped to stay under ${cap.toLocaleString("en-GB")}. ` +
+      "Switch to the Postgres store (set DATABASE_URL) to keep them.";
+  else if (backend === "json" && readings >= 0.8 * cap)
+    advice = `The JSON store is at ${Math.round((readings / cap) * 100)}% of its ${cap.toLocaleString("en-GB")}-reading limit; ` +
+      "at the limit the oldest readings are dropped. Switch to the Postgres store (set DATABASE_URL) before then.";
+  else if (backend === "postgres" && cacheEvicted > 0)
+    advice = `Postgres keeps every reading, but the live view holds only the newest ${cap.toLocaleString("en-GB")} — ` +
+      "set EQUICARE_MAX_READINGS higher if this server has the memory.";
+  return { backend, readings, cap, droppedByCap, lastDropAt, ...(backend === "postgres" ? { cacheEvicted } : {}), advice };
+}
 
 function normalize(r, seq) {
   return {
@@ -39,6 +62,7 @@ const valid = (r) => r && typeof r.metric === "string" && typeof r.value === "nu
 function makeJsonStore() {
   const DATA_DIR = dataDir();
   const STATE_FILE = join(DATA_DIR, "state.json");
+  const cap = readingsCap();
   let state = { readings: [], acks: {}, seq: 0, entities: {} };
   let saveTimer = null;
 
@@ -46,6 +70,10 @@ function makeJsonStore() {
     state = JSON.parse(readFileSync(/*turbopackIgnore: true*/ STATE_FILE, "utf8"));
     state.readings ||= []; state.acks ||= {}; state.seq ||= 0; state.entities ||= {};
   } catch { /* fresh */ }
+  // Readings the cap pushed out, ever — kept in the state so a restart does
+  // not make a full store look healthy again.
+  state.droppedByCap ||= 0;
+  const keys = new Set(state.readings.map(dedupKeyOf).filter(Boolean));
 
   const save = () => {
     if (saveTimer) return;
@@ -55,18 +83,38 @@ function makeJsonStore() {
       writeFileSync(/*turbopackIgnore: true*/ STATE_FILE, JSON.stringify(state));
     }, 250);
   };
+  const forget = (r) => { const k = dedupKeyOf(r); if (k) keys.delete(k); };
   const prune = () => {
     const cutoff = Date.now() - RETENTION_MS;
-    state.readings = state.readings.filter((r) => Date.parse(r.ts) >= cutoff);
-    if (state.readings.length > MAX_READINGS) state.readings = state.readings.slice(-MAX_READINGS);
+    const kept = [];
+    for (const r of state.readings) if (Date.parse(r.ts) >= cutoff) kept.push(r); else forget(r);
+    state.readings = kept;
+    if (state.readings.length > cap) {
+      const over = state.readings.length - cap;
+      for (const r of state.readings.slice(0, over)) forget(r);
+      state.readings = state.readings.slice(over);
+      if (!state.droppedByCap) console.warn(`[store] the JSON store reached its cap of ${cap} readings — dropping the oldest; switch to Postgres (DATABASE_URL)`);
+      state.droppedByCap += over;
+      state.lastDropAt = new Date().toISOString();
+    }
   };
 
   return {
     backend: "json",
-    appendReadings(readings) {
-      let n = 0;
-      for (const r of readings) if (valid(r)) { state.readings.push(normalize(r, ++state.seq)); n++; }
-      prune(); save(); return n;
+    /** Returns how many were stored. `stats.duplicates` (when passed) gets
+     *  how many were skipped as already stored (same meta.dedupKey). */
+    appendReadings(readings, stats) {
+      let n = 0, dup = 0;
+      for (const r of readings) {
+        if (!valid(r)) continue;
+        const k = dedupKeyOf(r);
+        if (k && keys.has(k)) { dup++; continue; }
+        if (k) keys.add(k);
+        state.readings.push(normalize(r, ++state.seq)); n++;
+      }
+      if (stats) stats.duplicates = (stats.duplicates || 0) + dup;
+      if (n) { prune(); save(); }
+      return n;
     },
     allReadings: () => state.readings,
     readingsForHorse: (id) => state.readings.filter((r) => r.horseId === id),
@@ -96,6 +144,8 @@ function makeJsonStore() {
       list.splice(i, 1); save(); return true;
     },
 
+    storage: () => storageView({ backend: "json", readings: state.readings.length, cap,
+      droppedByCap: state.droppedByCap, lastDropAt: state.lastDropAt ?? null }),
     statsSummary: () => ({
       backend: "json",
       readings: state.readings.length,
@@ -112,7 +162,7 @@ export async function createStore() {
   const url = process.env.DATABASE_URL;
   if (url) {
     const { makePgStore } = await import("./store.pg.mjs");
-    return makePgStore(url, { RETENTION_MS, MAX_READINGS, normalize, valid });
+    return makePgStore(url, { RETENTION_MS, MAX_READINGS: readingsCap(), normalize, valid, dedupKeyOf, storageView });
   }
   return makeJsonStore();
 }

@@ -3,16 +3,19 @@
 //
 //   edge_box        the on-site computer (Jetson) that polls devices; holds a token
 //   thermal_camera  Sparsh SC-IT6420-HB V2, polled by an edge box over ISAPI
-//   modbus_sensor   any Modbus/TCP device (flow meter, load cell, feeder),
-//                   described by a register map — no code per model
+//   modbus_sensor   any Modbus/TCP or Modbus RTU (RS-485) device (flow meter,
+//                   load cell, feeder), described by a register map — no code
+//                   per model
 //   push_device     a device or gateway that sends its own readings with a token
+//   wearable_hub    the halter hub with a SIM (+ its leg tag and pelvis sensor):
+//                   sends with its own token, bound to ONE horse
 //
 // Before this, registering a camera in the portal changed nothing about what
 // was measured: the edge agent was configured separately, by hand, on its
 // command line. Now an edge box fetches its device list from here, so adding,
 // re-aiming or removing hardware in the portal is what actually happens.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { isKnownMetric, METRICS } from "./contract.mjs";
+import { isKnownMetric, METRICS, WEARABLE_SENSORS, FEEDER_FAULTS } from "./contract.mjs";
 import { validateCameraModel } from "./hardware-spec.mjs";
 import { seal, open } from "./secrets.mjs";
 import { checkHost, rtspOptions } from "./camera.mjs";
@@ -21,9 +24,33 @@ import { readRegisters, readSensor, TYPES, WORD_ORDERS } from "./modbus.mjs";
 import { startBreathingCheck, breathingJob, jobView } from "./thermal-video.mjs";
 import { startCoolingTest, coolingJob, coolingView, splitFromCalib } from "./cooling.mjs";
 
-export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device"];
+export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device", "wearable_hub"];
 const POLLED = new Set(["thermal_camera", "modbus_sensor"]);
-const TOKEN_KINDS = new Set(["edge_box", "push_device"]);
+const TOKEN_KINDS = new Set(["edge_box", "push_device", "wearable_hub"]);
+
+// What a wearable hub may send: everything the wearable measures, and the
+// hub's own status. Fixed — unlike a push device, there is nothing to choose.
+export const WEARABLE_METRICS = new Set([
+  ...Object.keys(METRICS).filter((m) => METRICS[m].source === "imu"),
+  "device_status", "device_detached", "gps_fix", "exercise_session", "lameness_result",
+  "steps", "activity_index", "rest_minutes", "gait_asymmetry",
+]);
+// About the hardware, not the horse: never tagged as a prototype measure.
+const WEARABLE_DEVICE_METRICS = new Set(["device_status", "device_detached", "gps_fix"]);
+const HARDWARE_ID = /^[A-Za-z0-9._:-]{1,64}$/;
+
+// What the edge box makes of a Modbus register (edge/intake.py). Without a
+// `use` a register is today's plain gauge / counter. With one, the use fixes
+// how it is read (a flow meter is a running total, a load cell an
+// instantaneous weight) and which metrics come out of it.
+export const REGISTER_USES = {
+  flow:      { mode: "counter", metrics: ["water_ml", "water_visit"] },                    // water meter → drinking bouts
+  bucket:    { mode: "gauge",   metrics: ["water_ml", "water_visit", "water_refill"] },    // water bucket load cell
+  feed_bowl: { mode: "gauge",   metrics: ["feed_intake_g", "feed_offered_g", "feed_refusal_g"] }, // weigh-back feeder bowl
+  hay:       { mode: "gauge",   metrics: ["hay_intake_g"] },                               // hay net / rack load cell
+  fault:     { mode: "gauge",   metrics: ["feeder_fault"] },                               // feeder fault-code register
+};
+const SERIAL_PORT = /^(\/dev\/[A-Za-z0-9._+\/-]{1,120}|COM[0-9]{1,3})$/;
 // Camera ROI slots the edge agent reads. The eye is a small BOX (Area 0) read
 // as its maximum: the inner corner of the eye is the warmest spot on the head,
 // and the camera reports the hottest pixel inside the box and where it is — so
@@ -66,7 +93,7 @@ const num = (v, d) => (v === undefined || v === "" || v === null ? d : Number(v)
 const isPort = (p) => Number.isInteger(p) && p > 0 && p < 65536;
 const str = (v, d = "") => String(v ?? d).trim();
 
-export function validateDevice(kind, body, existing = {}, all = []) {
+export function validateDevice(kind, body, existing = {}, all = [], { horses = [] } = {}) {
   const errs = [];
   if (!KINDS.includes(kind)) return { out: null, errs: [`unknown device kind "${kind}" (${KINDS.join(", ")})`] };
   const pick = (k, d) => (body[k] !== undefined ? body[k] : existing[k] !== undefined ? existing[k] : d);
@@ -79,16 +106,46 @@ export function validateDevice(kind, body, existing = {}, all = []) {
   };
   if (!out.name) errs.push("name is required");
 
-  if (kind !== "edge_box") out.stall = str(pick("stall"));
+  // A wearable has no stall of its own: it goes where its horse goes.
+  if (kind !== "edge_box" && kind !== "wearable_hub") out.stall = str(pick("stall"));
   if (kind === "push_device" && !out.stall) errs.push("stall is required — readings are attributed to it");
 
+  // RS-485 sensors hang off the edge box's serial port: no address to reach.
+  const rtu = kind === "modbus_sensor" && pick("transport", "tcp") === "rtu";
   if (POLLED.has(kind)) {
     out.edgeId = pick("edgeId", null) || null;
     if (out.edgeId && !all.some((d) => d.id === out.edgeId && d.kind === "edge_box"))
       errs.push("the chosen edge box does not exist");
-    out.host = str(pick("host"));
-    if (!out.host) errs.push("IP address is required");
+    out.host = rtu ? "" : str(pick("host"));
+    if (rtu) { /* no host */ }
+    else if (!out.host) errs.push("IP address is required");
     else if (/[\s/?#@]/.test(out.host)) errs.push("enter a bare IP address or hostname, not a URL");
+  }
+
+  if (kind === "wearable_hub") {
+    out.horseId = str(pick("horseId"));
+    if (!out.horseId) errs.push("choose the horse that wears it — every reading it sends is attributed to that horse");
+    else if (!horses.some((h) => h.id === out.horseId)) errs.push("that horse is not in the roster");
+    const s = pick("sensors", {}) || {};
+    const leg = s.leg === undefined || s.leg === null || s.leg === "" ? null : str(s.leg);
+    const pelvis = Array.isArray(s.pelvis) ? [...new Set(s.pelvis.map((v) => str(v)).filter(Boolean))] : [];
+    if (s.pelvis !== undefined && s.pelvis !== null && !Array.isArray(s.pelvis)) errs.push("pelvis sensors must be a list of hardware IDs");
+    if (pelvis.length > 4) errs.push("at most 4 pelvis sensors per hub");
+    for (const id of [leg, ...pelvis]) if (id !== null && !HARDWARE_ID.test(id))
+      errs.push(`sensor ID "${id.slice(0, 70)}": use the ID printed on the sensor (letters, digits, . _ : -; up to 64)`);
+    out.sensors = { leg, pelvis };
+    out.imei = str(pick("imei")).replace(/[\s-]/g, "");
+    if (out.imei && !/^[0-9]{14,16}$/.test(out.imei)) errs.push("IMEI is the 15-digit number on the hub's label");
+    // Two hubs on one horse would double-count its steps; one sensor paired
+    // to two hubs would put one horse's gait on another.
+    for (const d of all) {
+      if (d.kind !== "wearable_hub" || d.id === existing.id) continue;
+      if (out.horseId && d.horseId === out.horseId && d.enabled !== false && out.enabled)
+        errs.push(`"${d.name}" is already on this horse — switch it off or remove it first`);
+      const theirs = new Set([d.sensors?.leg, ...(d.sensors?.pelvis || [])].filter(Boolean));
+      for (const id of [leg, ...pelvis]) if (id && theirs.has(id)) errs.push(`sensor ${id} is already paired to "${d.name}"`);
+      if (out.imei && d.imei === out.imei) errs.push(`IMEI ${out.imei} is already registered as "${d.name}"`);
+    }
   }
 
   if (kind === "thermal_camera") {
@@ -128,6 +185,7 @@ export function validateDevice(kind, body, existing = {}, all = []) {
 
   if (kind === "modbus_sensor") {
     Object.assign(out, {
+      transport: String(pick("transport", "tcp")),
       port: num(pick("port"), 502),
       unitId: num(pick("unitId"), 1),
       function: num(pick("function"), 3),
@@ -135,14 +193,39 @@ export function validateDevice(kind, body, existing = {}, all = []) {
       pollSeconds: num(pick("pollSeconds"), 10),
     });
     if (!out.stall) errs.push("stall is required — the sensor's readings are attributed to it");
-    if (!isPort(out.port)) errs.push("port must be a port number");
+    if (!["tcp", "rtu"].includes(out.transport)) errs.push('transport must be "tcp" (Modbus/TCP) or "rtu" (RS-485)');
+    if (rtu) {
+      Object.assign(out, {
+        serialPort: str(pick("serialPort")),
+        baud: num(pick("baud"), 9600),
+        parity: String(pick("parity", "N")).toUpperCase(),
+        stopBits: num(pick("stopBits"), 1),
+      });
+      if (!out.serialPort) errs.push("serial port is required for RS-485 (e.g. /dev/ttyUSB0)");
+      else if (!SERIAL_PORT.test(out.serialPort)) errs.push("serial port must be a device path such as /dev/ttyUSB0 (or COM3)");
+      if (!(Number.isInteger(out.baud) && out.baud >= 1200 && out.baud <= 115200)) errs.push("baud must be a whole number, 1200–115200");
+      if (!["N", "E", "O"].includes(out.parity)) errs.push("parity must be N, E or O");
+      if (![1, 2].includes(out.stopBits)) errs.push("stop bits must be 1 or 2");
+      // Unit 0 is the RS-485 broadcast address: nothing ever answers it.
+      if (out.unitId === 0) errs.push("unit id 0 is the RS-485 broadcast address — use the sensor's own address (1–247)");
+    } else {
+      // Switching back to TCP: no serial settings left behind to confuse anyone.
+      Object.assign(out, { serialPort: undefined, baud: undefined, parity: undefined, stopBits: undefined });
+      if (!isPort(out.port)) errs.push("port must be a port number");
+    }
     if (!(Number.isInteger(out.unitId) && out.unitId >= 0 && out.unitId <= 247)) errs.push("unit id must be 0–247");
     if (![3, 4].includes(out.function)) errs.push("function must be 3 (holding registers) or 4 (input registers)");
     if (!(out.pollSeconds >= 1 && out.pollSeconds <= 3600)) errs.push("poll interval must be 1–3600 s");
     const regs = pick("registers", []);
     if (!Array.isArray(regs) || regs.length === 0) errs.push("add at least one register");
     else if (regs.length > 32) errs.push("at most 32 registers per sensor");
-    out.registers = (Array.isArray(regs) ? regs : []).map((r, i) => {
+    out.registers = (Array.isArray(regs) ? regs : []).map((r0, i) => {
+      const r = r0 && typeof r0 === "object" ? r0 : {};
+      const use = r.use === undefined || r.use === null || r.use === "" ? null : String(r.use);
+      const how = use ? REGISTER_USES[use] : null;
+      // A use decides the metric (its first one, unless another it emits is
+      // named) and how the register is read.
+      const metric = String(r.metric || (how ? how.metrics[0] : ""));
       const reg = {
         name: str(r.name) || `register ${i + 1}`,
         address: num(r.address, NaN),
@@ -150,10 +233,24 @@ export function validateDevice(kind, body, existing = {}, all = []) {
         wordOrder: WORD_ORDERS.includes(r.wordOrder) ? r.wordOrder : "high-first",
         scale: num(r.scale, 1),
         offset: num(r.offset, 0),
-        metric: String(r.metric || ""),
-        unit: str(r.unit) || METRICS[r.metric]?.unit || "",
-        mode: r.mode === "counter" ? "counter" : "gauge",
+        metric,
+        unit: str(r.unit) || METRICS[metric]?.unit || "",
+        mode: how ? how.mode : r.mode === "counter" ? "counter" : "gauge",
       };
+      if (use) {
+        reg.use = use;
+        if (!how) errs.push(`${reg.name}: use must be one of ${Object.keys(REGISTER_USES).join(", ")} (or none)`);
+        else if (!how.metrics.includes(metric)) errs.push(`${reg.name}: a ${use} register feeds ${how.metrics.join(" / ")}, not ${metric}`);
+        // Which fault code means what, when the feeder's table differs from
+        // the edge agent's default. { "<code>": "<fault kind>" }
+        if (use === "fault" && r.faultCodes !== undefined && r.faultCodes !== null) {
+          const codes = r.faultCodes;
+          const ok = typeof codes === "object" && !Array.isArray(codes) && Object.entries(codes).length <= 64 &&
+            Object.entries(codes).every(([k, v]) => /^[0-9]{1,5}$/.test(k) && Number(k) <= 65535 && FEEDER_FAULTS.includes(v));
+          if (!ok) errs.push(`${reg.name}: fault codes map a register value (0–65535) to one of ${FEEDER_FAULTS.join(", ")}`);
+          else reg.faultCodes = Object.fromEntries(Object.entries(codes).map(([k, v]) => [String(Number(k)), v]));
+        }
+      }
       const minAddr = out.addressing === "one-based" ? 1 : 0;
       if (!(Number.isInteger(reg.address) && reg.address >= minAddr && reg.address <= 65535 + minAddr))
         errs.push(`${reg.name}: address must be a whole number (${out.addressing}, ${minAddr}–${65535 + minAddr})`);
@@ -163,6 +260,18 @@ export function validateDevice(kind, body, existing = {}, all = []) {
       if (!Number.isFinite(reg.offset)) errs.push(`${reg.name}: offset must be a number`);
       return reg;
     });
+    // Readings are told apart by device, metric and time (the dedupKey): two
+    // registers of one sensor sending the same metric in the same poll would
+    // be stored as one — and for one stall they would double-count anyway
+    // (a flow meter AND a bucket scale both measure its water).
+    const emits = new Map();
+    for (const reg of out.registers) {
+      for (const m of reg.use ? REGISTER_USES[reg.use]?.metrics ?? [] : [reg.metric]) {
+        if (!emits.has(m)) { emits.set(m, reg.name); continue; }
+        errs.push(`${reg.name} and ${emits.get(m)} would both send ${m} — one sensor record feeds each metric once`);
+        break;
+      }
+    }
   }
 
   if (kind === "push_device") {
@@ -178,9 +287,19 @@ export function validateDevice(kind, body, existing = {}, all = []) {
   // a water meter). Refuse.
   if (POLLED.has(kind) && out.host) {
     const port = kind === "thermal_camera" ? out.httpPort : out.port;
-    const clash = all.find((d) => d.id !== existing.id && d.kind === kind && d.host === out.host &&
+    const clash = all.find((d) => d.id !== existing.id && d.kind === kind && d.host === out.host && d.transport !== "rtu" &&
       (kind === "thermal_camera" ? d.httpPort : d.port) === port);
     if (clash) errs.push(`"${clash.name}" is already registered at ${out.host}:${port}`);
+  }
+  // On an RS-485 bus the endpoint is (edge box, serial port, unit id), and
+  // every device on one port shares its line settings.
+  if (rtu && out.serialPort) {
+    const bus = all.filter((d) => d.id !== existing.id && d.kind === "modbus_sensor" && d.transport === "rtu" &&
+      d.edgeId === out.edgeId && d.serialPort === out.serialPort);
+    const clash = bus.find((d) => d.unitId === out.unitId);
+    if (clash) errs.push(`"${clash.name}" already answers as unit ${out.unitId} on ${out.serialPort}`);
+    const odd = bus.find((d) => d.baud !== out.baud || d.parity !== out.parity || d.stopBits !== out.stopBits);
+    if (odd) errs.push(`every sensor on ${out.serialPort} must use the same line settings — "${odd.name}" uses ${odd.baud} baud, 8${odd.parity}${odd.stopBits}`);
   }
   return { out, errs };
 }
@@ -188,11 +307,19 @@ export function validateDevice(kind, body, existing = {}, all = []) {
 // --------------------------------------------------------------------------- //
 // What leaves the server.
 // --------------------------------------------------------------------------- //
-/** Admin/staff view: never a password or token hash, in any form. */
-export function publicDevice(d, all = []) {
+/** The stall a horse is in, or null ("—" is the UI's placeholder). */
+const stallOf = (h) => (h?.stall && h.stall !== "—" ? h.stall : null);
+
+/** Admin/staff view: never a password or token hash, in any form. A
+ *  wearable's stall is its horse's current one, looked up here. */
+export function publicDevice(d, all = [], { horses = [] } = {}) {
   const { passwordEnc, tokenHash, ...rest } = d;
+  const hub = d.kind === "wearable_hub"
+    ? { stall: stallOf(horses.find((h) => h.id === d.horseId)), metrics: [...WEARABLE_METRICS], sensorStatus: d.sensorStatus ?? [] }
+    : {};
   return {
     ...rest,
+    ...hub,
     hasPassword: Boolean(passwordEnc),
     hasToken: Boolean(tokenHash),
     status: deviceStatus(d, all),
@@ -200,8 +327,9 @@ export function publicDevice(d, all = []) {
 }
 
 /** Owner view: that a camera watches their horse and whether it works. */
-export const ownerDevice = (d, all) => ({
-  id: d.id, kind: d.kind, name: d.name, stall: d.stall,
+export const ownerDevice = (d, all, { horses = [] } = {}) => ({
+  id: d.id, kind: d.kind, name: d.name,
+  stall: d.kind === "wearable_hub" ? stallOf(horses.find((h) => h.id === d.horseId)) : d.stall,
   status: deviceStatus(d, all).state,
   calibrated: d.kind === "thermal_camera" ? Boolean(d.rois && !d.rois.stale) : null,
 });
@@ -215,7 +343,7 @@ export function deviceStatus(d, all = []) {
       ? { state: "online", detail: `agent ${d.agent?.version ?? "?"}` }
       : { state: "offline", detail: `last heard ${d.lastSeen}` };
   }
-  if (d.kind === "push_device") {
+  if (d.kind === "push_device" || d.kind === "wearable_hub") {
     if (!d.lastSeen) return { state: "never", detail: "has not sent anything yet" };
     return age(d.lastSeen) < PUSH_ONLINE_MS ? { state: "online", detail: "sending" } : { state: "silent", detail: `last reading ${d.lastSeen}` };
   }
@@ -288,28 +416,69 @@ export function deviceApi({ store, json, CORS }) {
     }
   }
 
-  // ---- token principals (edge boxes, push devices) ------------------------ //
+  // ---- token principals (edge boxes, push devices, wearable hubs) --------- //
+  /** The enabled device holding this token hash — how the relay's stored
+   *  items (which keep only sha256(token)) find their sender. */
+  function deviceByTokenHash(hash) {
+    if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) return null;
+    return list().find((d) => d.tokenHash && d.enabled !== false && safeEq(d.tokenHash, hash)) || null;
+  }
   function deviceByToken(token) {
     if (!token || !token.startsWith("eqd_")) return null;
-    const h = sha(token);
-    return list().find((d) => d.tokenHash && d.enabled !== false && safeEq(d.tokenHash, h)) || null;
+    return deviceByTokenHash(sha(token));
   }
   const anyDeviceTokens = () => list().some((d) => d.tokenHash);
+
+  /** Battery / signal / attached per sensor, from the hub's device_status and
+   *  device_detached readings — what the Hardware page shows for a wearable.
+   *  Out-of-order delivery (the relay, a backlog) never overwrites newer news. */
+  function sensorStatusUpdate(dev, rs) {
+    const out = Array.isArray(dev.sensorStatus) ? dev.sensorStatus.map((s) => ({ ...s })) : [];
+    const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const iso = (ts) => (Number.isFinite(Date.parse(ts)) ? new Date(Date.parse(ts)).toISOString() : now());
+    for (const r of rs.map((x) => ({ ...x, ts: iso(x.ts) })).sort((a, b) => a.ts.localeCompare(b.ts))) {
+      const hw = typeof r.meta.hardwareId === "string" ? r.meta.hardwareId.slice(0, 64) : null;
+      let s = out.find((x) => x.sensor === r.meta.sensor && (!hw || !x.hardwareId || x.hardwareId === hw));
+      if (!s) {
+        if (out.length >= 8) continue;
+        out.push(s = { sensor: r.meta.sensor, hardwareId: hw, batteryPct: null, signalDbm: null, attached: null, firmware: null, lastSeen: null });
+      }
+      if (s.lastSeen && r.ts < s.lastSeen) continue;
+      s.lastSeen = r.ts;
+      if (hw) s.hardwareId = hw;
+      if (r.metric === "device_detached") { s.attached = false; continue; }
+      const pct = n(r.value);
+      s.batteryPct = pct === null ? null : Math.max(0, Math.min(100, Math.round(pct)));
+      s.signalDbm = n(r.meta.signalDbm);
+      s.attached = typeof r.meta.attached === "boolean" ? r.meta.attached : null;
+      s.firmware = typeof r.meta.firmware === "string" ? r.meta.firmware.slice(0, 40) : null;
+    }
+    return out;
+  }
 
   /**
    * Attribute and vet an ingest batch sent by a device token. Returns
    * { clean, rejected } — rejected readings carry a reason. Legacy callers
    * (no device token) pass through with deviceId-based stall resolution.
+   *
+   * The registry decides whose readings these are. A device token can NOT
+   * choose the horse: a horseId in its payload is removed — a wearable's
+   * readings go to the horse it is registered on, everything else to the
+   * horse in its stall. Only the legacy ingest token may still name one.
    */
   function attribute(batch, principal) {
     const clean = [], rejected = [];
     const seen = new Map();
+    const statusFor = new Map();       // wearable id -> its device_status / device_detached readings
+    const horses = new Map(store.list("horses").map((h) => [h.id, h]));
     for (const r0 of batch) {
       const r = { ...r0, meta: { ...(r0.meta || {}) } };
+      if (principal) delete r.horseId;
       let dev = null;
-      if (principal?.kind === "push_device") {
+      if (principal?.kind === "push_device" || principal?.kind === "wearable_hub") {
         dev = principal;
-        if (!dev.metrics.includes(r.metric)) { rejected.push({ metric: r.metric, reason: "metric not allowed for this device" }); continue; }
+        const allowed = dev.kind === "wearable_hub" ? WEARABLE_METRICS.has(r.metric) : dev.metrics.includes(r.metric);
+        if (!allowed) { rejected.push({ metric: r.metric, reason: "metric not allowed for this device" }); continue; }
       } else if (principal?.kind === "edge_box" && !r.deviceId) {
         // An edge box's token entitles it to report ITS devices — not to write
         // to any stall it names. (Seen in testing: a stray agent's stall-only
@@ -327,8 +496,25 @@ export function deviceApi({ store, json, CORS }) {
       if (dev) {
         // The registry decides where a device's readings belong — not the sender.
         r.deviceId = dev.id;
-        r.stallId = dev.stall || r.stallId;
         r.meta.deviceId = dev.id;
+        if (dev.kind === "wearable_hub") {
+          const horse = horses.get(dev.horseId);
+          if (!horse) { rejected.push({ metric: r.metric, reason: "this wearable's horse is no longer in the roster — edit the wearable" }); continue; }
+          const needsSensor = r.metric === "device_status" || r.metric === "device_detached";
+          if ((needsSensor || r.meta.sensor !== undefined) && !WEARABLE_SENSORS.includes(r.meta.sensor)) {
+            rejected.push({ metric: r.metric, reason: `meta.sensor must be ${WEARABLE_SENSORS.join(", ")}` }); continue;
+          }
+          r.horseId = horse.id;
+          r.stallId = stallOf(horse);
+          // Whatever the hub claims, it is a wearable measurement — and an
+          // unvalidated one: activity, lying and steps from it must not drive
+          // the colic rule until the wearable has been checked on real horses.
+          r.source = "imu";
+          if (!WEARABLE_DEVICE_METRICS.has(r.metric)) r.meta.prototype = true;
+          if (needsSensor) (statusFor.get(dev.id) ?? statusFor.set(dev.id, []).get(dev.id)).push(r);
+        } else {
+          r.stallId = dev.stall || r.stallId;
+        }
         if (!r.unit && METRICS[r.metric]) r.unit = METRICS[r.metric].unit;
         if (!r.source && dev.kind === "push_device") r.source = METRICS[r.metric]?.source ?? "push_device";
         if (dev.kind === "thermal_camera") {
@@ -347,6 +533,10 @@ export function deviceApi({ store, json, CORS }) {
     const stamp = now();
     for (const id of seen.keys()) store.update("devices", id, { lastSeen: stamp });
     if (principal) store.update("devices", principal.id, { lastSeen: stamp });
+    for (const [id, rs] of statusFor) {
+      const d = byId(id);
+      if (d) store.update("devices", id, { sensorStatus: sensorStatusUpdate(d, rs) });
+    }
     return { clean, rejected };
   }
 
@@ -530,9 +720,12 @@ export function deviceApi({ store, json, CORS }) {
             rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null, flank: d.rois.flank ?? null, colourFloor: d.rois.colourFloor ?? null } : null,
           };
         }
+        // registers carry their `use` (flow / bucket / feed_bowl / hay /
+        // fault) when set: the edge box turns those into bouts and meals.
         return {
-          ...base, port: d.port, unitId: d.unitId, function: d.function,
+          ...base, transport: d.transport || "tcp", port: d.port, unitId: d.unitId, function: d.function,
           addressing: d.addressing, pollSeconds: d.pollSeconds, registers: d.registers,
+          ...(d.transport === "rtu" ? { serialPort: d.serialPort, baud: d.baud, parity: d.parity, stopBits: d.stopBits } : {}),
         };
       });
       return json(200, { edge: { id: edge.id, name: edge.name }, devices, refreshSeconds: 60 });
@@ -573,19 +766,22 @@ export function deviceApi({ store, json, CORS }) {
   async function handleDevices(req, url, who, visibleRoster) {
     const path = url.pathname, method = req.method;
     const all = list();
+    const horses = { horses: store.list("horses") };
 
     if (path === "/api/devices" && method === "GET") {
       if (who?.role === "owner") {
-        const stalls = new Set(visibleRoster().map((h) => h.stall));
-        return json(200, all.filter((d) => d.kind !== "edge_box" && stalls.has(d.stall)).map((d) => ownerDevice(d, all)));
+        const mine = visibleRoster();
+        const stalls = new Set(mine.map((h) => h.stall)), ids = new Set(mine.map((h) => h.id));
+        return json(200, all.filter((d) => d.kind !== "edge_box" && (d.kind === "wearable_hub" ? ids.has(d.horseId) : stalls.has(d.stall)))
+          .map((d) => ownerDevice(d, all, horses)));
       }
-      return json(200, all.map((d) => publicDevice(d, all)));
+      return json(200, all.map((d) => publicDevice(d, all, horses)));
     }
 
     if (path === "/api/devices" && method === "POST") {
       const { body, error } = await readBody(req);
       if (error) return error;
-      const { out, errs } = validateDevice(body.kind, body, {}, all);
+      const { out, errs } = validateDevice(body.kind, body, {}, all, horses);
       if (errs.length) return json(400, { error: "invalid device", details: errs });
       const extra = { createdAt: now(), lastSeen: null, health: null };
       let token = null;
@@ -593,7 +789,7 @@ export function deviceApi({ store, json, CORS }) {
       if (TOKEN_KINDS.has(out.kind)) { const t = newToken(); token = t.token; Object.assign(extra, { tokenHash: t.tokenHash, tokenHint: t.tokenHint }); }
       const created = store.create("devices", { ...out, ...extra });
       event(created, actorOf(who), "created", `${out.kind} "${out.name}"`);
-      return json(201, { device: publicDevice(created, list()), token });
+      return json(201, { device: publicDevice(created, list(), horses), token });
     }
 
     // Breathing check progress (JSON-RPC cameras: from the thermal video).
@@ -640,7 +836,7 @@ export function deviceApi({ store, json, CORS }) {
       const { body, error } = await readBody(req);
       if (error) return error;
       if (body.kind && body.kind !== dev.kind) return json(400, { error: "a device's kind cannot change — remove it and add a new one" });
-      const { out, errs } = validateDevice(dev.kind, body, dev, all);
+      const { out, errs } = validateDevice(dev.kind, body, dev, all, horses);
       if (errs.length) return json(400, { error: "invalid device", details: errs });
       const patch = { ...out, updatedAt: now() };
       const changes = Object.keys(out).filter((k) => JSON.stringify(out[k]) !== JSON.stringify(dev[k]));
@@ -655,7 +851,7 @@ export function deviceApi({ store, json, CORS }) {
       }
       const row = store.update("devices", dev.id, patch);
       if (changes.length) event(dev, actorOf(who), "updated", changes.join(", "));
-      return json(200, publicDevice(row, list()));
+      return json(200, publicDevice(row, list(), horses));
     }
 
     if (!action && method === "DELETE") {
@@ -670,7 +866,7 @@ export function deviceApi({ store, json, CORS }) {
     }
 
     if (action === "token" && method === "POST") {
-      if (!TOKEN_KINDS.has(dev.kind)) return json(400, { error: "only edge boxes and push devices have tokens" });
+      if (!TOKEN_KINDS.has(dev.kind)) return json(400, { error: "only edge boxes, push devices and wearable hubs have tokens" });
       const t = newToken();
       store.update("devices", dev.id, { tokenHash: t.tokenHash, tokenHint: t.tokenHint });
       event(dev, actorOf(who), "token rotated", "the previous token stopped working immediately");
@@ -689,6 +885,8 @@ export function deviceApi({ store, json, CORS }) {
         event(dev, actorOf(who), "tested", `${result.ok ? "answered" : "failed"}${note}`);
         return json(200, result);
       }
+      if (dev.kind === "modbus_sensor" && dev.transport === "rtu")
+        return json(400, { error: "an RS-485 sensor is wired to its edge box — the server cannot read it directly; the edge box reports whether it answers" });
       if (dev.kind === "modbus_sensor") {
         const result = await probeSensor(dev);
         store.update("devices", dev.id, { lastProbe: result });
@@ -887,6 +1085,7 @@ export function deviceApi({ store, json, CORS }) {
   // ---- alerts for hardware that stopped working --------------------------- //
   function deviceAlerts(isAcked) {
     const all = list();
+    const horseName = (id) => store.list("horses").find((h) => h.id === id)?.name ?? id;
     const day = now().slice(0, 10);
     const out = [];
     for (const d of all) {
@@ -894,7 +1093,11 @@ export function deviceApi({ store, json, CORS }) {
       let type = null, detail = "";
       if (d.kind === "edge_box" && s.state === "offline") { type = "Edge box offline"; detail = `"${d.name}" has not checked in — every device it polls is dark. ${s.detail}.`; }
       else if (s.state === "error") { type = "Device error"; detail = `${d.name}: ${s.detail}`; }
-      else if (s.state === "stale" || (d.kind === "push_device" && s.state === "silent")) { type = "Device not reporting"; detail = `${d.name} (stall ${d.stall || "—"}): ${s.detail}.`; }
+      else if (s.state === "stale" || ((d.kind === "push_device" || d.kind === "wearable_hub") && s.state === "silent")) {
+        type = "Device not reporting";
+        const where = d.kind === "wearable_hub" ? `on ${horseName(d.horseId)}` : `stall ${d.stall || "—"}`;
+        detail = `${d.name} (${where}): ${s.detail}.`;
+      }
       if (!type) continue;
       const id = `device:${d.id}:${type}:${day}`;
       out.push({ id, horse: d.name, type, severity: "warn", time: "now", detail, acknowledged: isAcked(id), device: true });
@@ -902,5 +1105,5 @@ export function deviceApi({ store, json, CORS }) {
     return out;
   }
 
-  return { migrate, handleEdge, handleDevices, attribute, deviceByToken, anyDeviceTokens, deviceAlerts };
+  return { migrate, handleEdge, handleDevices, attribute, deviceByToken, deviceByTokenHash, anyDeviceTokens, deviceAlerts };
 }
