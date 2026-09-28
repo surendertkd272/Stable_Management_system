@@ -17,7 +17,7 @@ import {
   ShieldCheck,
   Sun,
 } from "lucide-react";
-import { StatCard, RadialGauge, Sparkline, statusColor, Modal, riskScore, riskBand } from "../components/ui";
+import { StatCard, RadialGauge, Sparkline, statusColor, Modal, riskScore, riskBand, details } from "../components/ui";
 import { yardSlots, breedingMares, highlight } from "../data/mock";
 import { useStable } from "../store";
 import { getCoverage, type CoverageRow } from "../data/api";
@@ -92,10 +92,14 @@ export default function Dashboard() {
     .slice(0, 3);
 
   // What the cameras are actually telling us right now.
-  // Only aimed cameras count: an un-aimed one reads coat or wall, and a single
-  // 31 °C "body temperature" would drag the yard average into hypothermia.
-  const aimed = horses.filter((h) => h.vitals?.calibrated !== false);
-  const unaimed = horses.filter((h) => h.vitals?.calibrated === false).length;
+  // Only live, aimed cameras count. A stale or offline camera still carries its
+  // last reading, which is not today's yard; an un-aimed one reads coat or wall,
+  // and a single 31 °C "body temperature" would drag the average into hypothermia.
+  // No monitoring field (mock data) counts as live, the same rule as `reporting`.
+  const liveHorses = horses.filter((h) => (h.monitoring ?? "live") === "live");
+  const aimed = liveHorses.filter((h) => h.vitals?.calibrated !== false);
+  const unaimed = liveHorses.filter((h) => h.vitals?.calibrated === false).length;
+  const vitalsMissing = liveHorses.length ? "no camera reading yet" : "no live camera reading";
   const temps = aimed.map((h) => h.vitals?.bodyTempC).filter((n): n is number => n != null);
   const resps = aimed.map((h) => h.vitals?.respRateBpm).filter((n): n is number => n != null);
   const avgTemp = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
@@ -103,7 +107,7 @@ export default function Dashboard() {
 
   // Reporting health. A horse we stopped hearing from is the failure mode that
   // matters most: silence must never be mistaken for a calm horse.
-  const reporting = horses.filter((h) => (h.monitoring ?? "live") === "live").length;
+  const reporting = liveHorses.length;
   const silent = horses.length - reporting;
 
   const avgRest = avg(series.rest ?? []);
@@ -155,7 +159,7 @@ export default function Dashboard() {
         value={avgTemp === null ? null : avgTemp.toFixed(1)}
         unit="°C"
         spark={series.bodyTemp ?? []}
-        missingNote="no camera reading yet"
+        missingNote={vitalsMissing}
       />
       <StatCard
         icon={<Wind size={20} />}
@@ -164,7 +168,7 @@ export default function Dashboard() {
         unit="bpm"
         spark={series.respRate ?? []}
         sparkColor="var(--accent-strong)"
-        missingNote="no camera reading yet"
+        missingNote={vitalsMissing}
       />
 
       {/* focus horse profile card */}
@@ -200,7 +204,7 @@ export default function Dashboard() {
             </span>
           </div>
           <p className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
-            {focus.breed} · {focus.sex} · {focus.age}
+            {details(focus.breed, focus.sex, focus.age)}
           </p>
           <div
             className="row urgent"

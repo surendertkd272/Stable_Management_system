@@ -16,44 +16,71 @@ import {
 } from "lucide-react";
 import { useStable, useToast } from "../store";
 import { getSeries, exportReadingsCsv } from "../data/api";
-import { Sparkline } from "../components/ui";
+import { Sparkline, details } from "../components/ui";
+
+// "average of 5 days with data" — how much of the range a figure rests on.
+const daysNote = (xs: (number | null)[] | undefined, range: string) => {
+  const n = (xs ?? []).filter((v) => v !== null && v !== undefined).length;
+  return n ? `average of ${n} of ${range} days with data` : `no data in the last ${range} days`;
+};
 
 export default function Reports() {
-  const { horses, series: storeSeries } = useStable();
+  const { horses, alerts, series: storeSeries } = useStable();
   const notify = useToast();
   const params = useSearchParams();
   const [range, setRange] = useState<"7" | "30">("7");
+  // A horse that has reported at least once, rather than the first in the list.
+  const [horseId, setHorseId] = useState(
+    params.get("horse") ?? (horses.find((h) => h.monitoring && h.monitoring !== "no-data") ?? horses[0]).id);
+  const horse = horses.find((h) => h.id === horseId) ?? horses[0];
 
-  // The range toggle previously relabelled the same 7-day data. Fetch the real
-  // window when a backend is reachable; fall back to the store's series.
-  const [ranged, setRanged] = useState<Record<string, number[]> | null>(null);
+  // This horse's own daily series for the range (the yard's averages used to
+  // stand in, so every horse showed the same trend lines). Demo mode, with no
+  // backend, keeps the bundled series.
+  const [ranged, setRanged] = useState<Record<string, (number | null)[]> | null>(null);
   useEffect(() => {
     let stop = false;
     setRanged(null);
-    getSeries(Number(range)).then((s) => {
+    getSeries(Number(range), horse.id).then((s) => {
       if (!stop && s) setRanged(s);
     });
     return () => {
       stop = true;
     };
-  }, [range]);
-  const series = { ...storeSeries, ...(ranged ?? {}) };
-  const [horseId, setHorseId] = useState(params.get("horse") ?? horses[0].id);
-  const horse = horses.find((h) => h.id === horseId) ?? horses[0];
+  }, [range, horse.id]);
+  const series: Record<string, (number | null)[]> = ranged ?? storeSeries;
+
+  // Behaviour flags (vices, possible rolls) — only when the camera watched
+  // behaviour in this range; otherwise not measured, never "0".
+  const behaviourMeasured = (series.activity ?? []).some((v) => v !== null);
+  const flags = behaviourMeasured ? (series.flags ?? []).reduce<number>((a, v) => a + (v ?? 0), 0) : null;
+  const openAlerts = alerts.filter((a) => a.horse === horse.name && !a.acknowledged);
+  const unsensed = [horse.rest === null && "rest", horse.water === null && "water visits", horse.outside === null && "time outside"].filter(Boolean);
+
+  // What the vet summary says — every sentence from the data above.
+  const facts = [
+    horse.vitals?.bodyTempC != null
+      ? `Latest eye-surface temperature ${horse.vitals.bodyTempC.toFixed(1)} °C${horse.vitals.calibrated === false ? " (camera not aimed — not used for alerts)" : ""}.`
+      : "Body temperature was not measured.",
+    horse.vitals?.respRateBpm != null ? `Latest respiratory rate ${Math.round(horse.vitals.respRateBpm)} breaths/min.` : "Respiratory rate was not measured.",
+    flags === null ? `Behaviour was not measured by the camera in the last ${range} days.`
+      : flags ? `${flags} behaviour flag${flags === 1 ? "" : "s"} (weaving, box walking, head tossing or a possible roll) in the last ${range} days — check them on the recording.`
+        : `No behaviour flags in the last ${range} days.`,
+    openAlerts.length ? `Open alerts: ${openAlerts.map((a) => a.type).join("; ")}.` : "No open alerts.",
+    ...(unsensed.length ? [`No sensor for ${unsensed.join(", ")} on this install — not reported.`] : []),
+  ];
 
   const summaryText = () =>
     [
       `${horse.name} — ${range}-day vet-ready report`,
-      `${horse.breed} · ${horse.sex} · Stall ${horse.stall} · Owner: ${horse.owner}`,
+      details(horse.breed, horse.sex, `Stall ${horse.stall}`, `Owner: ${horse.owner}`),
       ``,
       `Avg rest / night:        ${horse.rest ?? "not measured (no sensor)"}`,
       `Avg water visits / day:  ${horse.water ?? "not measured (no sensor)"}`,
       `Avg time outside box:    ${horse.outside ?? "not measured (no sensor)"}`,
-      `Stress episodes (${range}d):   ${horse.status === "urgent" ? 5 : 1}`,
+      `Behaviour flags (${range}d):   ${flags ?? "not measured"}`,
       ``,
-      horse.status === "urgent"
-        ? "An elevated cluster of restlessness and lying-up cycling was recorded overnight and flagged as a possible early colic pattern — clinical assessment recommended."
-        : "All behavioural signals stayed within this horse's learned baseline, with no incident-level deviations.",
+      ...facts,
       ``,
       "This summary reflects camera-observed behaviour only and is intended to support, not replace, veterinary judgement.",
     ].join("\n");
@@ -138,7 +165,7 @@ export default function Reports() {
                 {horse.name} — {range}-day vet-ready report
               </b>
               <p className="muted" style={{ fontSize: 13 }}>
-                {horse.breed} · {horse.sex} · Stall {horse.stall} · generated for {horse.owner}
+                {details(horse.breed, horse.sex, `Stall ${horse.stall}`, `generated for ${horse.owner}`)}
               </p>
             </div>
           </div>
@@ -164,7 +191,7 @@ export default function Reports() {
           icon={<Thermometer size={18} />}
           label="Body temperature"
           value={horse.vitals?.bodyTempC == null ? null : horse.vitals.bodyTempC.toFixed(1) + " °C"}
-          note="Eye-region thermal · trend vs this horse's baseline, ±2 °C absolute"
+          note="Eye-surface thermal, latest reading · ±2 °C absolute"
           spark={series.bodyTemp ?? []}
         />
         <ReportMetric
@@ -179,10 +206,12 @@ export default function Reports() {
           spark={series.respRate ?? []}
           color="var(--accent-strong)"
         />
-        <ReportMetric icon={<Moon size={18} />} label="Avg rest / night" value={horse.rest} note="Stable, within baseline" spark={series.rest} />
-        <ReportMetric icon={<Droplet size={18} />} label="Avg water visits / day" value={horse.water === null ? null : String(horse.water)} note={range === "30" ? "Slight dip mid-month" : "Consistent"} spark={series.water} type="bar" />
-        <ReportMetric icon={<Sun size={18} />} label="Avg time outside box" value={horse.outside} note="Good turnout activity" spark={series.outside} />
-        <ReportMetric icon={<Activity size={18} />} label="Stress episodes" value={horse.status === "urgent" ? "5" : "1"} note={`${range}-day total`} spark={series.alerts} type="bar" color="var(--alert)" />
+        <ReportMetric icon={<Moon size={18} />} label="Avg rest / night" value={horse.rest} note={daysNote(series.rest, range)} spark={series.rest ?? []} />
+        <ReportMetric icon={<Droplet size={18} />} label="Avg water visits / day" value={horse.water === null ? null : String(horse.water)} note={daysNote(series.water, range)} spark={series.water ?? []} type="bar" />
+        <ReportMetric icon={<Sun size={18} />} label="Avg time outside box" value={horse.outside} note={daysNote(series.outside, range)} spark={series.outside ?? []} />
+        <ReportMetric icon={<Activity size={18} />} label="Behaviour flags" value={flags === null ? null : String(flags)}
+          note={`${range}-day total · weaving, box walking, head tossing, possible rolls — check on the recording`}
+          missing="no camera behaviour data in this period" spark={series.flags ?? []} type="bar" color="var(--alert)" />
       </div>
 
       <div className="card">
@@ -191,26 +220,7 @@ export default function Reports() {
           <span className="pill muted">Context, not diagnosis</span>
         </div>
         <p style={{ fontSize: 14, lineHeight: 1.7, color: "var(--ink-soft)" }}>
-          Over the last {range} days,{" "}
-          {horse.rest === null && horse.water === null && horse.outside === null ? (
-            <>
-              {horse.name} was monitored by thermal camera only. Body temperature and
-              respiratory rate were measured continuously
-              {horse.vitals?.bodyTempC != null && ` (latest ${horse.vitals.bodyTempC.toFixed(1)} °C`}
-              {horse.vitals?.respRateBpm != null && `, ${Math.round(horse.vitals.respRateBpm)} bpm`}
-              {horse.vitals?.bodyTempC != null && ")"}. Rest, water and turnout have no sensor on
-              this install and are not reported here.
-            </>
-          ) : (
-            <>
-              {horse.name} maintained an average nightly rest of {horse.rest ?? "—"} and{" "}
-              {horse.water ?? "—"} water-area visits per day. Time outside the box averaged{" "}
-              {horse.outside ?? "—"}.
-            </>
-          )}{" "}
-          {horse.status === "urgent"
-            ? "An elevated cluster of restlessness and lying-up cycling was recorded overnight and flagged as a possible early colic pattern — clinical assessment recommended."
-            : "All behavioural signals stayed within this horse's learned baseline, with no incident-level deviations."}{" "}
+          {facts.join(" ")}{" "}
           This summary reflects camera-observed behaviour only and is intended to support, not replace, veterinary judgement.
         </p>
       </div>
@@ -226,11 +236,13 @@ function ReportMetric({
   spark,
   type = "line",
   color,
+  missing = "no sensor for this point yet",
 }: {
   icon: React.ReactNode;
   label: string;
   value: string | null;
   note: string;
+  missing?: string;
   spark: (number | null)[];
   type?: "line" | "bar";
   color?: string;
@@ -265,7 +277,7 @@ function ReportMetric({
         {value ?? "Not measured"}
       </div>
       <span className="muted" style={{ fontSize: 12.5 }}>
-        {value === null ? "no sensor for this point yet" : note}
+        {value === null ? missing : note}
       </span>
     </div>
   );

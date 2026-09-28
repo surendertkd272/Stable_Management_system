@@ -358,6 +358,13 @@ export async function handle(req) {
 
     if (path === "/api/series" && method === "GET") {
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days")) || 7));
+      // ?horse=<id>: one horse's own series (the Reports page), not the yard's.
+      const horseId = url.searchParams.get("horse");
+      if (horseId) {
+        const bio = bioById(horseId);
+        if (!bio || (who?.role === "owner" && bio.owner !== who.owner)) return json(404, { error: "unknown horse" });
+        return json(200, buildSeries([bio], store.readingsForHorse(bio.id), days));
+      }
       return json(200, buildSeries(roster(), store.allReadings(), days));
     }
 

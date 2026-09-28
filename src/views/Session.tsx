@@ -24,7 +24,14 @@ export default function Session() {
   const params = useSearchParams();
   const router = useRouter();
   const { horses } = useStable();
-  const horseId = params.get("horse") || horses.find((h) => h.monitoring === "live")?.id || horses[0]?.id || "";
+  // Default to a horse that has something to report: live first, then one that
+  // has reported at some point, never one that has never sent a reading.
+  const horseId =
+    params.get("horse") ||
+    horses.find((h) => h.monitoring === "live")?.id ||
+    horses.find((h) => h.monitoring !== "no-data")?.id ||
+    horses[0]?.id ||
+    "";
   const from = params.get("from") || undefined;
   const to = params.get("to") || undefined;
   const [rep, setRep] = useState<api.SessionReport | null>(null);

@@ -158,8 +158,9 @@ export const getHorseDetail = (id: string) =>
 
 export const getHorses = () => get<Horse[]>("/api/horses");
 export const getAlerts = () => get<Alert[]>("/api/alerts");
-export const getSeries = (days = 7) =>
-  get<Record<string, number[]>>(`/api/series?days=${days}`);
+/** Daily series for the yard, or for one horse when `horse` is given. */
+export const getSeries = (days = 7, horse?: string) =>
+  get<Record<string, (number | null)[]>>(`/api/series?days=${days}${horse ? `&horse=${encodeURIComponent(horse)}` : ""}`);
 
 export async function ackAlert(id: string): Promise<void> {
   if (!apiConfigured) return;

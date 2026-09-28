@@ -579,7 +579,12 @@ export function buildSeries(roster, allReadings, span = 7) {
     rest:      orNull("rest_minutes", (d) => +(onDay("rest_minutes", d).reduce((a, r) => a + r.value, 0) / 60 / nHorses).toFixed(1)),
     water:     orNull("water_visit", (d) => Math.round(onDay("water_visit", d).length / nHorses)),
     outside:   orNull("outside_minutes", (d) => +(onDay("outside_minutes", d).reduce((a, r) => a + r.value, 0) / 60 / nHorses).toFixed(1)),
-    alerts:    per((d) => onDay("vice_event", d).length + onDay("urination_event", d).length), // placeholder proxy
+    alerts:    per((d) => onDay("vice_event", d).length + onDay("urination_event", d).length), // old placeholder proxy — use flags
+    // Behaviour flags a person should check on the recording: vices, and
+    // possible rolls / possibly cast. Only meaningful on days with activity.
+    flags:     per((d) => onDay("vice_event", d).length +
+      onDay("posture_event", d).filter((r) => ["possible_roll", "possible_cast"].includes(r.meta?.kind)).length),
+    activity:  per((d) => avgOrNull(onDay("activity_index", d))),
     // Camera-derived vitals as yard-wide daily averages. null on a day with no
     // readings — a gap in the line, not a zero, for the same reason as above.
     bodyTemp:  per((d) => avgOrNull(onDay("body_temp_c", d))),
