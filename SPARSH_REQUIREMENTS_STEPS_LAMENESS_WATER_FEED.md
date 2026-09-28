@@ -303,6 +303,8 @@ data will use the same records.*
 
 ---
 
+\pagebreak
+
 ## 9. Mounting — sensors supplied already fitted
 
 We expect **each horse device delivered ready to wear, fitted in its mount**, with the mount
@@ -310,6 +312,8 @@ designed together with the sensor. All mounts are **non-invasive**: no clipping,
 nothing implanted.
 
 ### 9.1 Leg tag — soft padded sensor strap
+
+![Leg tag in a padded sensor strap — outer side of the left front cannon bone](figures/mount_leg_strap.svg)
 - A **padded strap about 4–5 cm wide** around the cannon bone, closed with **hook-and-loop**
   (Velcro), with the sensor in a **closed pocket on the outside (lateral) face** of the leg.
 - The pocket is **shaped so the sensor fits only one way**, and the strap is marked **top** and
@@ -319,6 +323,8 @@ nothing implanted.
   every time, in seconds.
 
 ### 9.2 Halter hub — clip-on bracket on the crown piece
+
+![Halter hub with SIM on a clip-on bracket — crown piece, just behind the ears](figures/mount_halter_bracket.svg)
 - A **rigid, low-profile bracket** that clips onto the crown piece of a standard halter **and** of
   a bridle, with a **quick-release** — so the same hub moves from halter to bridle in seconds.
 - The hub sits **centred just behind the ears**, cannot turn or swing, and does not press on the
@@ -326,7 +332,11 @@ nothing implanted.
 - For 24/7 wear, a **breakaway halter** (supply one, or confirm the bracket fits common breakaway
   halters).
 
+\pagebreak
+
 ### 9.3 Pelvis sensor — snap-on base pad
+
+![Pelvis sensor on a base pad — croup midline, over the sacrum](figures/mount_pelvis_pad.svg)
 - A **thin, flexible base pad** stuck to the coat over the croup midline with **horse-safe
   double-sided tape**; the sensor **snaps onto the pad** and comes off in one movement.
 - The pad is **single-use** or re-usable with fresh tape; it peels off after the session without

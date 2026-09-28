@@ -100,6 +100,13 @@ td:first-child { white-space: nowrap; text-align: center; background: #fafbfc; }
 .reply .rule { border-bottom: 0.6pt solid #c3ced6; height: 13pt; }
 .reply .rule:last-child { border-bottom: 0; }
 
+/* a drawing beside its section: ![caption](figures/x.svg) */
+.fig { float: right; width: 100mm; margin: 0 0 8pt 12pt; page-break-inside: avoid; }
+.pagebreak { page-break-before: always; height: 0; }
+.fig svg, .fig img { width: 100%; height: auto; display: block; }
+.fig figcaption { font-size: 8.4pt; text-align: center; margin-top: 3pt; color: #33556b; }
+h2, h3, table, hr { clear: both; }
+
 /* footer note in italics at the end of the doc */
 .footnote { font-size: 9.4pt; color: #5a6772; font-style: italic; }
 """
@@ -117,6 +124,7 @@ td { border: 0.6pt solid #000; }
 td:first-child { background: #fff; white-space: normal; text-align: left; }
 .reply { background: #fff; border-left: 1pt solid #000; }
 .reply .rule { border-bottom: 0.5pt solid #000; }
+.fig figcaption { color: #000; }
 """
 
 
@@ -141,6 +149,24 @@ def reply_block(label: str, rules: int = 3) -> str:
 
 def split_row(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+BASE_DIR = ROOT          # where image paths in the markdown are resolved (set per file)
+
+
+def figure(caption: str, src: str) -> str:
+    """A drawing floated beside the text. SVG is inlined (prints crisply and
+    needs no file access from the temp page); other images are embedded."""
+    path = (BASE_DIR / src).resolve()
+    if not path.exists():
+        return f"<p><em>[missing figure: {html.escape(src)}]</em></p>"
+    if path.suffix.lower() == ".svg":
+        body = re.sub(r"<\?xml[^>]*>", "", path.read_text(encoding="utf-8"))
+    else:
+        import base64, mimetypes
+        mime = mimetypes.guess_type(path.name)[0] or "image/png"
+        body = f'<img alt="{html.escape(caption)}" src="data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}">'
+    return f'<figure class="fig">{body}<figcaption>{inline(caption)}</figcaption></figure>'
 
 
 def md_to_html(md: str, title: str) -> str:
@@ -195,6 +221,21 @@ def md_to_html(md: str, title: str) -> str:
         if re.fullmatch(r"-{3,}", stripped):
             close_lists()
             out.append("<hr>")
+            i += 1
+            continue
+
+        # --- \pagebreak on its own line: start a new page ------------------ #
+        if stripped == "\\pagebreak":
+            close_lists()
+            out.append('<div class="pagebreak"></div>')
+            i += 1
+            continue
+
+        # --- figure: ![caption](path) on its own line ------------------------ #
+        mf = re.fullmatch(r"!\[(.*?)\]\((.+?)\)", stripped)
+        if mf:
+            close_lists()
+            out.append(figure(mf.group(1), mf.group(2)))
             i += 1
             continue
 
@@ -279,6 +320,8 @@ def md_to_html(md: str, title: str) -> str:
 def render(md_path: Path, out_pdf: Path) -> bool:
     if not Path(CHROME).exists():
         sys.exit(f"Google Chrome not found at {CHROME} — needed for PDF output.")
+    global BASE_DIR
+    BASE_DIR = md_path.resolve().parent
     md = md_path.read_text(encoding="utf-8")
     title = md_path.stem.replace("_", " ")
     out_pdf.parent.mkdir(parents=True, exist_ok=True)   # must exist before the temp file

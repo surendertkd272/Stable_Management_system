@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 470 290" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="none" stroke="#000">
+  <title>Pelvis sensor snapped onto a base pad taped to the coat, on the croup midline over the sacrum</title>
+  <!-- hindquarters seen from above; the head is towards the top -->
+  <path stroke-width="2" fill="#fff" d="
+    M 82 6 C 66 48 46 88 44 124 C 42 170 92 214 140 236
+    L 160 236 C 208 214 258 170 256 124 C 254 88 234 48 218 6"/>
+  <!-- tail -->
+  <path stroke-width="2" fill="#fff" d="M 140 236 C 134 256 136 274 144 288 L 156 288 C 164 274 166 256 160 236 Z"/>
+  <!-- saddle area (ridden work) -->
+  <rect x="96" y="4" width="108" height="30" rx="8" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="150" y="23" text-anchor="middle" font-size="12" fill="#000" stroke="none">saddle</text>
+  <!-- spine midline -->
+  <line x1="150" y1="38" x2="150" y2="232" stroke-width="1" stroke-dasharray="3 4"/>
+  <!-- points of the hip (sides) and points of the croup (either side of the midline) -->
+  <g fill="#000" stroke="none">
+    <circle cx="56" cy="112" r="4"/>
+    <circle cx="244" cy="112" r="4"/>
+    <circle cx="130" cy="100" r="3.5"/>
+    <circle cx="170" cy="100" r="3.5"/>
+  </g>
+  <!-- the base pad on the midline, sensor snapped on -->
+  <rect x="136" y="100" width="28" height="32" rx="6" fill="#fff" stroke-width="2.2"/>
+  <rect x="141" y="106" width="18" height="20" rx="4" fill="#000" stroke="none"/>
+  <path d="M 150 110 L 154 116 L 146 116 Z" fill="#fff" stroke="none"/>
+  <!-- labels -->
+  <g stroke-width="0.8">
+    <line x1="164" y1="118" x2="272" y2="130"/>
+    <line x1="172" y1="98" x2="272" y2="80"/>
+    <line x1="248" y1="114" x2="272" y2="186"/>
+    <line x1="160" y1="266" x2="272" y2="262"/>
+  </g>
+  <g fill="#000" stroke="none">
+    <text x="276" y="62" font-weight="bold">Points of the croup</text>
+    <text x="276" y="77">two bony bumps either</text>
+    <text x="276" y="92">side of the spine</text>
+    <text x="276" y="126" font-weight="bold">Base pad + sensor</text>
+    <text x="276" y="141">on the midline, over the</text>
+    <text x="276" y="156">sacrum; pad taped to the</text>
+    <text x="276" y="171">coat, no clipping</text>
+    <text x="276" y="194">Point of the hip</text>
+    <text x="276" y="266">Tail</text>
+    <text x="6" y="246" font-size="12">Seen from above;</text>
+    <text x="6" y="260" font-size="12">the head is towards</text>
+    <text x="6" y="274" font-size="12">the top</text>
+  </g>
+</svg>

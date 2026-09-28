@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 410 300" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="none" stroke="#000">
+  <title>Leg tag in a soft padded sensor strap on the front cannon bone</title>
+  <defs>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="6" stroke="#000" stroke-width="0.8"/>
+    </pattern>
+  </defs>
+  <!-- front lower leg, outside (lateral) view, horse facing left -->
+  <path stroke-width="2" fill="#fff" d="
+    M 96 4 C 95 30 92 52 89 70 C 86 80 86 90 94 100 L 96 196
+    C 96 206 90 214 88 222 C 84 234 76 250 68 262 L 56 292
+    L 124 292 L 122 272 C 124 262 128 252 134 244
+    C 146 232 156 222 154 210 C 152 202 140 198 139 190
+    L 140 104 C 150 96 162 86 158 76 C 154 64 150 44 150 4"/>
+  <!-- coronet and hoof -->
+  <path stroke-width="1.4" d="M 66 264 C 86 270 108 272 124 270"/>
+  <!-- the padded strap, wrapped round the cannon -->
+  <path stroke-width="2" fill="url(#hatch)" d="M 88 132 C 110 126 132 126 148 132 L 148 164 C 132 158 110 158 88 164 Z"/>
+  <!-- sensor pocket on the outer face, keyed shape, top marked -->
+  <rect x="104" y="124" width="28" height="46" rx="6" fill="#fff" stroke-width="2.2"/>
+  <path fill="#000" stroke="none" d="M 118 130 L 124 139 L 112 139 Z"/>
+  <text x="118" y="155" text-anchor="middle" font-size="8" fill="#000" stroke="none">IMU</text>
+  <!-- front arrow -->
+  <path stroke-width="1.4" d="M 70 30 L 30 30 M 30 30 L 37 26 M 30 30 L 37 34"/>
+  <text x="30" y="20" fill="#000" stroke="none">front</text>
+  <!-- cannon bone: knee to fetlock -->
+  <path stroke-width="1" d="M 70 100 L 76 100 M 73 100 L 73 196 M 70 196 L 76 196"/>
+  <!-- labels -->
+  <g stroke-width="0.8">
+    <line x1="158" y1="80" x2="182" y2="80"/>
+    <line x1="148" y1="136" x2="182" y2="126"/>
+    <line x1="132" y1="160" x2="182" y2="160"/>
+    <line x1="154" y1="212" x2="182" y2="212"/>
+    <line x1="124" y1="284" x2="182" y2="284"/>
+  </g>
+  <g fill="#000" stroke="none">
+    <text x="186" y="84">Knee</text>
+    <text x="186" y="118" font-weight="bold">Padded sensor strap</text>
+    <text x="186" y="133">4–5 cm wide, Velcro closure,</text>
+    <text x="186" y="148">mid-cannon</text>
+    <text x="186" y="166" font-weight="bold">Sensor pocket</text>
+    <text x="186" y="181">outer side of the leg,</text>
+    <text x="186" y="196">fits one way only (▲ = top)</text>
+    <text x="186" y="220">Fetlock</text>
+    <text x="186" y="288">Hoof</text>
+    <text x="64" y="146" text-anchor="end">Cannon</text>
+    <text x="64" y="162" text-anchor="end">bone</text>
+  </g>
+</svg>

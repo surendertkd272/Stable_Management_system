@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 260" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="none" stroke="#000">
+  <title>Halter hub with SIM on a clip-on bracket, centred on the crown piece behind the ears</title>
+  <!-- head, outside view, horse facing left -->
+  <path stroke-width="2" fill="#fff" d="
+    M 186 58 C 180 60 178 62 176 66 C 140 90 100 130 72 172
+    C 58 190 58 210 72 218 C 80 224 92 224 100 218 C 106 222 116 220 120 212
+    C 140 204 160 196 180 192 C 212 188 234 168 234 142
+    C 246 160 256 180 264 200"/>
+  <path stroke-width="2" d="M 214 56 C 246 68 272 88 292 112"/>
+  <!-- ear -->
+  <path stroke-width="2" fill="#fff" d="M 186 58 C 184 40 188 20 196 8 C 204 22 212 40 214 56"/>
+  <!-- eye, nostril, mouth -->
+  <path stroke-width="1.6" fill="#fff" d="M 150 98 C 156 91 167 91 173 98 C 167 103 156 103 150 98 Z"/>
+  <circle cx="162" cy="97" r="2.6" fill="#000" stroke="none"/>
+  <path stroke-width="1.6" d="M 68 198 C 74 191 84 193 82 202"/>
+  <path stroke-width="1.2" d="M 76 214 L 98 212"/>
+  <!-- halter straps -->
+  <g stroke-width="5.5" stroke-linecap="round">
+    <path d="M 219 54 C 208 86 197 120 188 150"/>
+    <path d="M 188 150 C 204 152 220 150 234 146"/>
+    <path d="M 188 150 C 164 155 138 160 118 164"/>
+    <path d="M 104 132 C 112 158 122 184 134 206"/>
+  </g>
+  <circle cx="188" cy="150" r="5.5" fill="#fff" stroke-width="2"/>
+  <circle cx="117" cy="164" r="5.5" fill="#fff" stroke-width="2"/>
+  <!-- the hub on its clip-on bracket, centred on the crown piece at the poll -->
+  <g transform="rotate(24 224 50)">
+    <rect x="206" y="46" width="36" height="6" fill="#000" stroke="none"/>
+    <rect x="208" y="31" width="32" height="16" rx="5" fill="#fff" stroke-width="2.2"/>
+    <text x="224" y="42.5" text-anchor="middle" font-size="8" font-weight="bold" fill="#000" stroke="none">HUB</text>
+  </g>
+  <!-- labels -->
+  <g stroke-width="0.8">
+    <line x1="238" y1="42" x2="296" y2="28"/>
+    <line x1="204" y1="104" x2="296" y2="104"/>
+    <line x1="192" y1="152" x2="296" y2="160"/>
+  </g>
+  <g fill="#000" stroke="none">
+    <text x="300" y="18" font-weight="bold">Halter hub with SIM</text>
+    <text x="300" y="33">on a rigid clip-on bracket,</text>
+    <text x="300" y="48">centred on the crown piece</text>
+    <text x="300" y="63">just behind the ears (poll);</text>
+    <text x="300" y="78">same bracket fits the bridle</text>
+    <text x="300" y="104" font-weight="bold">Crown piece</text>
+    <text x="300" y="119">passes behind the ears</text>
+    <text x="300" y="160" font-weight="bold">Breakaway halter</text>
+    <text x="300" y="175">releases if the horse</text>
+    <text x="300" y="190">gets caught</text>
+  </g>
+</svg>
