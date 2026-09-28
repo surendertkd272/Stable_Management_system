@@ -36,8 +36,14 @@ The infrared lamp is 850 nm and glows faintly red at night.
 
 **What each picture sees.** The 25 mm thermal view is only ~25° × 19°:
 about **1.5 m × 1.2 m at 3.5 m** — one horse's head and neck. The colour
-lens (4 mm) is much wider: about 68° × 41°, roughly **4.7 m × 2.6 m at
-3.5 m** (estimated from the sensor size) — the whole stall, day and night.
+picture was expected to be much wider (a 4 mm lens, ~68° × 41°, estimated
+from the spec sheet), but **the 27 Sep recording shows it about as narrow as
+the thermal**: with the horse's face as a ruler (~22 cm across at the eyes)
+the colour picture was ~0.7 m wide and the thermal ~0.8 m, at the same
+moment. Both colour streams (1080p and 704×576) show the same view. So at
+3.5–4 m expect **~1.5–1.8 m × 1.2–1.4 m in both pictures**, not the whole
+stall. Check at the stall: hold a 1 m stick 3.5 m from the camera and see
+how much of each picture it spans.
 
 ### One camera for all 8 points
 
@@ -54,12 +60,17 @@ The two pictures share the work:
 across the stall, **3.5–4 m from where the head spends most time** — the
 hay net or manger (stabled horses eat for hours a day) or the door. The
 thermal view then catches the head for much of the day; temperature and
-breathing are read whenever it is there. The colour picture, looking down
-across the stall, sees the horse whole and the bedding.
+breathing are read whenever it is there. With both pictures ~1.5–1.8 m wide
+at that distance (above), the view holds the head and some neck — the
+whole horse and the bedding only if the camera looks down at where the horse
+stands and lies, which takes the head out of view more often. Session 2
+decides the aim: count eye readings per hour, breathing windows, and
+whether the bedding is in the picture.
 
 In the calibrator's live view, check: the eye in the thermal picture at the
-hay net; in the colour picture, the whole horse and as much bedding as
-possible. Draw **5 · Floor (colour)** over the visible bedding. Colour floor
+hay net; in the colour picture, as much of the horse and bedding as the view
+allows. Draw **5 · Floor (colour)** over any visible bedding — without a
+floor box, urination and manure are reported as not measured. Colour floor
 events and lying need the detector (`scripts/demo.sh --setup-detector`,
 already done on the demo Mac).
 

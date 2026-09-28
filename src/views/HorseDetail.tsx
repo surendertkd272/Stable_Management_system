@@ -677,7 +677,7 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
         </span>
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 12 }}>
-        {colour ? "Behaviour from the camera's colour video (it sees the whole stall); breathing and floor events from the thermal view."
+        {colour ? "Behaviour from the camera's colour video; breathing from the thermal view; floor events where a floor box is drawn."
           : "From the thermal camera's video and floor temperatures."}{" "}
         Shown for context and watch notes only — never used for clinical alarms until validated on horses.
       </p>

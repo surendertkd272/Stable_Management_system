@@ -109,9 +109,9 @@ export function validateDevice(kind, body, existing = {}, all = []) {
       // Keep thermal + visible video on the edge box for labelling and
       // training (off by default: it is continuous footage, and disk).
       record: pick("record", false) === true,
-      // Which picture behaviour (activity, lying, vices) is read from. The
-      // colour lens sees the whole stall; the 25 mm thermal view is ~1.5 x
-      // 1.2 m at 3.5 m — the head and neck — so colour is the default.
+      // Which picture behaviour (activity, lying, vices) is read from.
+      // Colour is the default: more detail, and the horse detector runs on
+      // it. (On the demo unit both pictures show about the same ~25° view.)
       behaviourStream: String(pick("behaviourStream", "visible")),
     });
     if (!["auto", "isapi", "mtrpc"].includes(out.protocol)) errs.push("protocol must be auto, isapi or mtrpc");

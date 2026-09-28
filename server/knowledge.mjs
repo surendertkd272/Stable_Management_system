@@ -227,7 +227,7 @@ export const PATTERNS = [
     looks: "Tail lifted, droppings passed — 4 to 13 times a day for a 1,000 lb horse.",
     means: "Fewer droppings is a colic sign, as is straining. Moving from pasture to a stable more than halved faecal output in one study, mostly in the first 5 days — a known colic-risk window.",
     confuse: "—",
-    equicare: { status: "prototype", how: "In the colour picture (one camera sees the whole floor): a new compact, dark, textured pile on the bedding after the horse moves away — our method, untested on horses. Where the floor is also in the thermal view: a new warm patch classified by how it cools (the method a mouse study used: F1 0.90 for faeces); both together count as confirmed. Notes: 12 h without manure, or under half the horse's usual daily count." },
+    equicare: { status: "prototype", how: "In the colour picture, where a floor box is drawn over bedding: a new compact, dark, textured pile on the bedding after the horse moves away — our method, untested on horses. Where the floor is also in the thermal view: a new warm patch classified by how it cools (the method a mouse study used: F1 0.90 for faeces); both together count as confirmed. Notes: 12 h without manure, or under half the horse's usual daily count." },
     threshold: { text: "No source gives a 'no manure for X hours' alarm. Ours: 12 h, or under 50 % of the horse's own daily count — and always check when it last ate (fasting cuts output 55–63 %).", ours: true },
     sources: ["rutgers_manure", "lpelc", "merck_colic", "williams2015", "outouil2026", "deeposit2025"] },
   { id: "urination", group: "elimination", name: "Urination", label: "urinating", specificity: "normal",

@@ -299,7 +299,7 @@ export interface ThermalCamera extends DeviceCommon {
   protocol?: "auto" | "isapi" | "mtrpc";
   /** Keep thermal + visible video on the edge box for labelling. */
   record?: boolean;
-  /** Which picture behaviour is read from: the colour lens sees the whole stall. */
+  /** Which picture behaviour is read from (colour: more detail, and the horse detector). */
   behaviourStream?: "visible" | "thermal";
   /** Floor cooling test results (urine / manure half-lives on this bedding). */
   floorCalib?: { urine?: FloorCalibEntry; manure?: FloorCalibEntry; deltaC?: number } | null;

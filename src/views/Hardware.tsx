@@ -1021,10 +1021,10 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
                   <div className="field" style={{ marginTop: 10, maxWidth: 360 }}>
                     <label>Read behaviour from</label>
                     <select value={s("behaviourStream") || "visible"} onChange={(e) => set("behaviourStream", e.target.value)}>
-                      <option value="visible">Colour picture — sees the whole stall (recommended)</option>
+                      <option value="visible">Colour picture — more detail, the horse detector runs on it (recommended)</option>
                       <option value="thermal">Thermal picture — only if it shows the whole horse</option>
                     </select>
-                    <small className="muted">Activity, lying down, weaving. The 25 mm thermal view is ~1.5 × 1.2 m at 3.5 m — about one horse&apos;s head and neck.</small>
+                    <small className="muted">Activity, lying down, weaving. On this camera both pictures show about the same area: ~1.5 × 1.2 m at 3.5 m.</small>
                   </div>
                   <label className="hw-check" style={{ marginTop: 8 }}>
                     <input type="checkbox" checked={Boolean(f.record)} onChange={(e) => set("record", e.target.checked)} /> Record

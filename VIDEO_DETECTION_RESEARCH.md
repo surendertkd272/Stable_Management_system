@@ -1,6 +1,6 @@
 # Reading the 8 camera points from video: research and what was built
 
-*27 September 2026 · BSV EquiCare · stall camera TPC-B3404-ILP (thermal 640×512, 25 mm lens; colour 1080p, 4 mm)*
+*27 September 2026 · BSV EquiCare · stall camera TPC-B3404-ILP (thermal 640×512, 25 mm lens; colour 1080p — spec sheet says 4 mm, but the 27 Sep recording shows a view about as narrow as the thermal)*
 
 We researched about 150 open-access sources on how to detect each of the eight camera points from stall video and turn them into alerts. This document summarises what that research found, what we built from it, and what can honestly be said at the demo.
 
@@ -12,7 +12,7 @@ We researched about 150 open-access sources on how to detect each of the eight c
   - mice: urine and faeces on a thermal camera;
   - zoo animals: stereotypic pacing;
   - calves: breathing from a thermal camera.
-- **The thermal picture sees only part of the horse.** With the 25 mm lens the thermal view is about 25° × 19°, which is **1.5 m × 1.2 m at 3.5 m**: one horse's head and neck. The colour lens sees the whole stall, day and night. So:
+- **The thermal picture sees only part of the horse.** With the 25 mm lens the thermal view is about 25° × 19°, which is **1.5 m × 1.2 m at 3.5 m**: one horse's head and neck. (The colour picture was expected to see the whole stall; the 27 Sep recording shows it about as narrow as the thermal — see DEMO_DAY.md.) So:
   - temperature and breathing come from the thermal view, aimed at the head;
   - activity, lying and vices come from the colour picture.
 - **No published thresholds exist** for most alerts: rolls per hour, a lying time limit, weaving rhythm, urinations per day, "no manure for X hours", or an eye-temperature fever line. Every alert therefore compares the horse with its own normal, and each threshold is marked as our choice, to review with a vet.
