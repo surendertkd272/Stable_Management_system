@@ -18,9 +18,11 @@ const countBy = (rows, f) => rows.reduce((a, r) => { const k = f(r) ?? "—"; a[
 
 /**
  * readings: this horse's readings (any time); from/to: ms; clips: listClips()
- * rows for the camera(s); alerts: current alert list for this horse.
+ * rows for the camera(s); alerts: current alert list for this horse;
+ * floorWatched: whether the camera has a floor box (thermal or colour) — no
+ * box means urination and manure were never looked for (null: not known).
  */
-export function sessionReport({ readings, from, to, clips = [], alerts = [], horse = null }) {
+export function sessionReport({ readings, from, to, clips = [], alerts = [], horse = null, floorWatched = null }) {
   const win = readings.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; })
     .sort((a, b) => a.ts.localeCompare(b.ts));
   const of = (m) => win.filter((r) => r.metric === m);
@@ -124,13 +126,15 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
       : as ? "No weaving, box walking or rhythmic head tossing detected." : "Not measured (no behaviour video).",
     { byKind, notes: ["Crib-biting is not detected yet."] });
 
-  // 7 · urination, 8 · excretion
+  // 7 · urination, 8 · excretion — "none seen" only if the floor was watched.
   for (const [n, metric, label] of [[7, "urination_event", "Urination"], [8, "excretion_event", "Excretion"]]) {
     const ev = of(metric);
-    add(n, label, ev.length ? "prototype" : as ? "none seen" : "not measured",
+    const watched = as && floorWatched !== false;
+    add(n, label, ev.length ? "prototype" : watched ? "none seen" : "not measured",
       ev.length ? `${ev.length} seen: ` + ev.map((r) => `${hhmm(r.ts)} (${r.meta?.tier ?? "?"}, confidence ${Math.round((r.confidence ?? 0) * 100)} %)`).join(", ") + "."
-        : as ? "None seen. The floor is learned in the first ~5 minutes; events are only counted after the horse has moved away."
-          : "Not measured — the floor is watched in the video, which was not running.",
+        : watched ? "None seen. The floor is learned in the first ~5 minutes; events are only counted after the horse has moved away."
+          : floorWatched === false ? "Not measured — no floor area is marked on this camera (calibrator: Floor), so the bedding was not watched."
+            : "Not measured — the floor is watched in the video, which was not running.",
       { events: ev.map((r) => ({ at: r.ts, tier: r.meta?.tier ?? null, confidence: r.confidence, source: r.source })),
         notes: ["Urine shows well on shavings, poorly on straw. Deposits outside the colour picture are missed."] });
   }

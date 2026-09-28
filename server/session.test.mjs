@@ -41,3 +41,16 @@ test("an hour with nothing: says not measured, never zero", () => {
   for (const n of [1, 3, 4, 5, 7, 8]) assert.equal(rep.points.find((x) => x.n === n).status, "not measured");
   assert.deepEqual(rep.coverage.gaps.map((g) => g.minutes), [60]);
 });
+
+test("no floor area marked: urination and manure say not measured, not 'none seen'", () => {
+  const rd = [];
+  for (let m = 0; m < 30; m++) rd.push(R("activity_index", 0.4, m, { source: "visible_video" }));
+  const p = (rep, n) => rep.points.find((x) => x.n === n);
+  const unwatched = sessionReport({ readings: rd, from, to, floorWatched: false });
+  for (const n of [7, 8]) {
+    assert.equal(p(unwatched, n).status, "not measured");
+    assert.match(p(unwatched, n).summary, /no floor area is marked/);
+  }
+  const watched = sessionReport({ readings: rd, from, to, floorWatched: true });
+  for (const n of [7, 8]) assert.equal(p(watched, n).status, "none seen");
+});

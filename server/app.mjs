@@ -375,7 +375,10 @@ export async function handle(req) {
       const cams = new Set(rd.map((r) => r.meta?.deviceId).filter(Boolean));
       const clips = listClips().filter((c) => cams.has(c.camera));
       const alerts = buildAlerts([bio], store.allReadings(), store.isAcked);
-      return json(200, sessionReport({ readings: rd, from, to, clips, alerts, horse: { id: bio.id, name: bio.name, stall: bio.stall } }));
+      const camDevs = store.list("devices").filter((d) => cams.has(d.id));
+      const floorWatched = camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : null;
+      return json(200, sessionReport({ readings: rd, from, to, clips, alerts, floorWatched,
+        horse: { id: bio.id, name: bio.name, stall: bio.stall } }));
     }
 
     // ---- site settings (what the Settings page switches really do) -------- //
