@@ -841,8 +841,11 @@ class MtrpcCameraWorker(CameraWorker):
                     self.vanalyzer.feed(frame, flank_bounds=fb, t=t)
                     self.last_visible = (frame, t)
 
+            # Full HD colour when the camera is set to it: the same picture,
+            # less compressed; analysed at the same small size.
+            vpath = "/media/live/101" if d.get("colourStream") == "main" else "/media/live/102"
             self.vvideo = VideoStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_visible,
-                                      port=d.get("rtspPort", 554), path="/media/live/102", w=vw, h=vh)
+                                      port=d.get("rtspPort", 554), path=vpath, w=vw, h=vh)
             self.vvideo.start()
             if self.behaviour_stream() == "visible" and self.detector is None and self.detector_note is None:
                 from detector import load  # noqa
@@ -1269,7 +1272,7 @@ class EdgeRuntime:
     def _fingerprint(d):
         keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
                 "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol", "rtspPort",
-                "behaviourStream")
+                "behaviourStream", "colourStream")
         return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
 
     def apply(self, cfg):

@@ -7,11 +7,12 @@
 // Pictures are snapshots (browsers cannot play RTSP), one picture every ~2 s,
 // alternating thermal and colour — the edge agent reads the full video
 // streams; this is only for people to watch.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Play, Square, FileText, Loader2, CircleDot, Thermometer, Wind, Activity, Moon } from "lucide-react";
 import Link from "next/link";
 import * as api from "../data/api";
 import { useStable } from "../store";
+import { ZoomImage, WHOLE, type ZoomView } from "../components/Zoom";
 
 type Snap = { url?: string; error?: string; at?: number };
 const SESSION_KEY = (cam: string) => `bsv-session-start:${cam}`;
@@ -55,6 +56,13 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
   const [thermal, setThermal] = useState<Snap>({});
   const [colour, setColour] = useState<Snap>({});
   const [paused, setPaused] = useState(false);
+  // Zoom: one view for both pictures (they show about the same area), unless unlinked.
+  const [linked, setLinked] = useState(true);
+  const [views, setViews] = useState<{ Thermal: ZoomView; Colour: ZoomView }>({ Thermal: WHOLE, Colour: WHOLE });
+  const setView = useCallback((name: "Thermal" | "Colour") => (v: ZoomView) =>
+    setViews((prev) => (linked ? { Thermal: v, Colour: v } : { ...prev, [name]: v })), [linked]);
+  const onThermal = useMemo(() => setView("Thermal"), [setView]);
+  const onColour = useMemo(() => setView("Colour"), [setView]);
   const [detail, setDetail] = useState<api.HorseDetail | null>(null);
   const [status, setStatus] = useState<api.DeviceStatus | null>(cam.status);
   const [start, setStart] = useState<string | null>(null);
@@ -146,15 +154,24 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
               <span className="muted" style={{ fontSize: 11.5 }}>{s.at ? `${Math.round((Date.now() - s.at) / 1000)} s ago` : ""}{s.error ? ` · ${s.error}` : ""}</span>
             </div>
             {s.url
-              // eslint-disable-next-line @next/next/no-img-element
-              ? <img src={s.url} alt={`${name} camera`} style={{ width: "100%", borderRadius: 10, display: "block" }} />
+              ? <ZoomImage src={s.url} alt={`${name} camera`} view={views[name]} onView={name === "Thermal" ? onThermal : onColour} />
               : <div className="hw-stage-empty">{s.error ? `No picture: ${s.error}` : <Loader2 className="spin" size={20} />}</div>}
           </div>
         ))}
       </div>
-      <label className="hw-check" style={{ marginTop: 8 }}>
-        <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} /> Pause the pictures (the system keeps measuring)
-      </label>
+      <div className="flex" style={{ flexWrap: "wrap", gap: "4px 18px", marginTop: 8 }}>
+        <label className="hw-check">
+          <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} /> Pause the pictures (the system keeps measuring)
+        </label>
+        <label className="hw-check">
+          <input type="checkbox" checked={linked} onChange={(e) => { setLinked(e.target.checked); if (e.target.checked) setViews((p) => ({ Thermal: p.Colour, Colour: p.Colour })); }} />
+          Zoom both pictures together
+        </label>
+      </div>
+      <p className="muted" style={{ fontSize: 11.5, margin: "4px 0 0" }}>
+        Zoom: scroll or pinch on a picture (or use +), drag to move, double-click to zoom in. Zooming changes only this view — not what is
+        recorded or measured.
+      </p>
 
       <div className="card" style={{ marginTop: 14 }}>
         <div className="card-head"><h3>What the system reads now</h3><span className="pill warn">behaviour: prototype</span></div>

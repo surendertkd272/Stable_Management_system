@@ -30,6 +30,37 @@ from pathlib import Path
 from video_analytics import clean_ffmpeg_error, local_relay, retry_wait
 
 STREAMS = {"thermal": "/media/live/202", "visible": "/media/live/102"}
+COLOUR_MAIN = "/media/live/101"            # the colour picture in full HD (1920x1080)
+
+
+def stream_path(dev, stream):
+    """The sub-stream — or, for colour, the full-HD main stream when the camera
+    is set to it (Hardware → colour detail): sharper recordings to zoom into."""
+    return COLOUR_MAIN if stream == "visible" and dev.get("colourStream") == "main" else STREAMS[stream]
+
+
+def record_cmd(url, out_dir, clip_seconds, codec):
+    """ffmpeg: copy the stream into clock-aligned clips. HEVC is tagged hvc1 so
+    Safari plays it; an H.264 stream must not be (ffmpeg refuses the tag).
+    codec None (could not ask): hvc1, which the demo unit's streams are."""
+    tag = ["-tag:v", "hvc1"] if codec in (None, "hevc") else []
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "8000000",
+            "-i", url, "-map", "0:v:0", "-c", "copy", *tag, "-an",
+            "-f", "segment", "-segment_time", str(clip_seconds), "-segment_atclocktime", "1",
+            "-reset_timestamps", "1", "-strftime", "1", "-segment_format", "mp4",
+            "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof",
+            str(Path(out_dir) / "%Y-%m-%dT%H-%M-%S.mp4")]
+
+
+def video_codec(url, timeout=15):
+    """The stream's codec ("hevc", "h264"), or None if it cannot be asked."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-select_streams", "v:0",
+                              "-show_entries", "stream=codec_name", "-of", "csv=p=0", url],
+                             capture_output=True, timeout=timeout).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.decode(errors="replace").strip() or None
 CLIP_SECONDS = 600
 
 
@@ -97,13 +128,8 @@ class StreamRecorder(threading.Thread):
         while not self.stop_evt.is_set():
             port = local_relay(d["host"], d.get("rtspPort") or 554, self.stop_evt)
             cred = f"{urllib.parse.quote(d.get('username', 'admin'))}:{urllib.parse.quote(d.get('password') or '')}"
-            url = f"rtsp://{cred}@127.0.0.1:{port}{STREAMS[self.stream]}"
-            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "8000000",
-                   "-i", url, "-map", "0:v:0", "-c", "copy", "-tag:v", "hvc1", "-an",
-                   "-f", "segment", "-segment_time", str(self.clip_seconds), "-segment_atclocktime", "1",
-                   "-reset_timestamps", "1", "-strftime", "1", "-segment_format", "mp4",
-                   "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof",
-                   str(self.out / "%Y-%m-%dT%H-%M-%S.mp4")]
+            url = f"rtsp://{cred}@127.0.0.1:{port}{stream_path(d, self.stream)}"
+            cmd = record_cmd(url, self.out, self.clip_seconds, video_codec(url))
             try:
                 self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             except FileNotFoundError:

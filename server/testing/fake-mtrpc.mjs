@@ -12,7 +12,9 @@ const FULL = () => ({
   alarm_output: { enable: true, output_result: "kAverageTemperature", alarm_condition: "kBelow", alarm_threshold_temperature: 20, temperature_error: 0.1, temperature_duration: 30 },
 });
 
-export async function startFakeMtrpc({ username = "admin", password = "pw", realm = "A9FNF" } = {}) {
+// snapshot(channel) may return a JPEG Buffer to serve real pictures (channel 0
+// colour, 1 thermal); without it a tiny placeholder JPEG is served.
+export async function startFakeMtrpc({ username = "admin", password = "pw", realm = "A9FNF", snapshot = null } = {}) {
   const st = {
     username, password, realm,
     challenges: new Map(),        // pre-login session_id -> nonce
@@ -49,7 +51,7 @@ export async function startFakeMtrpc({ username = "admin", password = "pw", real
       if (req.url.startsWith("/download_file?snapshot") && req.method === "GET") {
         const q = new URL(req.url, "http://x").searchParams;
         if (!st.sessions.has(q.get("session_id"))) { res.writeHead(401); return res.end(); }
-        const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, Number(q.get("channel")) || 0, 0xff, 0xd9]);
+        const jpeg = snapshot?.(Number(q.get("channel")) || 0) ?? Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, Number(q.get("channel")) || 0, 0xff, 0xd9]);
         res.writeHead(200, { "Content-Type": "image/jpeg" });
         return res.end(jpeg);
       }

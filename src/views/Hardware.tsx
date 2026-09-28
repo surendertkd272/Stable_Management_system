@@ -858,7 +858,7 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
     case "thermal_camera": return {
       ...common, stall, edgeId, host: "", httpPort: 80, https: false, rtspPort: 554, modbusPort: 502,
       username: "admin", password: "", variant: "640", thermalLens: "13", visibleLens: "4", distanceM: 3.5, emissivity: 0.98,
-      protocol: "auto", record: false, behaviourStream: "visible",
+      protocol: "auto", record: false, behaviourStream: "visible", colourStream: "sub",
     };
     case "modbus_sensor": return {
       ...common, stall, edgeId, host: "", port: 502, unitId: 1, function: 3, addressing: "zero-based", pollSeconds: 10,
@@ -1025,6 +1025,19 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
                       <option value="thermal">Thermal picture — only if it shows the whole horse</option>
                     </select>
                     <small className="muted">Activity, lying down, weaving. On this camera both pictures show about the same area: ~1.5 × 1.2 m at 3.5 m.</small>
+                  </div>
+                  <div className="field" style={{ marginTop: 10, maxWidth: 360 }}>
+                    <label>Colour detail</label>
+                    <select value={s("colourStream") || "sub"} onChange={(e) => set("colourStream", e.target.value)}>
+                      <option value="sub">Standard — 704 × 576</option>
+                      <option value="main">Full HD — 1920 × 1080</option>
+                    </select>
+                    <small className="muted">
+                      Full HD records the camera&apos;s full-resolution colour stream: sharper footage to zoom into when labelling, and
+                      sharper report photos. Recordings are several times larger, and the edge box works harder. The analysis is
+                      the same either way (it averages over areas, which a smaller picture keeps); Full HD is less compressed,
+                      which may help breathing from the flank — to be tested at the stall.
+                    </small>
                   </div>
                   <label className="hw-check" style={{ marginTop: 8 }}>
                     <input type="checkbox" checked={Boolean(f.record)} onChange={(e) => set("record", e.target.checked)} /> Record

@@ -301,6 +301,8 @@ export interface ThermalCamera extends DeviceCommon {
   record?: boolean;
   /** Which picture behaviour is read from (colour: more detail, and the horse detector). */
   behaviourStream?: "visible" | "thermal";
+  /** Colour stream: the camera's sub-stream (704x576) or full HD (1920x1080). */
+  colourStream?: "sub" | "main";
   /** Floor cooling test results (urine / manure half-lives on this bedding). */
   floorCalib?: { urine?: FloorCalibEntry; manure?: FloorCalibEntry; deltaC?: number } | null;
   identity: { serial: string; model: string | null; firmware?: string | null; pinnedAt: string } | null;

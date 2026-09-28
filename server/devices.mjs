@@ -113,9 +113,14 @@ export function validateDevice(kind, body, existing = {}, all = []) {
       // Colour is the default: more detail, and the horse detector runs on
       // it. (On the demo unit both pictures show about the same ~25° view.)
       behaviourStream: String(pick("behaviourStream", "visible")),
+      // Colour stream: the camera's sub-stream ("sub", 704x576) or its full-HD
+      // main stream ("main", 1920x1080) — sharper recordings and report photos
+      // to zoom into, larger files.
+      colourStream: String(pick("colourStream", "sub")),
     });
     if (!["auto", "isapi", "mtrpc"].includes(out.protocol)) errs.push("protocol must be auto, isapi or mtrpc");
     if (!["visible", "thermal"].includes(out.behaviourStream)) errs.push("behaviourStream must be visible or thermal");
+    if (!["sub", "main"].includes(out.colourStream)) errs.push("colourStream must be sub or main");
     errs.push(...validateCameraModel(out));
     if (!out.stall) errs.push("stall is required — the camera's readings are attributed to it");
     for (const k of ["httpPort", "rtspPort", "modbusPort"]) if (!isPort(out[k])) errs.push(`${k} must be a port number`);
@@ -516,6 +521,7 @@ export function deviceApi({ store, json, CORS }) {
             protocol: d.protocol || "auto",
             record: d.record === true, rtspPort: d.rtspPort,
             behaviourStream: d.behaviourStream || "visible",
+            colourStream: d.colourStream || "sub",
             // Urine/manure split from the floor cooling test (null = the
             // edge agent's default guess).
             floorCalib: { urineHalfLifeMin: splitFromCalib(d.floorCalib), deltaC: d.floorCalib?.deltaC ?? null },
