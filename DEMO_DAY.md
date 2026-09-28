@@ -67,6 +67,15 @@ stands and lies, which takes the head out of view more often. Session 2
 decides the aim: count eye readings per hour, breathing windows, and
 whether the bedding is in the picture.
 
+**Why breathing was not read** is recorded every minute (from 28 Sep): the
+Session report's respiratory-rate card lists the minutes by cause — head
+moving, head in view but not where the boxes were drawn, head out of view,
+no clear rhythm — and the Live view shows the last minute's reason. After
+session 2: if "not where the boxes were drawn" is the biggest cause,
+following the nostril as the head moves is worth building (it needs the
+full-resolution thermal picture to find the nostril); if "head moving" is,
+it would not help.
+
 In the calibrator's live view, check: the eye in the thermal picture at the
 hay net; in the colour picture, as much of the horse and bedding as the view
 allows. Draw **5 · Floor (colour)** over any visible bedding — without a

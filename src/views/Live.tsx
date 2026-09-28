@@ -178,7 +178,10 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
         {!horse ? <p className="muted">Give a horse this camera&apos;s stall ({cam.stall}) on the Horses page to see its readings here.</p> : (
           <div className="hw-facts">
             <div><span><Thermometer size={13} /> Eye temperature</span><b>{v.body_temp_c ? `${v.body_temp_c.value.toFixed(1)} °C · ${ago(v.body_temp_c.ts)}${v.body_temp_c.calibrated === false ? " · not aimed" : ""}` : "not read yet — the head has not been in the thermal view"}</b></div>
-            <div><span><Wind size={13} /> Breathing</span><b>{v.respiratory_rate_bpm ? `${Math.round(v.respiratory_rate_bpm.value)} /min · ${ago(v.respiratory_rate_bpm.ts)}${b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : "no rate yet — needs 30 s with the head still"}</b></div>
+            <div><span><Wind size={13} /> Breathing</span><b>{v.respiratory_rate_bpm ? `${Math.round(v.respiratory_rate_bpm.value)} /min · ${ago(v.respiratory_rate_bpm.ts)}${b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : "no rate yet — needs 30 s with the head still"}
+              {v.breathing_check && v.breathing_check.value === 0 && v.breathing_check.detail && (!v.respiratory_rate_bpm || v.breathing_check.ts > v.respiratory_rate_bpm.ts) && (
+                <span className="muted" style={{ display: "block", fontWeight: 400, fontSize: 12 }}>last minute: no rate — {v.breathing_check.detail} ({ago(v.breathing_check.ts)})</span>
+              )}</b></div>
             <div><span><Activity size={13} /> Activity</span><b>{v.activity_index ? `${v.activity_index.value.toFixed(2)} · ${ago(v.activity_index.ts)}` : "no reading yet"}</b></div>
             <div><span><Moon size={13} /> Resting</span><b>{b?.resting ? `lying ${b.resting.lyingTodayMin} min in 24 h, ${b.resting.bouts24h} bouts` : b?.inactive ? `still ${b.inactive.todayMin} min in 24 h · lying: learning` : "no reading yet"}</b></div>
             <div><span>Vices</span><b>{[b?.weaving && `weaving ${b.weaving.minutes24h ?? b.weaving.count24h} min`, b?.boxWalking && `box walking ${b.boxWalking.minutes24h} min`, b?.headTossing && `head tossing ${b.headTossing.minutes24h} min`].filter(Boolean).join(" · ") || "none seen"}</b></div>

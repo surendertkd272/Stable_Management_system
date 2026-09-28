@@ -88,3 +88,12 @@ test("an unknown time zone falls back to the server's", () => {
   assert.equal(safeTimeZone("Asia/Kolkata"), "Asia/Kolkata");
   assert.ok(safeTimeZone("Mars/Olympus").length > 0);
 });
+
+test("breathing not captured: the main reason, in plain words", async () => {
+  const checks = Array.from({ length: 40 }, (_, m) => R("breathing_check", 0, m, { nostril: m < 30 ? "head_off_boxes" : "head_moving" }, "thermal_video"));
+  const { html } = await clientReport({ horse, readings: hourOf({ extra: checks }), from, to: from + hour, tz: "UTC" });
+  assert.match(html, /head was in view but away from the position the camera was set up for/);
+  assert.match(html, /<dt>Readings<\/dt><dd>(\d+)<\/dd>/);
+  const n = Number(html.match(/<dt>Readings<\/dt><dd>(\d+)<\/dd>/)[1]);
+  assert.equal(n, hourOf().length, "the checks are not counted as readings");
+});

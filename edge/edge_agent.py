@@ -729,6 +729,43 @@ class CameraWorker(Worker):
 STATE_DIR = Path(os.environ.get("EQUICARE_STATE_DIR") or (Path.home() / "EquiCare-demo" / "state"))
 
 
+# Why a window has (no) breathing rate — the nostril path in the thermal video,
+# and the flank path in the colour video. Stored per minute (breathing_check).
+BREATHING_WHY = {
+    "measured": "breathing rate found",
+    "no_thermal_video": "thermal video not running",
+    "head_out_of_view": "head not in the thermal view",
+    "head_off_boxes": "head in view but not where the boxes were drawn (the eye was not in its box)",
+    "head_moving": "head moving — no 30 s still stretch",
+    "no_rhythm": "no clear breathing rhythm",
+    "count_disagrees": "rate and breath count disagree",
+    "too_little_video": "too little thermal video this minute",
+    "no_colour_video": "colour video not running",
+    "no_flank_region": "no flank to watch (the horse was not standing still, or no detector)",
+}
+
+
+def breathing_why(video_ok, head_in_view, has_eye_box, in_boxes, nostril_res, vis_ok, flank_res):
+    """(nostril reason, flank reason), each a BREATHING_WHY key."""
+    def of(res):
+        if res.get("bpm"):
+            return "measured"
+        r = res.get("reason") or ""
+        return "head_moving" if r.startswith("head moving") else "count_disagrees" if "disagree" in r else "no_rhythm"
+    if nostril_res and nostril_res.get("bpm") and head_in_view:
+        nostril = "measured"
+    elif not video_ok:
+        nostril = "no_thermal_video"
+    elif not head_in_view:
+        nostril = "head_out_of_view"
+    elif has_eye_box and not in_boxes:
+        nostril = "head_off_boxes"
+    else:
+        nostril = of(nostril_res) if nostril_res else "too_little_video"
+    flank = of(flank_res) if flank_res else ("no_flank_region" if vis_ok else "no_colour_video")
+    return nostril, flank
+
+
 class MtrpcCameraWorker(CameraWorker):
     """A JSON-RPC (/mtrpc) camera — the firmware on the Sparsh demo unit.
 
@@ -1093,8 +1130,18 @@ class MtrpcCameraWorker(CameraWorker):
         elif not video_ok and head_in_view:
             rr, q = compute_resp_rate(pixel_window, len(pixel_window) / self.window_s if pixel_window else 1, with_quality=True)
             if rr:
+                pick, method = {"bpm": rr}, "pixel sampling"
                 add("respiratory_rate_bpm", rr, "bpm", conf=min(0.95, q) if calibrated else 0.3,
                     method="pixel sampling", regularity=round(q, 2), **vit)
+        # Why breathing was or was not measured this window — so a session can
+        # say which cause dominates (and whether following the nostril when
+        # the head moves would be worth building).
+        nostril, flank = breathing_why(video_ok, head_in_view, bool(rois.get("eye")), in_boxes,
+                                       summary.get("breathing"), vis_ok, vsummary.get("flank_breathing"))
+        add("breathing_check", 1 if pick else 0, "0/1", source="thermal_video", conf=1.0,
+            reason="measured" if pick else nostril, nostril=nostril, flank=flank,
+            detail=f"{method}" if pick else BREATHING_WHY[nostril],
+            stillS=(summary.get("breathing") or {}).get("seconds"))
         # Behaviour — prototype heuristics, reported as such.
         bstream = self.behaviour_stream()
         bsum = vsummary if (bstream == "visible" and vsummary) else summary

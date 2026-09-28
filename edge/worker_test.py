@@ -144,6 +144,10 @@ metrics = {r["metric"] for r in got}
 act = [r for r in got if r["metric"] == "activity_index"]
 check("vitals emitted with the head in view", {"body_temp_c", "nostril_temp_c"} <= metrics, metrics)
 temp = [r for r in got if r["metric"] == "body_temp_c"]
+bc = [r for r in got if r["metric"] == "breathing_check"]
+check("every window says why breathing was (not) measured", len(bc) == 1 and bc[0]["value"] == 0
+      and bc[0]["meta"]["nostril"] == "too_little_video" and bc[0]["meta"]["flank"] == "no_flank_region"
+      and bc[0]["source"] == "thermal_video", bc)
 check("eye in the eye box: its hot spot, full confidence", temp and temp[0]["value"] == 35.1
       and temp[0]["meta"]["method"].startswith("eye box") and temp[0]["confidence"] == 0.95
       and abs(temp[0]["meta"]["readAt"] - time.time()) < 30, temp)
@@ -164,6 +168,8 @@ run_window(w, lambda: feed(w.vanalyzer, weave_frames()))
 metrics = {r["metric"] for r in got}
 check("horse seen only in colour: behaviour reported", "activity_index" in metrics, metrics)
 check("horse seen only in colour: no temperature from the wall", "body_temp_c" not in metrics, metrics)
+bc = [r for r in got if r["metric"] == "breathing_check"]
+check("... breathing: head not in the thermal view", bc and bc[0]["meta"]["nostril"] == "head_out_of_view", bc)
 
 # 4. Posture: a learned model and a lie-down during the window.
 w, got = make_worker("visible")
@@ -199,6 +205,8 @@ check("eye box missed: temperature from the head found elsewhere in view",
 check("... reported with lower confidence than a boxed eye", temp and temp[0]["confidence"] < 0.95, temp)
 check("... and no nostril temperature: the nostril box is not on the nostril either",
       not [r for r in got if r["metric"] == "nostril_temp_c"], got)
+bc = [r for r in got if r["metric"] == "breathing_check"]
+check("... breathing: head in view but not where the boxes were drawn", bc and bc[0]["meta"]["nostril"] == "head_off_boxes", bc)
 w, got = make_worker("visible", coat=True)
 run_window(w, lambda: feed(w.vanalyzer, weave_frames()))
 metrics = {r["metric"] for r in got}
@@ -252,6 +260,24 @@ check("... reported when the next window has laps too, covering both minutes",
 check("... then each further window counts its own minute", len(per[2]) == 1 and per[2][0]["meta"]["windowMin"] == 1.0, per[2])
 per = walk_windows(3, widths=[0.8] * 10)
 check("box walking not judged while the horse fills the view", per == [[], [], []], per)
+
+# 10. The reasons themselves.
+from edge_agent import breathing_why, BREATHING_WHY  # noqa: E402
+ok_rate = {"bpm": 14.0}
+still_short = {"bpm": None, "reason": "head moving — no 30 s still stretch"}
+flat = {"bpm": None, "reason": "no clear breathing rhythm"}
+odd = {"bpm": None, "reason": "rate and breath count disagree"}
+check("nostril rate found: measured", breathing_why(True, True, True, True, ok_rate, True, None)[0] == "measured")
+check("head moving", breathing_why(True, True, True, True, still_short, True, None)[0] == "head_moving")
+check("no rhythm", breathing_why(True, True, True, True, flat, True, None)[0] == "no_rhythm")
+check("count disagrees", breathing_why(True, True, True, True, odd, True, None)[0] == "count_disagrees")
+check("head off the boxes wins over what the box saw", breathing_why(True, True, True, False, still_short, True, None)[0] == "head_off_boxes")
+check("no thermal video", breathing_why(False, True, True, True, None, True, None)[0] == "no_thermal_video")
+check("flank measured / flank head moving", breathing_why(True, True, True, True, None, True, ok_rate)[1] == "measured"
+      and breathing_why(True, True, True, True, None, True, still_short)[1] == "head_moving")
+check("no colour video: flank says so", breathing_why(True, True, True, True, None, False, None)[1] == "no_colour_video")
+check("every reason has words", all(k in BREATHING_WHY for k in ("measured", "no_thermal_video", "head_out_of_view", "head_off_boxes",
+      "head_moving", "no_rhythm", "count_disagrees", "too_little_video", "no_colour_video", "no_flank_region")))
 
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

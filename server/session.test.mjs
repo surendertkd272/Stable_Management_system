@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sessionReport } from "./session.mjs";
+import { coverage, BREATHING_WHY } from "./contract.mjs";
 
 const to = Date.parse("2026-09-27T12:00:00Z"), from = to - 3600000;
 const at = (min) => new Date(from + min * 60000).toISOString();
@@ -53,4 +54,20 @@ test("no floor area marked: urination and manure say not measured, not 'none see
   }
   const watched = sessionReport({ readings: rd, from, to, floorWatched: true });
   for (const n of [7, 8]) assert.equal(p(watched, n).status, "none seen");
+});
+
+test("why breathing was missed: a breakdown by minute, and the check is not counted as a reading", () => {
+  const rd = [];
+  for (let m = 0; m < 30; m++) {
+    rd.push(R("activity_index", 0.3, m, { source: "visible_video" }));
+    const nostril = m < 18 ? "head_off_boxes" : m < 26 ? "head_moving" : "no_rhythm";
+    rd.push(R("breathing_check", 0, m, { source: "thermal_video", meta: { nostril, flank: "no_flank_region" } }));
+  }
+  const rep = sessionReport({ readings: rd, from, to });
+  const p3 = rep.points.find((x) => x.n === 3);
+  assert.equal(p3.status, "not measured");
+  assert.deepEqual(p3.why.nostril, { head_off_boxes: 18, head_moving: 8, no_rhythm: 4 });
+  assert.match(p3.summary, new RegExp(`${BREATHING_WHY.head_off_boxes} 18, ${BREATHING_WHY.head_moving.replace(/[()]/g, "\\$&")} 8`));
+  assert.equal(rep.coverage.readings, 30, "diagnostics are not readings");
+  assert.ok(!coverage().some((c) => c.metric === "breathing_check"), "not a monitoring point");
 });

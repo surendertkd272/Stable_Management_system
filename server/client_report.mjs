@@ -74,6 +74,21 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const stillMin = Math.round(still.filter((v) => v !== null).reduce((a, v) => a + v, 0));
   const resp = of("respiratory_rate_bpm");
   const respV = resp.map((r) => r.value);
+  // Why breathing was not captured: the most common reason, minute by minute.
+  const missed = of("breathing_check").filter((r) => !r.value);
+  const topWhy = Object.entries(missed.reduce((a, r) => { const k = r.meta?.nostril; if (k) a[k] = (a[k] || 0) + 1; return a; }, {}))
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const RESP_WHY = {
+    head_off_boxes: "In most minutes the head was in view but away from the position the camera was set up for; breathing is read at the nostril.",
+    head_moving: "In most minutes the head was moving; breathing needs the nostril still in view for 30 seconds.",
+    head_out_of_view: "In most minutes the head was out of the thermal view.",
+    no_rhythm: "The nostril was in view, but no clear breathing rhythm was found.",
+    count_disagrees: "The nostril was in view, but no clear breathing rhythm was found.",
+    no_thermal_video: "The thermal video was interrupted.",
+    too_little_video: "The thermal video was interrupted.",
+  };
+  const respNote = RESP_WHY[topWhy] || "Requires the nostril or flank still in view for 30 seconds.";
+  const nReadings = rd.filter((r) => r.metric !== "breathing_check").length;
   const regs = resp.map((r) => r.meta?.regularity).filter((v) => typeof v === "number");
   const lyingMin = Math.round(of("lying_minutes").reduce((a, r) => a + r.value, 0));
   const lyingMeasured = of("lying_minutes").length > 0;
@@ -215,7 +230,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const floorNote = floorWatched === false ? "The stall floor is not marked in this camera's view." : "Requires the stall floor in the camera's view.";
   const points = [
     [1, "Body temperature", eye.length ? S.ok : S.no, eye.length ? `${f1(eyeMed)} °C` : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.` : "Requires the eye in the thermal view."],
-    [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : "Requires the nostril or flank still in view for 30 seconds."],
+    [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : respNote],
     [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
     [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${minutes} minutes; ${bands.high} minutes of high activity.` : "No movement data in this session."],
     [5, "Resting pattern", lyingMeasured ? S.ok : actV.length ? S.part : S.no, lyingMeasured ? `${lyingMin} min lying` : actV.length ? `${stillMin} min` : "—", lyingMeasured ? `Lying down ${lyingMin} min; standing still ${stillMin} min.` : actV.length ? "Standing rest. Lying down is measured when the horse's whole body is in view." : "No movement data in this session."],
@@ -443,7 +458,7 @@ ${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}<
 <dt>Horse</dt><dd>${esc(name)}</dd><dt>Stall</dt><dd>${esc(horse.stall || "—")}</dd>
 <dt>Date</dt><dd>${T({ day: "numeric", month: "short", year: "numeric" }).format(from)}</dd><dt>Session</dt><dd>${clock(from)}–${clock(rangeEnd)} ${esc(tzName)}</dd>
 <dt>Monitoring</dt><dd>Thermal + colour camera</dd><dt>Coverage</dt><dd>${anyMin.size} of ${minutes} min</dd>
-<dt>Readings</dt><dd>${rd.length}</dd><dt>Video recorded</dt><dd>${clipCount ? plural(clipCount, "clip") : "none"}</dd>
+<dt>Readings</dt><dd>${nReadings}</dd><dt>Video recorded</dt><dd>${clipCount ? plural(clipCount, "clip") : "none"}</dd>
 </dl></div>
 </div>
 <div class="photos">${covers.length ? covers.map((c) => `<figure class="photo"><img src="${c.img}" alt="${esc(name)} at ${clock(c.at)}"><figcaption>${clock(c.at)} · ${esc(caption(c.m))}</figcaption></figure>`).join("")
@@ -503,7 +518,7 @@ ${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.labe
 <div><b>Activity index</b><span>The share of the horse moving, from the colour camera: 0 = still, 1 = very active. Levels: no activity below 0.05, low 0.05–0.2, moderate 0.2–0.6, high 0.6 and above.</span></div>
 <div><b>Rest</b><span>Minutes in which the horse stood still; lying down is reported when the horse's whole body is in view.</span></div>
 <div><b>Stable vices</b><span>Weaving, box walking and head tossing are identified from sustained rhythmic movement; a flagged moment can be checked on the recording.</span></div>
-<div><b>Monitoring coverage</b><span>${anyMin.size} of ${minutes} minutes with camera data; ${rd.length} readings${clipCount ? ` and ${plural(clipCount, "video clip")}` : ""} recorded for this session.</span></div>
+<div><b>Monitoring coverage</b><span>${anyMin.size} of ${minutes} minutes with camera data; ${nReadings} readings${clipCount ? ` and ${plural(clipCount, "video clip")}` : ""} recorded for this session.</span></div>
 <div><b>Screening</b><span>Measurements support daily care and early attention; clinical decisions should be confirmed by a veterinarian.</span></div>
 </div></section>
 ${foot(5)}</div>

@@ -27,6 +27,10 @@ export const METRICS = {
   water_visit:          { point: 9,  label: "Water visit",          unit: "event", source: "flow_meter",     kind: "event" },
   feed_intake_g:        { point: 10, label: "Feed intake",          unit: "g",     source: "feeder",         kind: "sample" },
   feed_refusal_g:       { point: 10, label: "Feed refusal",         unit: "g",     source: "feeder",         kind: "sample" },
+  // Why breathing was or was not measured in each minute's window: value 1 a
+  // rate was found, 0 not; meta.nostril / meta.flank say why (BREATHING_WHY).
+  // A diagnostic — never a vital sign, never in coverage or alerts.
+  breathing_check:      { point: 4,  label: "Breathing check",      unit: "0/1",   source: "thermal_video",  kind: "diagnostic" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },
 };
@@ -61,8 +65,24 @@ export function isKnownMetric(m) {
   return Object.prototype.hasOwnProperty.call(METRICS, m);
 }
 
+/** Why a minute had no breathing rate (edge_agent.BREATHING_WHY, same keys). */
+export const BREATHING_WHY = {
+  measured: "breathing rate found",
+  no_thermal_video: "thermal video not running",
+  head_out_of_view: "head not in the thermal view",
+  head_off_boxes: "head in view but not where the boxes were drawn",
+  head_moving: "head moving (no 30 s still stretch)",
+  no_rhythm: "no clear breathing rhythm",
+  count_disagrees: "rate and breath count disagree",
+  too_little_video: "too little thermal video",
+  no_colour_video: "colour video not running",
+  no_flank_region: "no flank to watch",
+};
+
+export const isDiagnostic = (metric) => METRICS[metric]?.kind === "diagnostic";
+
 export function coverage() {
-  return Object.entries(METRICS).map(([key, m]) => ({
+  return Object.entries(METRICS).filter(([, m]) => m.kind !== "diagnostic").map(([key, m]) => ({
     point: m.point, metric: key, label: m.label, source: m.source,
     status: SOURCE_STATUS[m.source] || "pending",
   })).sort((a, b) => a.point - b.point);

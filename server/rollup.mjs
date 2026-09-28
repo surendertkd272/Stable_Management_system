@@ -314,7 +314,7 @@ function uninstrumented(rd) {
   const seen = new Set(rd.map((r) => r.metric));
   const out = new Set();
   for (const [key, m] of Object.entries(METRICS))
-    if (SOURCE_STATUS[m.source] !== "available" && !seen.has(key)) out.add(key);
+    if (m.kind !== "diagnostic" && SOURCE_STATUS[m.source] !== "available" && !seen.has(key)) out.add(key);
   return out;
 }
 
@@ -531,7 +531,7 @@ export function vitalsForHorse(rd) {
     // >= for the same last-write-wins reason as latest()
     if (!out[r.metric] || r.ts >= out[r.metric].ts)
       out[r.metric] = { value: r.value, unit: r.unit, ts: r.ts, source: r.source, confidence: r.confidence,
-                        calibrated: !uncalibrated(r) };
+                        calibrated: !uncalibrated(r), ...(r.metric === "breathing_check" ? { detail: r.meta?.detail ?? null } : {}) };
   }
   return out;
 }

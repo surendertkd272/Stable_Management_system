@@ -148,7 +148,8 @@ export interface ViceSummary {
 // Per-horse live detail (summary + latest vitals + 7-day charts).
 export interface HorseDetail {
   behaviour?: HorseBehaviour;
-  vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number; calibrated?: boolean }>;
+  /** breathing_check (a diagnostic) carries `detail`: why the last minute had no breathing rate. */
+  vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number; calibrated?: boolean; detail?: string | null }>;
   // null entries are days with no reading — never render them as zero.
   charts: Record<string, (number | null)[]>;
 }

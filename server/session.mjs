@@ -3,6 +3,8 @@
 // clips and the alerts — every figure says how much of the window it covers,
 // and a point with nothing measured says so instead of showing zero.
 
+import { BREATHING_WHY } from "./contract.mjs";
+
 const MIN = 60000;
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; };
 const r1 = (v) => (v === null || v === undefined ? null : Math.round(v * 10) / 10);
@@ -15,6 +17,7 @@ function stats(rows) {
 }
 const minutesCovered = (rows) => new Set(rows.map((r) => Math.floor(Date.parse(r.ts) / MIN))).size;
 const countBy = (rows, f) => rows.reduce((a, r) => { const k = f(r) ?? "—"; a[k] = (a[k] || 0) + 1; return a; }, {});
+const whyText = (counts) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${BREATHING_WHY[k] || k} ${n}`).join(", ");
 
 /**
  * readings: this horse's readings (any time); from/to: ms; clips: listClips()
@@ -61,6 +64,17 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
   // 2 · respiration pattern, 3 · respiratory rate
   const resp = of("respiratory_rate_bpm");
   const rs = stats(resp);
+  // Why not, minute by minute (breathing_check, from 28 Sep 2026): which cause
+  // dominates says what would help — e.g. following the nostril when the head
+  // is in view but not where the boxes were drawn.
+  const checks = of("breathing_check");
+  const missed = checks.filter((r) => !r.value);
+  const why = checks.length ? {
+    checked: checks.length, measured: checks.length - missed.length,
+    nostril: countBy(missed, (r) => r.meta?.nostril), flank: countBy(missed, (r) => r.meta?.flank),
+  } : null;
+  const whyNote = why && missed.length
+    ? [`Minutes without a rate (${missed.length} of ${checks.length} checked) — nostril: ${whyText(why.nostril)}; flank: ${whyText(why.flank)}.`] : [];
   const regs = resp.map((r) => r.meta?.regularity).filter((v) => typeof v === "number");
   const fast = resp.filter((r) => r.meta?.band === "fast").length;
   if (rs) {
@@ -72,12 +86,16 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
       { notes: ["Regular / irregular only — breathing disease (heaves) is not detected from the nostril."] });
     add(3, "Respiratory rate", resp.every((r) => r.meta?.calibrated === false) ? "uncalibrated" : "measured",
       `${rs.median} breaths/min median (${rs.min}–${rs.max}), ${rs.n} readings over ${minutesCovered(resp)} min (${pct(minutesCovered(resp))} %).`,
-      { stats: rs, methods: countBy(resp, (r) => r.meta?.method), notes: [
+      { stats: rs, methods: countBy(resp, (r) => r.meta?.method), why, notes: [
         "A rate is only reported over 30 s+ with the head still and when it matches a count of breaths — minutes without one are not failures, they are honesty.",
+        ...whyNote,
       ] });
   } else {
     add(2, "Respiration pattern", "not measured", "No breathing rhythm found in this window.");
-    add(3, "Respiratory rate", "not measured", "No breathing rate: the head was not still in the nostril box for 30 s, and the flank was not still in the colour picture.");
+    add(3, "Respiratory rate", "not measured",
+      why ? `No breathing rate in the ${why.checked} minutes checked. Why, by minute — nostril: ${whyText(why.nostril)}; flank: ${whyText(why.flank)}.`
+        : "No breathing rate: the head was not still in the nostril box for 30 s, and the flank was not still in the colour picture.",
+      { why, notes: why ? [] : ["Minute-by-minute reasons are recorded from 28 Sep 2026 on."] });
   }
 
   // 4 · activity
@@ -152,7 +170,7 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
   const measured = points.filter((p) => ["measured", "prototype", "none seen", "learning", "uncalibrated"].includes(p.status)).length;
   return {
     horse, window: { from: new Date(from).toISOString(), to: new Date(to).toISOString(), minutes: windowMin },
-    coverage: { minutesWithData: covered, percent: pct(covered), readings: win.length, gaps },
+    coverage: { minutesWithData: covered, percent: pct(covered), readings: win.filter((r) => r.metric !== "breathing_check").length, gaps },
     points, measured,
     timeline,
     alerts: alerts.map((a) => ({ type: a.type, severity: a.severity, detail: a.detail, time: a.time })),
