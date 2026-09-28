@@ -33,9 +33,9 @@ SIM** (section 5).
 
 | Device | Qty | Exact position | Worn | Points served |
 |---|---|---|---|---|
-| **A. Leg tag** (motion sensor, IMU) | 1 | Outside (lateral) face of the **left front cannon bone**, midway between knee and fetlock | 24/7 | Steps; lameness (stride timing); limb-favoring of that leg |
-| **B. Halter hub with SIM** (motion sensor + LTE-M / NB-IoT modem) | 1 | Centred on the **crown piece of the halter**, just behind the ears (the poll); moves to the **bridle's crown piece** for ridden work | 24/7 | **Live data for all three devices**; lameness (head movement) |
-| **C. Pelvis sensor** (motion sensor, IMU) | 1 | On the **midline of the croup**, over the sacrum, between the two points of the croup | Exercise and trot-ups | Lameness (hind legs) |
+| **A. Leg tag** (motion sensor, IMU) | 1 | Outside (lateral) face of the **left front cannon bone**, midway between knee and fetlock — **in a soft padded sensor strap** | 24/7 | Steps; lameness (stride timing); limb-favoring of that leg |
+| **B. Halter hub with SIM** (motion sensor + LTE-M / NB-IoT modem) | 1 | Centred on the **crown piece of the halter**, just behind the ears (the poll) — **on a clip-on bracket** that moves to the **bridle's crown piece** for ridden work | 24/7 | **Live data for all three devices**; lameness (head movement) |
+| **C. Pelvis sensor** (motion sensor, IMU) | 1 | On the **midline of the croup**, over the sacrum, between the two points of the croup — **snapped onto a base pad taped to the coat** | Exercise and trot-ups | Lameness (hind legs) |
 
 **In each stall (3 fixed sensors):**
 
@@ -44,6 +44,9 @@ SIM** (section 5).
 | **D. Water meter** — flow meter on the automatic drinker's supply pipe (or a weighed bucket where buckets are used) | 1 | On the supply pipe **just before the stall's automatic drinker**, outside the horse's reach | Watering |
 | **E. Weigh-back feeder** — load cell under the feed bowl | 1 | Feed bowl at the **stall front**, rim at chest height (0.9–1.1 m); hopper and electronics on the **aisle side** of the wall | Feeding (concentrates) |
 | **F. Hay load cell** | 1 | In the **hanging point of the hay net or hay rack** (ceiling beam or wall hook) | Feeding (hay / forage) |
+
+**All three horse devices must be supplied already fitted in their mounts** (section 9): nothing
+is invasive — no clipping, no needles, nothing implanted.
 
 **Shared per site:** our on-site computer (edge box, NVIDIA Jetson) — supplied by us. The stall
 sensors (D, E, F) connect to it by cable; the horse's sensors (A, B, C) reach our server over the
@@ -80,8 +83,10 @@ night — **24/7**, in the stall **and** outside it during exercise.
 ### 4.3 Exact placement
 - **Left front leg**, on the **outside (lateral) face of the cannon bone**, midway between the
   knee and the fetlock joint.
-- Held by a **padded strap**, or in the pocket of a brushing boot. It must sit flat and not
-  rotate around the leg; the case must show which way is **up** and which way is **forward**.
+- Supplied **fitted in a soft padded sensor strap** (section 9.1): the sensor sits in a closed
+  pocket on the outside of the leg, and the strap closes with hook-and-loop. It must sit flat and
+  not rotate around the leg; strap and case show which way is **up** and which way is
+  **forward**.
 - **The same leg on the same horse every day**, so that the data stays comparable.
 - Removable in seconds for grooming, bandaging and charging.
 
@@ -101,7 +106,7 @@ See section 5.
 | S6 | Step counting (if you provide it) | State whether it is **validated on horses**, and its error at walk and trot |
 | S7 | Weight and size | **≤50 g**; state dimensions |
 | S8 | Battery | **≥7 days** at 100 Hz, or rechargeable with a hot-swap spare so no data is lost |
-| S9 | Strap | Fits **pony to draft horse**; soft padding; safe for 24/7 wear (no rubbing sores) |
+| S9 | Mount | Supplied in the **padded sensor strap** of section 9.1, sizes **pony to draft horse** |
 | S10 | Detach alert | Hub reports **immediately** when the tag goes silent or comes off |
 | S11 | Protection | **IP67** or better; survives mud, urine, manure, sweat and hosing |
 
@@ -120,10 +125,12 @@ section 6), a **mobile modem with SIM**, and a larger battery. The leg tag and p
 small and light because the hub does the long-range sending for them.
 
 ### 5.3 Exact placement
-- Centred on the **crown piece of the halter**, just behind the ears (the poll), with a
-  quick-release clip.
+- Centred on the **crown piece of the halter**, just behind the ears (the poll), on a
+  **low-profile clip-on bracket** (section 9.2) — rigid, so the hub cannot turn or swing (its head
+  measurements depend on that).
 - For ridden work the horse wears a bridle: the hub must **move to the bridle's crown piece in
-  seconds** with the same clip, and sit in the same position.
+  seconds** on the same bracket, and sit in the same position.
+- For 24/7 wear the halter must be a **breakaway halter** (it releases if the horse catches it).
 - It must not press on the poll or rub, and must not catch on stall fittings.
 
 ### 5.4 What it does
@@ -185,8 +192,9 @@ positions.
 ### 6.3 Exact placement
 - **Head:** the hub, centred on the halter or bridle crown piece at the poll (section 5.3).
 - **Pelvis:** on the **midline of the croup, over the sacrum, between the two points of the
-  croup**, fixed with a hook-and-loop pad on an exercise roller or exercise sheet, or a skin-safe
-  adhesive patch. It must stay in place at **canter** and not move on the skin.
+  croup**. The sensor **snaps onto a thin base pad** that is stuck to the coat with **horse-safe
+  double-sided tape** — no clipping — and peeled off after the session (section 9.3). It must stay
+  in place at **canter** and not move on the skin.
 - **Front leg:** the leg tag, as in section 4.3.
 
 ### 6.4 Requirements
@@ -199,7 +207,7 @@ positions.
 | L4 | Live summaries | The hub can send per-stride measures during trot, or forwards data for our server to compute |
 | L5 | Raw data | Full raw waveforms of each exercise session reach us, **within hours** at most |
 | L6 | Pelvis sensor battery | **≥4 h** of continuous recording per charge |
-| L7 | Pelvis mount | Hook-and-loop pad and / or adhesive patch; stays in place at canter; no skin damage |
+| L7 | Pelvis mount | Supplied with the **snap-on base pads and tape** of section 9.3; stays in place at canter; no skin damage |
 | L8 | Quick pairing | The pelvis sensor can be **paired to a different horse** in under a minute (one sensor may be shared between horses exercised at different times) |
 | L9 | Validation data | Any equine gait or lameness data against a **vet's lameness grading**, if available |
 
@@ -295,17 +303,66 @@ data will use the same records.*
 
 ---
 
-## 9. What we need from Sparsh
+## 9. Mounting — sensors supplied already fitted
+
+We expect **each horse device delivered ready to wear, fitted in its mount**, with the mount
+designed together with the sensor. All mounts are **non-invasive**: no clipping, no needles,
+nothing implanted.
+
+### 9.1 Leg tag — soft padded sensor strap
+- A **padded strap about 4–5 cm wide** around the cannon bone, closed with **hook-and-loop**
+  (Velcro), with the sensor in a **closed pocket on the outside (lateral) face** of the leg.
+- The pocket is **shaped so the sensor fits only one way**, and the strap is marked **top** and
+  **front** — so the sensor sits at the same place and angle every time it is put on.
+- Why a strap and not a bandage: bandages must be re-wrapped every 12–24 hours, uneven wrapping
+  can injure the tendons, and each re-wrap moves the sensor. A shaped strap goes on the same way
+  every time, in seconds.
+
+### 9.2 Halter hub — clip-on bracket on the crown piece
+- A **rigid, low-profile bracket** that clips onto the crown piece of a standard halter **and** of
+  a bridle, with a **quick-release** — so the same hub moves from halter to bridle in seconds.
+- The hub sits **centred just behind the ears**, cannot turn or swing, and does not press on the
+  poll.
+- For 24/7 wear, a **breakaway halter** (supply one, or confirm the bracket fits common breakaway
+  halters).
+
+### 9.3 Pelvis sensor — snap-on base pad
+- A **thin, flexible base pad** stuck to the coat over the croup midline with **horse-safe
+  double-sided tape**; the sensor **snaps onto the pad** and comes off in one movement.
+- The pad is **single-use** or re-usable with fresh tape; it peels off after the session without
+  pulling hair or marking the skin.
+
+### 9.4 Requirements for all mounts
+
+| # | Requirement | Target |
+|---|---|---|
+| M1 | Delivered fitted | Each sensor arrives **in its mount**, ready to put on the horse |
+| M2 | Sizes | Leg strap **pony, horse, draft** (or adjustable across that range); bracket fits standard halters and bridles |
+| M3 | Materials | Breathable, **non-abrasive, hypoallergenic** padding; no metal or hard edges against the skin |
+| M4 | Safety | **Low profile, rounded edges**, nothing that can catch on stall fittings; sensors on the **outside** of the leg only (the inside is hit by the other hoof) |
+| M5 | Orientation | Pocket / bracket / pad **keyed** so the sensor fits one way only; **top** and **front** marked |
+| M6 | Fitting time | Each device **on or off in under 30 seconds** by stable staff |
+| M7 | Hold | Stays in place through **rolling, lying down, turnout and canter** without slipping or rotating |
+| M8 | Cleaning | Straps **machine-washable**; bracket and pad wipe-clean and disinfectant-safe |
+| M9 | Spares and wear | State strap service life; **spare straps** per horse so one can be washed; base pads and tape as consumables |
+| M10 | Fitting guide | Illustrated fitting instructions, including how tight (a finger's width under the strap) |
+| M11 | Welfare | Any evidence of 24/7 wear on horses without rubbing or sores (leg and halter) |
+
+---
+
+## 10. What we need from Sparsh
 
 1. **For each device (A–F):** datasheet, **the actual protocol document / register map**, and a
    **sample data file recorded from the exact model** you would supply.
 2. **Your answer to every requirement row** above (C1–C10, S1–S11, H1–H12, L1–L9, W1–W10,
-   F1–F10): the value you meet, or **"not supported"**. A row left blank is recorded as not
+   F1–F10, M1–M11): the value you meet, or **"not supported"**. A row left blank is recorded as not
    supported.
 3. **India certificates** (WPC/ETA, TEC/MTCTE, BIS), or their status.
-4. **Evaluation units for one horse and one stall:** 3 leg tags, 2 halter hubs with SIMs that work
-   in India, 1–2 pelvis sensors, 1 charging dock, 1 water meter (or weighed bucket), 1 weigh-back
-   feeder, 1 hay load cell — with **availability and lead time**.
+4. **Evaluation units for one horse and one stall**, horse devices **fitted in their mounts**:
+   3 leg tags in padded straps (with spare straps), 2 halter hubs with SIMs that work in India on
+   clip-on brackets (plus a breakaway halter), 1–2 pelvis sensors with base pads and tape,
+   1 charging dock, 1 water meter (or weighed bucket), 1 weigh-back feeder, 1 hay load cell —
+   with **availability and lead time**.
 5. A **named technical contact** for clarifications.
 
 **One request from the camera integration:** the camera documentation described one protocol
