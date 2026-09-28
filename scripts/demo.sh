@@ -17,8 +17,8 @@ HOME_DIR="${EQUICARE_DEMO_HOME:-$HOME/EquiCare-demo}"
 DATA="$HOME_DIR/data"
 LOGS="$HOME_DIR/logs"
 TOKEN_FILE="$HOME_DIR/edge-token"
+PORT_ASKED="${PORT:-}"
 PORT="${PORT:-8080}"
-URL="http://127.0.0.1:$PORT"
 mkdir -p "$DATA" "$LOGS"
 
 say() { printf '\033[1m[demo]\033[0m %s\n' "$*"; }
@@ -51,9 +51,24 @@ command -v node >/dev/null || die "Node.js is not installed (need v22)."
 command -v python3 >/dev/null || die "python3 is not installed."
 "$PY" -c "import requests" 2>/dev/null || die "python3 is missing the 'requests' package: python3 -m pip install --user requests"
 
-if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  die "port $PORT is already in use — another server is running. Stop it with: kill \$(lsof -tiTCP:$PORT -sTCP:LISTEN)"
+# One demo at a time on this data: two servers writing the same store would
+# corrupt it.
+PIDFILE="$HOME_DIR/demo.pid"
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  die "the demo is already running (pid $(cat "$PIDFILE"), $(cat "$HOME_DIR/demo.url" 2>/dev/null)). Stop it with Ctrl-C in its window, or: kill $(cat "$PIDFILE")"
 fi
+busy() { lsof -tiTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+if busy "$PORT"; then
+  # Something else has the port (an editor's dev server keeps taking 8080):
+  # use the next free one, unless a port was asked for.
+  [ -n "$PORT_ASKED" ] && die "port $PORT is already in use. Stop what holds it (kill \$(lsof -tiTCP:$PORT -sTCP:LISTEN)) or choose another: PORT=8090 scripts/demo.sh"
+  for p in 8090 8091 8092 8093 8094 8095; do busy "$p" || { PORT=$p; break; }; done
+  busy "$PORT" && die "ports 8080 and 8090–8095 are all in use"
+  say "port 8080 is taken by another program — using $PORT instead"
+fi
+URL="http://127.0.0.1:$PORT"
+echo $$ > "$PIDFILE"
+echo "$URL" > "$HOME_DIR/demo.url"
 
 if [ ! -d .next ] || [ "${1:-}" = "--build" ]; then
   say "building the app (a minute, first time only)…"
@@ -87,13 +102,16 @@ EQUICARE_DATA_DIR="$DATA" NEXT_TELEMETRY_DISABLED=1 PORT="$PORT" HOST=127.0.0.1 
 SERVER=$!
 AGENT=""
 TAIL=""
+ARCHIVE=""
 cleanup() {
   say "stopping…"
   [ -n "$TAIL" ] && pkill -P "$TAIL" 2>/dev/null; [ -n "$TAIL" ] && kill "$TAIL" 2>/dev/null
   [ -n "$AGENT" ] && kill "$AGENT" 2>/dev/null
+  [ -n "$ARCHIVE" ] && kill "$ARCHIVE" 2>/dev/null
   kill "$SERVER" 2>/dev/null
   # Next.js renames its process, so also stop whatever holds the port.
   lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null
+  rm -f "$PIDFILE" "$HOME_DIR/demo.url"
   exit 0
 }
 trap cleanup INT TERM
@@ -150,10 +168,17 @@ if [ -s "$TOKEN_FILE" ]; then
   AGENT=$!
 fi
 
+# The live store keeps 21 days; every reading is also copied, every 5 minutes,
+# into a permanent research archive ($HOME_DIR/research/readings/*.jsonl).
+python3 -u tools/archive_readings.py --store "$DATA/state.json" --out "$HOME_DIR/research" --every 300 \
+  > "$LOGS/archive.log" 2>&1 &
+ARCHIVE=$!
+
 # Keep the Mac awake while the demo runs (a sleeping Mac records nothing).
 # Closing the lid still sleeps it: keep it open and on the charger.
 caffeinate -ims -w $$ &
 say "ready → $URL   (Ctrl-C to stop) — keep the lid open and the charger in; live view: $URL/live"
+say "admin login: $HOME_DIR/admin-password.txt · research archive: $HOME_DIR/research"
 open "$URL/hardware" 2>/dev/null
 # Show the edge agent's problems as they happen; a healthy agent is quiet.
 if [ -n "$AGENT" ]; then
