@@ -17,12 +17,13 @@ import { createStore } from "./store.mjs";
 import { dispatch, notifyStatus, tick } from "./notify.mjs";
 import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
 import { sessionReport } from "./session.mjs";
+import { clientReport } from "./client_report.mjs";
 import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
          verifyPassword, hashPassword, publicUser, ROLES } from "./auth.mjs";
 import {
   summarizeHorse, buildAlerts, buildSeries, vitalsForHorse, metricSeries, behaviourForHorse, configureRollup,
 } from "./rollup.mjs";
-import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labelsCsv,
+import { LABELS, listClips, clipPath, serveFile, h264Copy, validateLabel, labelsCsv, frameGrabber,
   BOX_LABELS, validateBox, boxesExport, labellingQueue } from "./footage.mjs";
 import { randomBytes as footageRandom } from "node:crypto";
 import { SC_IT6420_HB_V2 } from "./hardware-spec.mjs";
@@ -379,6 +380,32 @@ export async function handle(req) {
       const floorWatched = camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : null;
       return json(200, sessionReport({ readings: rd, from, to, clips, alerts, floorWatched,
         horse: { id: bio.id, name: bio.name, stall: bio.stall } }));
+    }
+
+    // ---- client report: the designed A4 report for a horse's owner or vet --- //
+    // POST { horse, from, to, notes, tz } -> text/html (print it to save a PDF).
+    if (path === "/api/session/report" && method === "POST") {
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      let body;
+      try { body = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
+      const bio = roster().find((h) => h.id === body.horse);
+      if (!bio) return json(400, { error: "choose a horse" });
+      const to = Math.min(Date.parse(body.to || "") || Date.now(), Date.now());
+      const from = Date.parse(body.from || "") || to - 60 * 60000;
+      if (!(from < to) || to - from > 7 * 24 * 3600 * 1000) return json(400, { error: "the window must be between a minute and 7 days" });
+      const rd = store.readingsForHorse(bio.id);
+      const cams = new Set(rd.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; }).map((r) => r.meta?.deviceId).filter(Boolean));
+      const camDevs = store.list("devices").filter((d) => cams.has(d.id));
+      const cam = camDevs[0] || store.list("devices").find((d) => d.kind === "thermal_camera" && d.stall === bio.stall) || null;
+      const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
+      const { html } = await clientReport({
+        horse: { id: bio.id, name: bio.name, stall: bio.stall }, readings: rd, from, to,
+        floorWatched: camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : cam ? Boolean(cam.rois?.floor || cam.rois?.colourFloor) : null,
+        notes: typeof body.notes === "string" ? body.notes : "", tz: body.tz,
+        grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
+        clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
+      });
+      return new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...CORS } });
     }
 
     // ---- site settings (what the Settings page switches really do) -------- //

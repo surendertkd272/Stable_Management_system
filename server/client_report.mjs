@@ -1,0 +1,514 @@
+// Client session report: a designed, printable A4 report (five pages) for a
+// horse's owner or vet, for any horse and any window. Every sentence, figure
+// and photo is chosen from what was measured — nothing is written by hand
+// except the stable's own notes, shown as theirs. What was not captured is
+// said plainly, with the reason.
+//
+//   clientReport({ horse, readings, from, to, grab, ... }) -> HTML string
+//
+// grab(ms, width) returns a JPEG Buffer of the colour recording at that moment
+// (footage.frameGrabber), or null. Photos are picked where the eye was in view
+// and the horse was calm (sharpest of three nearby frames), spread in time,
+// shown whole — the camera's view is narrow and the head is often at its edge.
+
+const EYE_MIN = 33;                            // below: coat or wall, not an eye (readings from before the eye-shape check)
+const LEVELS = [["none", "No activity", 0, 0.05], ["low", "Low", 0.05, 0.2], ["moderate", "Moderate", 0.2, 0.6], ["high", "High", 0.6, 1.01]];
+const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480];
+const MAX_NOTES = 1400;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; };
+const q = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))] : null; };
+const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+const f1 = (v) => (v === null || v === undefined ? "—" : (Math.round(v * 10) / 10).toFixed(1));
+const f2 = (v) => (v === null || v === undefined ? "—" : v.toFixed(2));
+const levelOf = (v) => LEVELS.find(([, , lo, hi]) => v >= lo && v < hi)?.[0] ?? "high";
+const LEVEL_WORD = { none: "still", low: "low activity", moderate: "moderate activity", high: "high activity" };
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** A valid IANA time zone, or the server's own. */
+export function safeTimeZone(tz) {
+  try { if (tz) { new Intl.DateTimeFormat("en-GB", { timeZone: tz }); return tz; } } catch { /* fall through */ }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+/** Box walking counts only as the edge agent now reports it: laps in
+ *  consecutive windows. Older single-window flags were a horse turning round. */
+const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test(r.meta?.method || "") || (r.meta?.windowMin ?? 0) >= 2;
+
+export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], tz, grab = null, clipCount = 0, now = Date.now() }) {
+  tz = safeTimeZone(tz);
+  const minutes = Math.max(1, Math.round((to - from) / 60000));
+  const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
+  const tClock = T({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const clock = (ms) => tClock.format(ms);
+  // "IST", "BST", "EDT"… — each locale knows the short names of its own zones.
+  const zoneIn = (loc) => new Intl.DateTimeFormat(loc, { timeZone: tz, timeZoneName: "short" }).formatToParts(from).find((p) => p.type === "timeZoneName")?.value;
+  const tzName = ["en-IN", "en-GB", "en-US"].map(zoneIn).find((v) => v && !/^GMT[+-]/.test(v)) || zoneIn("en-GB") || tz;
+  const hourOf = (ms) => Number(T({ hour: "2-digit", hourCycle: "h23" }).format(ms));
+  const name = horse.name || horse.id;
+
+  // ---- readings, minute by minute -------------------------------------------- //
+  const rd = readings.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; }).sort((a, b) => a.ts.localeCompare(b.ts));
+  const of = (m) => rd.filter((r) => r.metric === m);
+  const minuteOf = (r) => Math.max(0, Math.min(minutes - 1, Math.floor((Date.parse(r.ts) - from) / 60000)));
+  const inAway = (ms) => away.some(([a, b]) => ms >= a && ms <= b);
+  const eye = of("body_temp_c").filter((r) => r.value >= EYE_MIN && !inAway(Date.parse(r.ts)));
+  const eyeV = eye.map((r) => r.value);
+  const act = new Array(minutes).fill(null), still = new Array(minutes).fill(null), eyeMin = new Array(minutes).fill(null);
+  for (const r of of("activity_index")) act[minuteOf(r)] = r.value;
+  for (const r of of("inactive_minutes")) still[minuteOf(r)] = Math.min(1, r.value / (r.meta?.windowMin || 1));
+  const eyeTs = new Array(minutes).fill(null);                     // when the eye was read: photos are taken then
+  const eyeSure = new Array(minutes).fill(false);                  // passed the eye-shape check (readings from 28 Sep 2026 on)
+  // meta.readAt (s): the moment the eye was read; older readings only carry the
+  // window's end, a few seconds after the eye scan.
+  for (const r of eye) {
+    const m = minuteOf(r);
+    eyeMin[m] = r.value;
+    eyeTs[m] = typeof r.meta?.readAt === "number" ? r.meta.readAt * 1000 : Date.parse(r.ts) - 3000;
+    eyeSure[m] = /eye-shaped/.test(r.meta?.method || "");
+  }
+  const anyMin = new Set(rd.map(minuteOf));
+  const actV = act.filter((v) => v !== null);
+  const bands = Object.fromEntries(LEVELS.map(([k, , lo, hi]) => [k, actV.filter((v) => v >= lo && v < hi).length]));
+  const stillMin = Math.round(still.filter((v) => v !== null).reduce((a, v) => a + v, 0));
+  const resp = of("respiratory_rate_bpm");
+  const respV = resp.map((r) => r.value);
+  const regs = resp.map((r) => r.meta?.regularity).filter((v) => typeof v === "number");
+  const lyingMin = Math.round(of("lying_minutes").reduce((a, r) => a + r.value, 0));
+  const lyingMeasured = of("lying_minutes").length > 0;
+  const posture = of("posture_event");
+  const vices = of("vice_event").filter(countsAsVice);
+  const viceKinds = {};
+  for (const r of vices) { const k = (r.meta?.kind || "weaving").replace("_", " "); (viceKinds[k] ||= []).push(Date.parse(r.ts)); }
+  const floorEv = { urination: of("urination_event"), excretion: of("excretion_event") };
+  const floorOk = floorWatched !== false && actV.length > 0;
+
+  // Buckets: one bar per minute for an hour, wider for a night.
+  const bucket = NICE.find((b) => minutes / b <= 90) ?? 480;
+  const nb = Math.ceil(minutes / bucket);
+  const bIdx = (i) => [i * bucket, Math.min(minutes, (i + 1) * bucket)];
+  const actB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); const v = act.slice(a, b).filter((x) => x !== null); return v.length ? avg(v) : null; });
+  const stillB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); const v = still.slice(a, b).filter((x) => x !== null); return v.length ? avg(v) : null; });
+  const eyeB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); return eyeMin.slice(a, b).some((x) => x !== null); });
+  const anyB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); for (let m = a; m < b; m++) if (anyMin.has(m)) return true; return false; });
+  const rollSpan = 2;
+  const roll = actB.map((_, i) => { const w = actB.slice(Math.max(0, i - rollSpan), i + rollSpan + 1).filter((v) => v !== null); return w.length ? avg(w) : null; });
+  const avgLabel = `${(2 * rollSpan + 1) * bucket}-minute average`;
+  const tick = NICE.find((b) => b >= 5 && minutes / b <= 8) ?? 480;
+  const block = NICE.find((b) => b >= 10 && minutes / b <= 10) ?? 480;
+  const dur = minutes < 120 ? plural(minutes, "minute") : `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+
+  // Temperature trend: first half against second half of the readings.
+  let trend = null;
+  if (eye.length >= 6) {
+    const half = Math.floor(eye.length / 2);
+    trend = med(eyeV.slice(half)) - med(eyeV.slice(0, half));
+  }
+  const eyeMed = med(eyeV), eyeLo = eyeV.length ? Math.min(...eyeV) : null, eyeHi = eyeV.length ? Math.max(...eyeV) : null;
+  const eyeMinutes = eyeMin.filter((v) => v !== null).length;
+
+  // Rest spells: 30 %+ standing still, gaps of up to 2 minutes joined.
+  const spells = [];
+  for (let m = 0; m < minutes; m++) {
+    if ((still[m] ?? 0) >= 0.3) {
+      const last = spells.at(-1);
+      if (last && m - last.end <= 2) last.end = m; else spells.push({ start: m, end: m });
+    }
+  }
+  const spellText = (list) => list.map((sp) => `${clock(from + sp.start * 60000)}–${clock(from + (sp.end + 1) * 60000)}`).join(", ");
+  const blocks = Array.from({ length: Math.ceil(minutes / block) }, (_, b) => {
+    const lo = b * block, hi = Math.min(minutes, lo + block);
+    const a = act.slice(lo, hi).filter((v) => v !== null);
+    const s = still.slice(lo, hi).filter((v) => v !== null).reduce((x, v) => x + v, 0);
+    const t = eyeMin.slice(lo, hi).filter((v) => v !== null);
+    const ms0 = from + lo * 60000, ms1 = from + hi * 60000;
+    return { label: `${clock(ms0)}–${clock(ms1)}`, act: avg(a), peak: a.length ? Math.max(...a) : null, still: Math.round(s),
+      temp: avg(t), n: t.length, eyeShare: t.length / Math.max(1, hi - lo), data: a.length > 0,
+      flags: vices.filter((r) => { const x = Date.parse(r.ts); return x >= ms0 && x < ms1; }).length };
+  });
+  const busiest = blocks.filter((b) => b.act !== null).sort((a, b) => b.act - a.act)[0];
+  const dominant = actV.length ? LEVELS.map(([k]) => k).sort((a, b) => bands[b] - bands[a])[0] : null;
+
+  // ---- photos: eye in view and calm, spread through the session -------------- //
+  const score = (m) => (act[m] === null ? -1 : (eyeMin[m] !== null ? 2 : 0) + (1 - Math.min(1, act[m])) - (inAway(from + m * 60000 + 30000) ? 3 : 0));
+  // A photo for an eye reading comes from the second the eye was read.
+  async function sharpest(m, width) {
+    if (!grab) return null;
+    const at0 = eyeTs[m] !== null ? [-1, 0, 1].map((s) => eyeTs[m] + s * 1000) : [15, 30, 45].map((s) => from + m * 60000 + s * 1000);
+    const tries = await Promise.all(at0.map(async (at) => ({ at, jpg: await grab(at, width) })));
+    const ok = tries.filter((t) => t.jpg);
+    return ok.length ? ok.sort((a, b) => b.jpg.length - a.jpg.length)[0] : null;   // more detail compresses larger
+  }
+  const caption = (m) => `${eyeMin[m] === null ? "eye not in view" : eyeSure[m] ? `eye in view, ${f1(eyeMin[m])} °C` : `temperature ${f1(eyeMin[m])} °C`} · ${act[m] === null ? "no reading" : LEVEL_WORD[levelOf(act[m])]}`;
+  const ranked = Array.from({ length: minutes }, (_, m) => m).filter((m) => act[m] !== null).sort((a, b) => score(b) - score(a));
+  const coverMin = [];
+  for (const m of ranked) { if (coverMin.every((c) => Math.abs(c - m) >= Math.max(5, minutes / 8))) coverMin.push(m); if (coverMin.length === 3) break; }
+  coverMin.sort((a, b) => a - b);
+  const nGal = Math.min(12, ranked.length);
+  const galMin = [];
+  for (let s = 0; s < nGal; s++) {
+    const lo = Math.floor((s * minutes) / nGal), hi = Math.floor(((s + 1) * minutes) / nGal);
+    const best = ranked.find((m) => m >= lo && m < hi);
+    if (best !== undefined) galMin.push(best);
+  }
+  const toUri = (jpg) => `data:image/jpeg;base64,${jpg.toString("base64")}`;
+  const covers = (await Promise.all(coverMin.map(async (m) => { const f = await sharpest(m, 1100); return f && { m, at: f.at, img: toUri(f.jpg) }; }))).filter(Boolean);
+  const gallery = [];
+  for (let i = 0; i < galMin.length; i += 4) {                          // a few ffmpeg at a time
+    const got = await Promise.all(galMin.slice(i, i + 4).map(async (m) => { const f = await sharpest(m, 520); return f && { m, at: f.at, img: toUri(f.jpg) }; }));
+    gallery.push(...got.filter(Boolean));
+  }
+
+  // ---- words, from the numbers only ------------------------------------------ //
+  const tempShort = eye.length >= 3
+    ? (trend !== null && trend >= 0.5 ? `Eye-surface temperature rose by ${f1(trend)} °C during the session (median ${f1(eyeMed)} °C) — worth rechecking.`
+      : `Eye-surface temperature was stable at around ${f1(eyeMed)} °C.`)
+    : eye.length ? `Only ${plural(eye.length, "eye-temperature reading")} ${eye.length === 1 ? "was" : "were"} taken — the eye was mostly out of the camera's view.`
+      : "Eye temperature was not captured — the eye was not in the camera's view.";
+  const actShort = actV.length ? `Activity was mostly ${dominant === "none" ? "absent (standing still)" : LEVEL_WORD[dominant].replace(" activity", "")} (median index ${f2(med(actV))}).` : "Activity was not captured.";
+  const viceNames = Object.keys(viceKinds);
+  const viceShort = !actV.length ? "" : viceNames.length ? `${viceNames.map((k) => k[0].toUpperCase() + k.slice(1)).join(" and ")} ${viceNames.length > 1 ? "were" : "was"} flagged for review on the recording.`
+    : "No stereotypic behaviour was detected.";
+  const lead = `${name} was monitored for ${dur}, with camera data in ${Math.round((anyMin.size / minutes) * 100)}% of the session. ${tempShort} ${actShort} ${viceShort}`.trim();
+
+  const findings = [
+    ["thermo", eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : "Temperature not captured",
+      eye.length ? `Eye-surface temperature ${f1(eyeMed)} °C median (range ${f1(eyeLo)}–${f1(eyeHi)} °C) across ${plural(eye.length, "reading")}, eye in view for ${eyeMinutes} of ${minutes} minutes.`
+        : "The eye was not in the thermal view long enough to read."],
+    ["move", actV.length ? `${dominant === "high" ? "Active" : dominant === "none" ? "Mostly resting" : "Settled"} behaviour` : "Activity not captured",
+      actV.length ? `${bands.high} min high, ${bands.moderate} min moderate and ${bands.low} min low activity; ${stillMin} min standing still.` : "No movement data in this session."],
+    ["check", viceNames.length ? "Behaviour flagged for review" : "No stereotypic behaviour",
+      viceNames.length ? viceNames.map((k) => `${k} at ${viceKinds[k].map(clock).join(", ")}`).join("; ") + " — check these moments on the recording."
+        : actV.length ? "No weaving, box walking or rhythmic head tossing identified." : "Not assessed without movement data."],
+  ];
+  const observed = [
+    eye.length && ["Temperature", eye.length >= 3
+      ? `Eye-surface temperature stayed within ${f1(eyeLo)}–${f1(eyeHi)} °C (median ${f1(eyeMed)} °C)${trend === null ? "" : trend >= 0.5 ? `, rising by ${f1(trend)} °C from the first half of the session to the second` : trend <= -0.5 ? `, easing by ${f1(-trend)} °C through the session` : " with no upward trend"}.`
+      : `${plural(eye.length, "reading")} (${eyeV.map(f1).join(", ")} °C) — too few to judge a trend.`],
+    actV.length && ["Activity", `${bands.high} minutes of high and ${bands.moderate} of moderate activity${busiest ? `; the most active period was ${busiest.label} (average ${f2(busiest.act)})` : ""}.`],
+    actV.length && ["Rest", lyingMeasured ? `Lay down for ${lyingMin} min${posture.filter((r) => r.meta?.kind === "lie_down").length ? ` (${plural(posture.filter((r) => r.meta?.kind === "lie_down").length, "lie-down")})` : ""}; stood still for ${stillMin} min.`
+      : spells.length ? `Standing rest in ${plural(spells.length, "spell")} (${spellText(spells.slice(0, 6))}${spells.length > 6 ? ", …" : ""}), ${stillMin} minutes in total.` : `${stillMin} minutes standing still, in short moments.`],
+    resp.length && ["Breathing", `${f1(med(respV))} breaths per minute (median of ${plural(resp.length, "reading")})${regs.length ? `, ${med(regs) >= 0.75 ? "regular" : med(regs) >= 0.5 ? "slightly irregular" : "irregular"} rhythm` : ""}.`],
+    actV.length && ["Stall behaviour", viceNames.length ? `${viceNames.join(" and ")} flagged (${vices.map((r) => clock(Date.parse(r.ts))).join(", ")}). A flag is a movement pattern, not a diagnosis — confirm it on the recording.`
+      : "No rhythmic weaving, box walking or head tossing."],
+    (floorEv.urination.length || floorEv.excretion.length) && ["Urination and manure", [floorEv.urination.length && `urination at ${floorEv.urination.map((r) => clock(Date.parse(r.ts))).join(", ")}`, floorEv.excretion.length && `manure at ${floorEv.excretion.map((r) => clock(Date.parse(r.ts))).join(", ")}`].filter(Boolean).join("; ").replace(/^./, (c) => c.toUpperCase()) + "."],
+  ].filter(Boolean).slice(0, 5);
+  const h0 = hourOf(from), h1 = hourOf(to);
+  const night = (h) => h >= 20 || h < 6;
+  const context = [
+    ["Time of day", night(h0) && night(h1) ? "A night session: horses do most of their lying down and deep rest at night."
+      : !night(h0) && !night(h1) ? "A daytime session: horses are usually more active by day and do most of their lying down at night."
+        : "The session spans day and night; horses rest more after dark."],
+    ["Individual baseline", `Horses vary; after about three days of monitoring, ${name}'s readings are compared with ${name}'s own normal rather than a general range.`],
+  ];
+  const notesText = String(notes || "").trim().slice(0, MAX_NOTES);
+  const notSeen = [
+    !eye.length && "temperature",
+    !resp.length && "respiration",
+    !lyingMeasured && "lying pattern",
+    !(floorOk && floorWatched === true) && "urination and excretion",
+  ].filter(Boolean);
+
+  // ---- the 8 points ------------------------------------------------------------ //
+  const S = { ok: ["ok", "✓", "Measured"], part: ["part", "◐", "Partly captured"], no: ["cam", "◌", "Not captured"] };
+  const floorNote = floorWatched === false ? "The stall floor is not marked in this camera's view." : "Requires the stall floor in the camera's view.";
+  const points = [
+    [1, "Body temperature", eye.length ? S.ok : S.no, eye.length ? `${f1(eyeMed)} °C` : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.` : "Requires the eye in the thermal view."],
+    [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : "Requires the nostril or flank still in view for 30 seconds."],
+    [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
+    [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${minutes} minutes; ${bands.high} minutes of high activity.` : "No movement data in this session."],
+    [5, "Resting pattern", lyingMeasured ? S.ok : actV.length ? S.part : S.no, lyingMeasured ? `${lyingMin} min lying` : actV.length ? `${stillMin} min` : "—", lyingMeasured ? `Lying down ${lyingMin} min; standing still ${stillMin} min.` : actV.length ? "Standing rest. Lying down is measured when the horse's whole body is in view." : "No movement data in this session."],
+    [6, "Stable vices", actV.length ? S.ok : S.no, actV.length ? (viceNames.length ? "Flagged" : "None") : "—", actV.length ? (viceNames.length ? `${viceNames.join(", ")} flagged for review on the recording.` : "No weaving, box walking or head tossing identified.") + " Crib-biting is not assessed." : "No movement data in this session."],
+    [7, "Urination", floorOk && floorWatched === true ? S.ok : S.no, floorOk && floorWatched === true ? (floorEv.urination.length ? `${floorEv.urination.length} seen` : "None seen") : "—", floorOk && floorWatched === true ? "Wet patches on the bedding after the horse moved away." : floorNote],
+    [8, "Excretion", floorOk && floorWatched === true ? S.ok : S.no, floorOk && floorWatched === true ? (floorEv.excretion.length ? `${floorEv.excretion.length} seen` : "None seen") : "—", floorOk && floorWatched === true ? "New manure on the bedding after the horse moved away." : floorNote],
+  ];
+  const recs = [
+    eyeMinutes < 0.3 * Math.max(1, anyMin.size) && `<b>Aim the camera where ${esc(name)}'s head spends most time</b> (hay net or door), 3.5–4 m away and level with the head, so the eye and nostrils are in the thermal view more often. Temperature and breathing are read whenever they are.`,
+    !(floorWatched === true) && `<b>Mark the stall floor in the camera's view</b> where the bedding is visible, so urination and excretion are counted.`,
+    `<b>Run longer sessions, such as overnight,</b> to establish ${esc(name)}'s personal baseline; changes in temperature and activity are then flagged automatically.`,
+    `<b>Keep the stall clear of people during monitoring</b> so activity reflects the horse alone.`,
+  ].filter(Boolean).slice(0, 4);
+
+  // ---- charts ------------------------------------------------------------------ //
+  const W = 920, L = 52, R = 18;
+  const X = (m) => L + (m / minutes) * (W - L - R);
+  const tickMins = Array.from({ length: Math.floor(minutes / tick) + 1 }, (_, i) => i * tick);
+  const ticks = (h, top = 0) => tickMins.map((m) => `<line x1="${X(m)}" x2="${X(m)}" y1="${top}" y2="${h}" class="grid"/><text x="${X(m)}" y="${h + 17}" class="tick" text-anchor="middle">${clock(from + m * 60000)}</text>`).join("");
+  const markTimes = [
+    ...vices.map((r) => [Date.parse(r.ts), `${(r.meta?.kind || "weaving").replace("_", " ")} flagged`]),
+    ...posture.map((r) => [Date.parse(r.ts), { lie_down: "Lay down", get_up: "Got up", possible_roll: "Possible roll", possible_cast: "Possibly cast" }[r.meta?.kind] || "Posture change"]),
+    ...floorEv.urination.map((r) => [Date.parse(r.ts), "Urination"]), ...floorEv.excretion.map((r) => [Date.parse(r.ts), "Manure"]),
+  ];
+
+  function timeline() {
+    const lanes = [
+      ["Camera data", (i) => anyB[i], "on"],
+      ["Eye in view", (i) => eyeB[i], "on"],
+      ["Standing still", (i) => (stillB[i] ?? 0) >= 0.5, "on"],
+      ["High activity", (i) => (actB[i] ?? 0) >= 0.6, "hot"],
+    ];
+    const lh = 46, H = lanes.length * lh, x0 = 150;
+    const cw = (W - x0 - R) / nb;
+    const body = lanes.map(([lname, fn, cls], li) => {
+      const y = li * lh;
+      const cells = Array.from({ length: nb }, (_, i) => fn(i)
+        ? `<rect x="${x0 + i * cw}" y="${y + 10}" width="${cw + 0.6}" height="${lh - 20}" class="lane-${cls}" data-tip="${esc(lname)} · ${clock(from + i * bucket * 60000)}"/>` : "").join("");
+      return `<text x="140" y="${y + lh / 2 + 4}" class="tick strong" text-anchor="end">${esc(lname)}</text><rect x="${x0}" y="${y + 10}" width="${W - x0 - R}" height="${lh - 20}" rx="4" class="lane-bg"/>${cells}`;
+    }).join("");
+    const xm = (ms) => x0 + ((ms - from) / 60000 / minutes) * (W - x0 - R);
+    const tk = tickMins.map((m) => `<text x="${xm(from + m * 60000)}" y="${H + 16}" class="tick" text-anchor="middle">${clock(from + m * 60000)}</text>`).join("");
+    const tm = markTimes.map(([t, what]) => `<g data-tip="${esc(what)} · ${clock(t)}"><path d="M${xm(t) - 6},-2 h12 l-6,10 z" class="turn"/></g>`).join("");
+    return `<svg viewBox="0 -14 ${W} ${H + 36}" role="img" aria-label="Session timeline">${body}${tk}${tm}</svg>`;
+  }
+
+  function activityChart() {
+    const H = 230, RG = 78, Wp = W - RG;
+    const Xa = (i) => L + (i / nb) * (Wp - L);
+    const bw = Math.max(1, (Wp - L) / nb - (nb > 60 ? 2 : 3)), y = (v) => H - v * H;
+    const lvlName = Object.fromEntries(LEVELS.map(([k, n]) => [k, n]));
+    const bandsSvg = [["high", 0.6, 1], ["moderate", 0.2, 0.6], ["low", 0.05, 0.2]].map(([k, lo, hi]) =>
+      `<text x="${Wp + 12}" y="${(y(lo) + y(hi)) / 2 + 4}" class="lvl lvl-${k}">${lvlName[k]}</text>`).join("") +
+      `<text x="${Wp + 12}" y="${H - 2}" class="lvl lvl-none">None</text>` +
+      [0.2, 0.6].map((v) => `<line x1="${L}" x2="${Wp}" y1="${y(v)}" y2="${y(v)}" class="thr"/>`).join("");
+    const grid = [0, 0.2, 0.4, 0.6, 0.8, 1].map((v) => `<line x1="${L}" x2="${Wp}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 10}" y="${y(v) + 4}" class="tick" text-anchor="end">${v.toFixed(1)}</text>`).join("");
+    const tk = tickMins.map((m) => `<text x="${L + (m / minutes) * (Wp - L)}" y="${H + 20}" class="tick" text-anchor="middle">${clock(from + m * 60000)}</text>`).join("");
+    const bars = actB.map((v, i) => {
+      const x0 = Xa(i) + 1.5, tip = `${clock(from + i * bucket * 60000)} · `;
+      if (v === null) return `<rect x="${x0}" y="${H - 10}" width="${bw}" height="10" rx="2" class="nodata" data-tip="${tip}no reading"/>`;
+      const k = levelOf(v);
+      if (k === "none") return `<rect x="${x0}" y="${H - 4}" width="${bw}" height="4" rx="2" class="b-none" data-tip="${tip}no activity (${f2(v)})"/>`;
+      const top = y(v), r = Math.min(5, bw / 2);
+      return `<path d="M${x0},${H} V${top + r} q0,-${r} ${r},-${r} h${bw - 2 * r} q${r},0 ${r},${r} V${H} Z" class="b-${k}" data-tip="${tip}${lvlName[k].toLowerCase()} activity (${f2(v)})"/>`;
+    }).join("");
+    const pts = roll.map((v, i) => (v === null ? null : [Xa(i) + bw / 2 + 1.5, y(v), i, v])).filter(Boolean);
+    let line = "";
+    if (pts.length > 1) {
+      let d = `M${pts[0][0]},${pts[0][1]}`;
+      for (let i = 0; i < pts.length - 1; i++) {                            // Catmull-Rom as Bézier: a smooth average
+        const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+        const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+        d += ` C${c1[0].toFixed(1)},${Math.min(H, c1[1]).toFixed(1)} ${c2[0].toFixed(1)},${Math.min(H, c2[1]).toFixed(1)} ${p2[0]},${p2[1]}`;
+      }
+      const every = Math.max(1, Math.round(nb / 12));
+      const markers = pts.filter((p) => p[2] % every === Math.floor(every / 2)).map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="5" class="avg-dot" data-tip="${clock(from + p[2] * bucket * 60000)} · ${avgLabel} ${f2(p[3])}"/>`).join("");
+      line = `<path d="${d} L${pts.at(-1)[0]},${H} L${pts[0][0]},${H} Z" fill="url(#avgfill)"/><path d="${d}" class="avg-line"/>${markers}`;
+    }
+    return `<svg viewBox="0 -10 ${W} ${H + 36}" role="img" aria-label="Activity by level, with the ${avgLabel}">
+<defs><linearGradient id="avgfill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--avg)" stop-opacity=".28"/><stop offset="1" stop-color="var(--avg)" stop-opacity="0"/></linearGradient></defs>
+${grid}${bandsSvg}${tk}${bars}${line}
+<line x1="${L}" x2="${Wp}" y1="${H}" y2="${H}" class="axis"/></svg>`;
+  }
+
+  function tempChart() {
+    const H = 250;
+    if (!eye.length) return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="No eye temperature"><rect x="${L}" y="0" width="${W - L - R}" height="${H}" rx="8" class="away"/><text x="${W / 2}" y="${H / 2}" class="lbl" text-anchor="middle">No eye-temperature readings in this session</text>${ticks(H)}</svg>`;
+    const lo = Math.floor(eyeLo - 0.5), hi = Math.max(lo + 3, Math.ceil(eyeHi + 0.5));
+    const y = (v) => H - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * H;
+    const m = eyeMed, q1 = q(eyeV, 0.25), q3 = q(eyeV, 0.75);
+    const steps = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+    const grid = steps.map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 8}" y="${y(v) + 4}" class="tick" text-anchor="end">${v} °C</text>`).join("");
+    const band = `<rect x="${L}" y="${y(q3)}" width="${W - L - R}" height="${Math.max(2, y(q1) - y(q3))}" class="iqr"/><line x1="${L}" x2="${W - R}" y1="${y(m)}" y2="${y(m)}" class="median"/><text x="${X(minutes * 0.78)}" y="${y(m) - 8}" class="lbl halo" text-anchor="middle">median ${f1(m)} °C</text>`;
+    const dots = eye.map((r) => `<circle cx="${X((Date.parse(r.ts) - from) / 60000)}" cy="${y(r.value)}" r="5.5" class="dot" data-tip="${clock(Date.parse(r.ts))} · ${f1(r.value)} °C"/>`).join("");
+    return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="Eye temperature readings">${grid}${band}${ticks(H)}${dots}</svg>`;
+  }
+
+  function distribution() {
+    const tot = actV.length || 1;
+    const seg = [["High", bands.high, "lv-high"], ["Moderate", bands.moderate, "lv-moderate"], ["Low", bands.low, "lv-low"], ["No activity", bands.none, "lv-none"]];
+    const rects = seg.filter(([, v]) => v > 0).map(([n, v, c]) => `<div class="dseg ${c}" style="width:${(v / tot) * 100}%" data-tip="${n} · ${v} min (${Math.round((v / tot) * 100)}%)"></div>`).join("");
+    return `<div class="dbar">${rects}</div><div class="dlegend">${seg.map(([n, v, c]) => `<span><i class="${c}"></i>${n} <b>${v} min</b> <em>${Math.round((v / tot) * 100)}%</em></span>`).join("")}</div>`;
+  }
+
+  // ---- page --------------------------------------------------------------------- //
+  const icon = {
+    thermo: '<path d="M10 3a2 2 0 0 1 4 0v10.3a4 4 0 1 1-4 0z"/><path d="M12 14v-5"/>',
+    move: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5v.5"/>',
+    note: '<path d="M4 4h16v12H8l-4 4z"/>',
+  };
+  const svgIcon = (k) => `<svg viewBox="0 0 24 24" class="ico" aria-hidden="true">${icon[k]}</svg>`;
+  const day = T({ weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(from);
+  const ymd = T({ year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(from)
+    .reduce((a, p) => ({ ...a, [p.type]: p.value }), {});
+  const ref = `EQ-${String(horse.id).toUpperCase().replace(/[^A-Z0-9]/g, "")}-${ymd.year}${ymd.month}${ymd.day}${ymd.hour}${ymd.minute}`;
+  const foot = (n) => `<div class="pfoot"><span>EquiCare · ${esc(name)} · Ref. ${ref}</span><span>Page ${n} of 5</span></div>`;
+  const rangeEnd = to > now ? now : to;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(name)} — Monitoring Session Report</title>
+<style>
+:root{color-scheme:light;--page:#eef0f3;--surface:#ffffff;--ink:#0f1720;--ink2:#46505c;--muted:#8a929c;--grid:#e7eaee;--ring:rgba(15,23,32,.08);
+--lv-high:#184f95;--lv-mod:#3987e5;--lv-low:#9ec5f4;--lv-none:#c9cdd3;--avg:#e0822f;--navy:#0f2a47;--navy2:#1c4a78;--accent:#2a78d6;--accentSoft:rgba(42,120,214,.12);--alt:#9aa3ad;--hot:#e0822f;--ok:#0ca30c;--part:#d59a0d;--cam:#9aa3ad;--lanebg:#f0f2f5;}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){color-scheme:dark;--page:#0b0d10;--surface:#15181c;--ink:#f3f5f7;--ink2:#c0c6cd;--grid:#262b31;--ring:rgba(255,255,255,.08);--accent:#3987e5;--accentSoft:rgba(57,135,229,.18);--lanebg:#1f2328;}}
+:root[data-theme="dark"]{color-scheme:dark;--page:#0b0d10;--surface:#15181c;--ink:#f3f5f7;--ink2:#c0c6cd;--grid:#262b31;--ring:rgba(255,255,255,.08);--accent:#3987e5;--accentSoft:rgba(57,135,229,.18);--lanebg:#1f2328;}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:none;margin:0 auto;padding:24px 0 40px}
+.cover{background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 100%);color:#fff;border-radius:22px;padding:30px 34px 88px;position:relative;overflow:hidden}
+.cover:after{content:"";position:absolute;right:-80px;top:-80px;width:320px;height:320px;border-radius:50%;background:rgba(255,255,255,.06)}
+.cover .top{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.85}
+.logo{display:inline-flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.06em}.logo i{width:26px;height:26px;border-radius:8px;background:#fff;display:inline-grid;place-items:center;color:var(--navy);font-style:normal;font-size:14px}
+.cover h1{font-size:40px;line-height:1.1;margin:26px 0 6px;letter-spacing:-.02em;font-weight:700}.cover h1 span{font-weight:400;opacity:.7}
+.cover .meta{display:flex;flex-wrap:wrap;gap:8px 26px;font-size:14px;opacity:.9;margin-top:10px}.cover .meta b{font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:-60px 20px 0;position:relative;z-index:1}
+.kpi{background:var(--surface);border-radius:16px;padding:16px 18px;box-shadow:0 10px 30px rgba(15,23,32,.10);border:1px solid var(--ring)}
+.kpi b{display:block;font-size:28px;line-height:1.15;letter-spacing:-.01em}.kpi span{font-size:12.5px;color:var(--ink2)}.kpi small{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+section.card{background:var(--surface);border:1px solid var(--ring);border-radius:18px;padding:26px 28px;margin-top:18px}
+.sh{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}.sh .n{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.08em}.sh h2{font-size:20px;margin:0;letter-spacing:-.01em}
+.sub{color:var(--ink2);margin:4px 0 0;font-size:14px}
+.exec{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;align-items:start}
+.exec p.lead{font-size:16px;margin:10px 0 18px}
+.find{display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--grid)}.find:first-of-type{border-top:0}
+.ico{width:22px;height:22px;flex:none;stroke:var(--accent);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;margin-top:2px}
+.find b{display:block}.find span{color:var(--ink2);font-size:14px}
+.gal{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:14px}.gal figure{margin:0}.gal img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:10px;display:block}
+.gal figcaption{font-size:12px;color:var(--ink2);margin-top:6px;line-height:1.35}.gal figcaption b{display:block;color:var(--ink);font-variant-numeric:tabular-nums}
+.obs{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:10px}.obs h3{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:6px 0 4px}
+.note{margin-top:14px;background:var(--lanebg);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--ink2)}.note b{display:block;color:var(--ink);margin-bottom:2px}
+.photo{margin:0;border-radius:14px;overflow:hidden;position:relative;display:flex;flex-direction:column}.photo img{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
+.photos{display:flex;flex-direction:column;gap:10px}.photo figcaption{font-size:11px;margin-top:5px}.photo img{border-radius:12px}
+.details{margin-top:10px;background:var(--lanebg);border-radius:12px;padding:10px 14px}.details h3{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 6px}
+.details dl{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;margin:0;font-size:11.5px}.details dt{color:var(--muted)}.details dd{margin:0;font-weight:600}
+.photo figcaption{font-size:12.5px;color:var(--muted);margin-top:8px}
+table{border-collapse:collapse;width:100%;font-size:14px}th{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid var(--grid)}
+td{padding:13px 12px;border-bottom:1px solid var(--grid);vertical-align:top}td.num{font-variant-numeric:tabular-nums;white-space:nowrap}tbody tr:last-child td{border-bottom:0}
+.pt-name{font-weight:600;white-space:nowrap}.pt-name small{display:block;color:var(--muted);font-weight:500;font-size:11.5px}.pt-note{color:var(--ink2);font-size:13.5px}.pt-val{font-size:18px;font-weight:650;white-space:nowrap}
+.st{display:inline-flex;gap:7px;align-items:center;font-size:12px;font-weight:600;white-space:nowrap;padding:4px 10px;border-radius:999px;background:var(--lanebg)}
+.st i{font-style:normal;display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;color:#fff;font-size:11px}
+.st.ok i{background:var(--ok)}.st.part i{background:var(--part)}.st.cam i{background:var(--cam)}
+svg{width:100%;height:auto;display:block;overflow:visible}.grid{stroke:var(--grid)}.tick{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.tick.strong{fill:var(--ink2);font-size:12.5px}
+.lbl{fill:var(--ink2);font-size:12px}.zlabel{fill:var(--muted);font-size:11px}.halo{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.bar{fill:var(--accent)}.trend{fill:none;stroke:var(--ink);stroke-width:2;stroke-linejoin:round;opacity:.7}.zone-hi{fill:var(--accentSoft);opacity:.6}
+.dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}.iqr{fill:var(--accentSoft)}.median{stroke:var(--ink2);stroke-width:1.5;stroke-dasharray:5 4}.away{fill:var(--lanebg)}
+.lane-bg{fill:var(--lanebg)}.lane-on{fill:var(--accent)}.lane-alt{fill:var(--alt);opacity:.55}.lane-hot{fill:var(--hot)}.turn{fill:var(--hot);stroke:var(--surface);stroke-width:1.5}
+.legend{display:flex;flex-wrap:wrap;gap:18px;font-size:12.5px;color:var(--ink2);margin-top:12px}.legend span{display:inline-flex;align-items:center;gap:7px}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px}.sw.bar{background:var(--accent)}.sw.line{height:2px;width:18px;background:var(--ink);opacity:.7;border-radius:0}.sw.dot{border-radius:50%;background:var(--accent)}.sw.iqr{background:var(--accentSoft)}.sw.hot{background:var(--hot)}.sw.alt{background:var(--alt);opacity:.55}
+.dbar{display:flex;height:24px;border-radius:8px;overflow:hidden;gap:2px;margin-top:12px}.dseg{height:100%}
+.lv-high{background:var(--lv-high)}.lv-moderate{background:var(--lv-mod)}.lv-low{background:var(--lv-low)}.lv-none{background:var(--lv-none)}
+.b-high{fill:var(--lv-high);opacity:.9}.b-moderate{fill:var(--lv-mod);opacity:.85}.b-low{fill:var(--lv-low);opacity:.95}.b-none{fill:var(--lv-none)}
+.nodata{fill:none;stroke:var(--lv-none);stroke-dasharray:2 2}.thr{stroke:var(--muted);stroke-width:1;stroke-dasharray:4 4;opacity:.6}.axis{stroke:var(--grid);stroke-width:1.5}
+.lvl{font-size:11.5px;font-weight:600}.lvl-high{fill:var(--lv-high)}.lvl-moderate{fill:var(--lv-mod)}.lvl-low{fill:#6b9fd8}.lvl-none{fill:var(--muted)}
+.avg-line{fill:none;stroke:var(--avg);stroke-width:2.5;stroke-linecap:round}.avg-dot{fill:var(--surface);stroke:var(--avg);stroke-width:2.5}
+.sw.avgkey{width:22px;height:10px;background:linear-gradient(var(--avg),var(--avg)) center/100% 2.5px no-repeat;position:relative}.sw.avgkey:after{content:"";position:absolute;left:7px;top:1px;width:8px;height:8px;border-radius:50%;border:2.5px solid var(--avg);background:var(--surface);box-sizing:border-box}
+.dlegend{display:flex;flex-wrap:wrap;gap:20px;margin-top:10px;font-size:13px;color:var(--ink2)}.dlegend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}.dlegend em{color:var(--muted);font-style:normal;margin-left:4px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}.stat{background:var(--lanebg);border-radius:12px;padding:12px 14px}.stat b{display:block;font-size:21px;letter-spacing:-.01em}.stat span{font-size:12px;color:var(--ink2)}
+.fig{font-size:11.5px;color:var(--muted);margin-top:10px;letter-spacing:.02em}
+.rec{counter-reset:r;list-style:none;padding:0;margin:12px 0 0}.rec li{counter-increment:r;display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--grid)}.rec li:first-child{border-top:0}
+.rec li:before{content:counter(r);flex:none;width:26px;height:26px;border-radius:50%;background:var(--accentSoft);color:var(--accent);font-weight:700;font-size:13px;display:grid;place-items:center}
+.page{width:210mm;min-height:297mm;margin:0 auto 18px;padding:9mm 9mm 7mm;background:var(--page);display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(15,23,32,.12);border-radius:4px}
+.page>section.card:last-of-type{flex:1}.page>section.card{margin-top:4.5mm}.page.p1>section.card{margin-top:5mm}
+.pfoot{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);padding:3.5mm 1mm 0;letter-spacing:.02em}
+.about{display:grid;grid-template-columns:1fr 1fr;gap:10px 22px;margin-top:10px}.about div{border-top:1px solid var(--grid);padding-top:8px}.about b{display:block;font-size:12.5px}.about span{font-size:11.5px;color:var(--ink2)}
+.foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px;margin-top:22px;padding:0 6px}
+#tip{position:fixed;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--ring);box-shadow:0 6px 20px rgba(0,0,0,.15);border-radius:8px;padding:6px 10px;font-size:12.5px;display:none;z-index:9}
+tr.dim td{color:var(--muted)}
+@page{size:A4;margin:0}
+.page{font-size:12px;line-height:1.5}.page .cover{padding:20px 24px 64px;border-radius:14px}.page .cover h1{font-size:30px;margin-top:16px}.page .cover .meta{font-size:11.5px}
+.page .kpis{grid-template-columns:repeat(4,1fr);margin:-46px 14px 0;gap:10px}.page .kpi{padding:10px 12px}.page .kpi b{font-size:21px}.page .kpi span{font-size:11px}.page .kpi small{font-size:10px}
+.page section.card{padding:14px 16px;border-radius:12px}.page .sh h2{font-size:15.5px}.page .sub{font-size:11.5px}
+.page .exec,.page .obs{grid-template-columns:1.15fr 1fr;gap:16px}.page .exec p.lead{font-size:12.5px;margin:6px 0 8px}.page .find{padding:6px 0}.page .find b{font-size:12px}.page .find span{font-size:11px}
+.page .stats{grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}.page .stat{padding:8px 10px}.page .stat b{font-size:15px}.page .stat span{font-size:10.5px}
+.page table{font-size:11px}.page td{padding:6px 8px}.page th{padding:5px 8px;font-size:10px}.page .pt-val{font-size:13px}.page .pt-note{font-size:10.5px}
+.page .legend,.page .dlegend{font-size:10.5px;gap:12px}.page .rec li{padding:6px 0;font-size:11.5px}.page .gal{grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}.page .gal figcaption{font-size:9.5px}.page .fig{font-size:10px;margin-top:6px}
+.page .note{font-size:11px;padding:9px 11px}.page .obs h3{font-size:11px}
+@media (max-width:820px){.gal{grid-template-columns:repeat(2,1fr)}.exec,.obs{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr);margin:-56px 10px 0}.stats{grid-template-columns:repeat(2,1fr)}.cover h1{font-size:30px}.cover{padding:24px 22px 80px}}
+@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact}html,body{background:var(--page)}main{padding:0}#tip{display:none!important}
+.page{margin:0;box-shadow:none;border-radius:0;height:297mm;min-height:0;overflow:hidden;break-after:page}.page:last-child{break-after:auto}}
+.toolbar{position:sticky;top:0;z-index:5;display:flex;gap:12px;align-items:center;justify-content:center;padding:10px 16px;background:var(--page);font-size:13px;color:var(--ink2)}
+.toolbar button{font:inherit;font-weight:600;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:8px 16px;cursor:pointer}
+.nophoto{display:grid;place-items:center;aspect-ratio:4/3;border-radius:12px;background:var(--lanebg);color:var(--muted);font-size:12px;text-align:center;padding:12px}
+.notes p{margin:0 0 6px;color:var(--ink2);font-size:14px;white-space:pre-line}.page .notes p{font-size:11px}
+.photo img,.gal img{aspect-ratio:auto;object-fit:contain}.gal,.page .gal{grid-template-columns:repeat(3,1fr)}.page .gal figcaption{font-size:10px}
+@media print{.no-print{display:none!important}}
+</style></head><body><main>
+<div class="toolbar no-print"><button type="button" onclick="window.print()">Save as PDF</button><span>In the print window choose “Save as PDF”.</span></div>
+<div class="page p1">
+<header class="cover">
+<div class="top"><span class="logo"><i>E</i>EquiCare</span><span>Monitoring session report</span></div>
+<h1>${esc(name)} <span>· Stall ${esc(horse.stall || "—")}</span></h1>
+<div class="meta"><span><b>Date</b> ${day}</span><span><b>Session</b> ${clock(from)}–${clock(rangeEnd)} ${esc(tzName)} (${dur})</span><span><b>Monitoring</b> thermal + colour camera</span><span><b>Ref.</b> ${ref}</span></div>
+</header>
+<div class="kpis">
+<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>Eye temperature</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : "eye not in view"}</small></div>
+<div class="kpi"><b>${f2(med(actV))}</b><span>Activity index</span><small>median · scale 0–1</small></div>
+<div class="kpi"><b>${lyingMeasured ? `${lyingMin} min` : `${stillMin} min`}</b><span>${lyingMeasured ? "Lying down" : "Standing rest"}</span><small>of ${dur}</small></div>
+<div class="kpi"><b>${Math.round((anyMin.size / minutes) * 100)}%</b><span>Monitoring coverage</span><small>${anyMin.size} of ${minutes} minutes</small></div>
+</div>
+
+<section class="card"><div class="exec"><div>
+<div class="sh"><span class="n">01</span><h2>Executive summary</h2></div>
+<p class="lead">${esc(lead)}</p>
+${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}
+<div class="details"><h3>Session details</h3><dl>
+<dt>Horse</dt><dd>${esc(name)}</dd><dt>Stall</dt><dd>${esc(horse.stall || "—")}</dd>
+<dt>Date</dt><dd>${T({ day: "numeric", month: "short", year: "numeric" }).format(from)}</dd><dt>Session</dt><dd>${clock(from)}–${clock(rangeEnd)} ${esc(tzName)}</dd>
+<dt>Monitoring</dt><dd>Thermal + colour camera</dd><dt>Coverage</dt><dd>${anyMin.size} of ${minutes} min</dd>
+<dt>Readings</dt><dd>${rd.length}</dd><dt>Video recorded</dt><dd>${clipCount ? plural(clipCount, "clip") : "none"}</dd>
+</dl></div>
+</div>
+<div class="photos">${covers.length ? covers.map((c) => `<figure class="photo"><img src="${c.img}" alt="${esc(name)} at ${clock(c.at)}"><figcaption>${clock(c.at)} · ${esc(caption(c.m))}</figcaption></figure>`).join("")
+  : `<div class="nophoto">No video was recorded in this session.</div>`}</div>
+</div></section>
+${foot(1)}</div>
+<div class="page">
+<section class="card"><div class="sh"><span class="n">02</span><h2>Behaviour and wellbeing observations</h2></div><p class="sub">What the camera measured during the session${notesText ? ", and notes from the stable" : ""}.</p>
+<div class="obs">
+<div><h3>Observed</h3>${observed.length ? observed.map(([t, d]) => `<div class="find">${svgIcon("check")}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("") : `<p class="sub">Nothing was measured in this window.</p>`}</div>
+<div>${notesText ? `<h3>Notes from the stable</h3><div class="find">${svgIcon("note")}<div class="notes">${notesText.split(/\n+/).map((p) => `<p>${esc(p)}</p>`).join("")}</div></div>` : ""}
+<h3>Context</h3>${context.slice(0, notesText ? 1 : 2).map(([t, d]) => `<div class="find">${svgIcon("info")}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}
+${notSeen.length ? `<div class="note"><b>Not captured this session</b>${esc(notSeen.join(", ").replace(/^./, (c) => c.toUpperCase()))} — see the monitoring points and recommendations.</div>` : ""}</div>
+</div></section>
+
+<section class="card"><div class="sh"><span class="n">03</span><h2>Session gallery</h2></div><p class="sub">${gallery.length ? `${plural(gallery.length, "moment")} from the recording, in time order — chosen where the eye was in view and the picture was sharpest.` : "No video was recorded in this session."}</p>
+<div class="gal">${gallery.map((g) => `<figure><img src="${g.img}" alt="${esc(name)} at ${clock(g.at)}"><figcaption><b>${clock(g.at)}</b>${esc(caption(g.m).replace(/^./, (c) => c.toUpperCase()))}</figcaption></figure>`).join("")}</div></section>
+${foot(2)}</div>
+<div class="page">
+<section class="card"><div class="sh"><span class="n">04</span><h2>Monitoring points</h2></div><p class="sub">Results for the eight camera monitoring points.</p>
+<table style="margin-top:12px"><thead><tr><th>Monitoring point</th><th>Result</th><th>Status</th><th>Notes</th></tr></thead><tbody>
+${points.map(([n, pname, st, val, note]) => `<tr><td class="pt-name">${esc(pname)}<small>Point ${n}</small></td><td class="pt-val">${esc(val)}</td><td><span class="st ${st[0]}"><i>${st[1]}</i>${st[2]}</span></td><td class="pt-note">${esc(note)}</td></tr>`).join("")}
+</tbody></table></section>
+
+<section class="card"><div class="sh"><span class="n">05</span><h2>Session timeline</h2></div><p class="sub">${bucket === 1 ? "Minute-by-minute" : `${bucket}-minute`} view of monitoring, eye in view, rest and activity.${markTimes.length ? " ▼ marks an event to review on the recording." : ""}</p>
+<div style="margin-top:14px">${timeline()}</div>
+<div class="legend"><span><i class="sw bar"></i>present</span><span><i class="sw hot"></i>high activity${markTimes.length ? " / event" : ""}</span></div>
+<p class="fig">Figure 1 · Session timeline</p></section>
+${foot(3)}</div>
+<div class="page">
+<section class="card"><div class="sh"><span class="n">06</span><h2>Activity</h2></div><p class="sub">Each bar is ${bucket === 1 ? "one minute" : `${bucket} minutes`}, coloured by activity level (activity index 0 = still, 1 = very active); the line is the ${avgLabel}.</p>
+<div style="margin-top:14px">${activityChart()}</div>
+<div class="legend"><span><i class="sw lv-high"></i>High (0.6+)</span><span><i class="sw lv-moderate"></i>Moderate (0.2–0.6)</span><span><i class="sw lv-low"></i>Low (0.05–0.2)</span><span><i class="sw lv-none"></i>No activity</span><span><i class="sw avgkey"></i>${avgLabel.replace(/^./, (c) => c.toUpperCase())}</span></div>
+<p class="fig">Figure 2 · Activity${bucket === 1 ? " per minute" : ""}</p>
+<h3 style="margin:22px 0 0;font-size:15px">Time by activity level</h3>${distribution()}
+<div class="stats"><div class="stat"><b>${bands.high} min</b><span>high activity</span></div><div class="stat"><b>${bands.moderate} min</b><span>moderate activity</span></div><div class="stat"><b>${bands.low + bands.none} min</b><span>low or no activity</span></div><div class="stat"><b>${lyingMeasured ? `${lyingMin} min` : `${stillMin} min`}</b><span>${lyingMeasured ? "lying down" : "standing still"}</span></div></div>
+<p class="sub" style="margin-top:14px">${esc((spells.length ? `Rest came in ${plural(spells.length, "spell")}${spells.length <= 6 ? `: ${spellText(spells)}` : ""}. ` : actV.length ? "No sustained rest spells. " : "") + (busiest ? `The most active period was ${busiest.label} (average ${f2(busiest.act)}).` : ""))}</p></section>
+
+<section class="card"><div class="sh"><span class="n">07</span><h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Eye-surface temperature reads about 2 °C below rectal temperature.</p>
+<div style="margin-top:14px">${tempChart()}</div>
+<div class="legend"><span><i class="sw dot"></i>reading</span><span><i class="sw iqr"></i>middle 50% of readings</span><span>— — median</span></div>
+<p class="fig">Figure 3 · Eye temperature</p>
+<div class="stats"><div class="stat"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>median</span></div><div class="stat"><b>${eye.length ? `${f1(eyeLo)}–${f1(eyeHi)} °C` : "—"}</b><span>range</span></div><div class="stat"><b>${eye.length}</b><span>readings</span></div><div class="stat"><b>${eyeMinutes} min</b><span>eye in view</span></div></div></section>
+${foot(4)}</div>
+<div class="page">
+<section class="card"><div class="sh"><span class="n">08</span><h2>${block < 60 ? `${block}-minute` : `${block / 60}-hour`} breakdown</h2></div>
+<table style="margin-top:10px"><thead><tr><th>Period</th><th>Avg activity</th><th>Peak</th><th>Standing rest</th><th>Eye temp.</th><th>Eye in view</th><th>Flags</th></tr></thead><tbody>
+${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.label}</td><td class="num">${f2(b.act)}</td><td class="num">${f2(b.peak)}</td><td class="num">${b.still} min</td><td class="num">${b.n ? `${f1(b.temp)} °C` : "—"}</td><td class="num">${Math.round(b.eyeShare * 100)}%</td><td class="num">${b.flags || "—"}</td></tr>`).join("")}
+</tbody></table></section>
+
+<section class="card"><div class="sh"><span class="n">09</span><h2>Recommendations</h2></div>
+<ol class="rec">${recs.map((r) => `<li><div>${r}</div></li>`).join("")}</ol></section>
+
+<section class="card"><div class="sh"><span class="n">10</span><h2>About this report</h2></div>
+<div class="about">
+<div><b>Eye temperature</b><span>Read by the thermal camera at the eye whenever the eye is in view — only from a small hot spot with cooler skin around it, so a warm coat is not mistaken for the eye. Eye-surface temperature runs about 2 °C below rectal temperature and is tracked as a trend for each horse.</span></div>
+<div><b>Activity index</b><span>The share of the horse moving, from the colour camera: 0 = still, 1 = very active. Levels: no activity below 0.05, low 0.05–0.2, moderate 0.2–0.6, high 0.6 and above.</span></div>
+<div><b>Rest</b><span>Minutes in which the horse stood still; lying down is reported when the horse's whole body is in view.</span></div>
+<div><b>Stable vices</b><span>Weaving, box walking and head tossing are identified from sustained rhythmic movement; a flagged moment can be checked on the recording.</span></div>
+<div><b>Monitoring coverage</b><span>${anyMin.size} of ${minutes} minutes with camera data; ${rd.length} readings${clipCount ? ` and ${plural(clipCount, "video clip")}` : ""} recorded for this session.</span></div>
+<div><b>Screening</b><span>Measurements support daily care and early attention; clinical decisions should be confirmed by a veterinarian.</span></div>
+</div></section>
+${foot(5)}</div>
+</main><div id="tip"></div>
+<script>const tip=document.getElementById("tip");document.addEventListener("pointermove",(e)=>{const t=e.target.closest&&e.target.closest("[data-tip]");if(!t){tip.style.display="none";return;}tip.textContent=t.getAttribute("data-tip");tip.style.display="block";const r=tip.getBoundingClientRect();let x=e.clientX+14,y=e.clientY+14;if(x+r.width>innerWidth-8)x=e.clientX-r.width-14;if(y+r.height>innerHeight-8)y=e.clientY-r.height-14;tip.style.left=x+"px";tip.style.top=y+"px";});</script>
+</body></html>`;
+  return { html, ref, photos: covers.length + gallery.length };
+}

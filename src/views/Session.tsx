@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Printer, Loader2, Film, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Printer, Loader2, Film, AlertTriangle, CheckCircle2, FileText } from "lucide-react";
 import * as api from "../data/api";
 import { useStable } from "../store";
 
@@ -15,6 +15,10 @@ const PILL: Record<api.SessionPoint["status"], string> = {
 };
 const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const toLocalInput = (iso: string) => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+// The notes are kept in this browser only, per horse, until the next report.
+const notesKey = (horse: string) => `equicare.reportNotes.${horse}`;
+const readNotes = (horse: string) => { try { return localStorage.getItem(notesKey(horse)) || ""; } catch { return ""; } };
+const keepNotes = (horse: string, v: string) => { try { localStorage.setItem(notesKey(horse), v); } catch { /* not kept */ } };
 
 export default function Session() {
   const params = useSearchParams();
@@ -25,6 +29,17 @@ export default function Session() {
   const to = params.get("to") || undefined;
   const [rep, setRep] = useState<api.SessionReport | null>(null);
   const [err, setErr] = useState("");
+  const [notes, setNotes] = useState("");
+  const [building, setBuilding] = useState(false);
+  const [reportErr, setReportErr] = useState("");
+  useEffect(() => { if (horseId) setNotes(readNotes(horseId)); }, [horseId]);
+  const clientReport = async () => {
+    setBuilding(true);
+    setReportErr("");
+    const e = await api.openClientReport(horseId, rep?.window.from ?? from, to, notes);
+    setBuilding(false);
+    if (e) setReportErr(e);
+  };
   useEffect(() => {
     if (!horseId) return;
     setRep(null);
@@ -56,7 +71,23 @@ export default function Session() {
           <input type="datetime-local" value={rep && to ? toLocalInput(rep.window.to) : ""} placeholder="now" onChange={(e) => go({ to: e.target.value ? new Date(e.target.value).toISOString() : undefined })} />
         </div>
         <button className="btn-ghost" onClick={() => go({ from: undefined, to: undefined })}>Last 60 min</button>
-        <button className="btn-primary" onClick={() => window.print()}><Printer size={15} /> Print / save PDF</button>
+        <button className="btn-ghost" onClick={() => window.print()}><Printer size={15} /> Print this page</button>
+        <button className="btn-primary" disabled={!rep || building} onClick={clientReport}>
+          {building ? <Loader2 className="spin" size={15} /> : <FileText size={15} />} Client report
+        </button>
+      </div>
+      <div className="card no-print" style={{ marginBottom: 14 }}>
+        <div className="field" style={{ margin: 0 }}>
+          <label>Notes from the stable for the client report (optional)</label>
+          <textarea rows={3} maxLength={1400} value={notes} placeholder="What people saw: feeding times, visitors or handling in the stall, anything unusual…"
+            onChange={(e) => { setNotes(e.target.value); keepNotes(horseId, e.target.value); }} />
+          <small className="muted">
+            The client report is built from the measurements for the window above — photos where the eye was in view, and plain
+            statements of what was and was not captured. These notes are added as the stable&apos;s own. It opens in a new tab: use
+            “Save as PDF” there.
+          </small>
+        </div>
+        {reportErr && <p style={{ color: "var(--alert)", fontSize: 13, margin: "8px 0 0" }}>{reportErr}</p>}
       </div>
 
       {err && <div className="card">Could not build the report: {err}</div>}

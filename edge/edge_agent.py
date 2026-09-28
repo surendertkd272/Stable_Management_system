@@ -1020,18 +1020,18 @@ class MtrpcCameraWorker(CameraWorker):
             self._save_posture()
         # The eye, if it is in view: eye-shaped, not just warm (see behaviour.eye_spot).
         from behaviour import eye_spot  # noqa
-        eye, eye_why, eye_method, box_peak = None, "no eye box drawn", None, None
+        eye, eye_why, eye_method, box_peak, eye_at = None, "no eye box drawn", None, None, None
         if rois.get("eye") and "x0" in rois["eye"]:
             vals, cols, rows = self.cam.box_grid(rois["eye"])
             eye, eye_why = eye_spot(vals, cols, rows)
-            eye_method = "eye box, eye-shaped hot spot"
+            eye_method, eye_at = "eye box, eye-shaped hot spot", time.time()
             box_peak = max((v for v in vals if v is not None), default=None)
         in_boxes = eye is not None                           # the head is where the boxes were drawn
         if eye is None:
             # The head is not in the eye box: look for the eye anywhere in the
             # thermal view (one camera, aimed where the head spends most time).
             eye, why = self._auto_eye()
-            eye_method = "eye-shaped hot spot, found anywhere in view (eye box missed)"
+            eye_method, eye_at = "eye-shaped hot spot, found anywhere in view (eye box missed)", time.time()
             eye_why = None if eye is not None else f"eye box: {eye_why}; rest of the view: {why}"
         self._note_eye(eye_why if eye is None else None)
         nostril_c = self.cam.box_avg(rois["nostril"])
@@ -1066,7 +1066,7 @@ class MtrpcCameraWorker(CameraWorker):
         if head_in_view:                                     # vitals only when the head is in the thermal view
             if eye is not None:
                 add("body_temp_c", eye, "°C", conf=(0.95 if eye_method.startswith("eye box") else 0.7) if calibrated else 0.3,
-                    method=eye_method, **vit)
+                    method=eye_method, readAt=round(eye_at, 1), **vit)      # when the eye was read: a report's photo comes from then
             if nostril_c is not None and in_boxes:          # the nostril box is on the nostril only when the eye box is on the eye
                 add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
         br = summary.get("breathing") or {} if head_in_view else {}

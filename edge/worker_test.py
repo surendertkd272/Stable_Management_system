@@ -145,7 +145,8 @@ act = [r for r in got if r["metric"] == "activity_index"]
 check("vitals emitted with the head in view", {"body_temp_c", "nostril_temp_c"} <= metrics, metrics)
 temp = [r for r in got if r["metric"] == "body_temp_c"]
 check("eye in the eye box: its hot spot, full confidence", temp and temp[0]["value"] == 35.1
-      and temp[0]["meta"]["method"].startswith("eye box") and temp[0]["confidence"] == 0.95, temp)
+      and temp[0]["meta"]["method"].startswith("eye box") and temp[0]["confidence"] == 0.95
+      and abs(temp[0]["meta"]["readAt"] - time.time()) < 30, temp)
 check("activity comes from the colour stream", act and act[0]["source"] == "visible_video", act)
 vice = [r for r in got if r["metric"] == "vice_event"]
 check("weaving event from the colour stream, flagged prototype, with its window length",

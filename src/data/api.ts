@@ -563,6 +563,37 @@ export interface SessionReport {
   footage: { clips: number; megabytes: number; first: string | null; last: string | null };
   verify: string[];
 }
+/**
+ * The client report — designed A4 pages for a horse's owner or vet — in a new
+ * tab, where "Save as PDF" prints it. The endpoint is authenticated, so the
+ * page is fetched and shown from a blob. Returns an error message, or null.
+ */
+export async function openClientReport(horse: string, from: string | undefined, to: string | undefined, notes: string): Promise<string | null> {
+  if (!apiConfigured) return "No backend configured";
+  // Opened now, inside the click, so the browser does not block it as a pop-up.
+  const w = window.open("", "_blank");
+  if (w) w.document.body.innerHTML = '<p style="font:15px system-ui;padding:24px">Building the report…</p>';
+  try {
+    const res = await fetch(`${BASE}/api/session/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ horse, from, to, notes, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      w?.close();
+      return body.error ?? `The report could not be built (${res.status})`;
+    }
+    const url = URL.createObjectURL(await res.blob());
+    if (w) w.location.href = url;
+    else window.location.href = url;
+    return null;
+  } catch {
+    w?.close();
+    return "Cannot reach the server";
+  }
+}
+
 export const getSession = (horse: string, from?: string, to?: string) => {
   const q = new URLSearchParams({ horse });
   if (from) q.set("from", from);
