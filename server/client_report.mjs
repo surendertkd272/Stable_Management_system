@@ -11,6 +11,9 @@
 // and the horse was calm (sharpest of three nearby frames), spread in time,
 // shown whole — the camera's view is narrow and the head is often at its edge.
 
+import { isDiagnostic } from "./contract.mjs";
+import { LIMB_NAME, leftOf, mealsOf, offCamera, stepsTotal } from "./rollup.mjs";
+
 const EYE_MIN = 33;                            // below: coat or wall, not an eye (readings from before the eye-shape check)
 const LEVELS = [["none", "No activity", 0, 0.05], ["low", "Low", 0.05, 0.2], ["moderate", "Moderate", 0.2, 0.6], ["high", "High", 0.6, 1.01]];
 const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480];
@@ -56,7 +59,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const eye = of("body_temp_c").filter((r) => r.value >= EYE_MIN && !inAway(Date.parse(r.ts)));
   const eyeV = eye.map((r) => r.value);
   const act = new Array(minutes).fill(null), still = new Array(minutes).fill(null), eyeMin = new Array(minutes).fill(null);
-  for (const r of of("activity_index")) act[minuteOf(r)] = r.value;
+  for (const r of of("activity_index")) if (!offCamera(r)) act[minuteOf(r)] = r.value;   // camera activity only
   for (const r of of("inactive_minutes")) still[minuteOf(r)] = Math.min(1, r.value / (r.meta?.windowMin || 1));
   const eyeTs = new Array(minutes).fill(null);                     // when the eye was read: photos are taken then
   const eyeSure = new Array(minutes).fill(false);                  // passed the eye-shape check (readings from 28 Sep 2026 on)
@@ -68,7 +71,8 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     eyeTs[m] = typeof r.meta?.readAt === "number" ? r.meta.readAt * 1000 : Date.parse(r.ts) - 3000;
     eyeSure[m] = /eye-shaped/.test(r.meta?.method || "");
   }
-  const anyMin = new Set(rd.map(minuteOf));
+  // Camera coverage: the wearable and the stall sensors are not the camera.
+  const anyMin = new Set(rd.filter((r) => !offCamera(r)).map(minuteOf));
   const actV = act.filter((v) => v !== null);
   const bands = Object.fromEntries(LEVELS.map(([k, , lo, hi]) => [k, actV.filter((v) => v >= lo && v < hi).length]));
   const stillMin = Math.round(still.filter((v) => v !== null).reduce((a, v) => a + v, 0));
@@ -88,7 +92,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     too_little_video: "The thermal video was interrupted.",
   };
   const respNote = RESP_WHY[topWhy] || "Requires the nostril or flank still in view for 30 seconds.";
-  const nReadings = rd.filter((r) => r.metric !== "breathing_check").length;
+  const nReadings = rd.filter((r) => !isDiagnostic(r.metric)).length;
   const regs = resp.map((r) => r.meta?.regularity).filter((v) => typeof v === "number");
   const lyingMin = Math.round(of("lying_minutes").reduce((a, r) => a + r.value, 0));
   const lyingMeasured = of("lying_minutes").length > 0;
@@ -225,7 +229,24 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     !(floorOk && floorWatched === true) && "urination and excretion",
   ].filter(Boolean);
 
-  // ---- the 8 points ------------------------------------------------------------ //
+  // ---- points 9–12: the wearable and the stall's water / feed sensors ---------- //
+  // "Not captured" + what it needs when the sensor never reported; "None" only
+  // where it is known to be working (it reported within the 48 h before).
+  const seenNear = (ms) => readings.some((r) => ms.includes(r.metric) && Date.parse(r.ts) <= to && Date.parse(r.ts) >= from - 48 * 3600000);
+  const total = (rows) => rows.reduce((a, r) => a + r.value, 0);
+  const kg = (g) => `${f1(g / 1000)} kg`;
+  const nSteps = stepsTotal(of("steps")), exMin = Math.round(total(of("exercise_session")));
+  const trots = of("lameness_result"), trot = trots.at(-1), gaitV = of("gait_asymmetry").map((r) => r.value);
+  const limb = LIMB_NAME[trot?.meta?.limb];
+  const drinks = of("water_visit").length, waterIn = of("water_ml").length > 0 || drinks > 0;
+  const waterSeen = seenNear(["water_ml", "water_visit", "water_refill"]);
+  const meals = mealsOf(readings).filter((m) => { const t = Date.parse(m.at); return t >= from && t <= to; });
+  const hayIn = of("hay_intake_g").length > 0, hayG = total(of("hay_intake_g"));
+  const ateKnown = meals.some((m) => m.eatenG !== null) || hayIn;
+  const offered = meals.reduce((a, m) => a + (m.offeredG ?? 0), 0), left = meals.reduce((a, m) => a + (leftOf(m) ?? 0), 0);
+  const feederSeen = seenNear(["feed_offered_g", "feed_intake_g", "feed_refusal_g", "hay_intake_g", "feeder_fault"]);
+
+  // ---- the 12 points ----------------------------------------------------------- //
   const S = { ok: ["ok", "✓", "Measured"], part: ["part", "◐", "Partly captured"], no: ["cam", "◌", "Not captured"] };
   const floorNote = floorWatched === false ? "The stall floor is not marked in this camera's view." : "Requires the stall floor in the camera's view.";
   const points = [
@@ -237,6 +258,17 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     [6, "Stable vices", actV.length ? S.ok : S.no, actV.length ? (viceNames.length ? "Flagged" : "None") : "—", actV.length ? (viceNames.length ? `${viceNames.join(", ")} flagged for review on the recording.` : "No weaving, box walking or head tossing identified.") + " Crib-biting is not assessed." : "No movement data in this session."],
     [7, "Urination", floorOk && floorWatched === true ? S.ok : S.no, floorOk && floorWatched === true ? (floorEv.urination.length ? `${floorEv.urination.length} seen` : "None seen") : "—", floorOk && floorWatched === true ? "Wet patches on the bedding after the horse moved away." : floorNote],
     [8, "Excretion", floorOk && floorWatched === true ? S.ok : S.no, floorOk && floorWatched === true ? (floorEv.excretion.length ? `${floorEv.excretion.length} seen` : "None seen") : "—", floorOk && floorWatched === true ? "New manure on the bedding after the horse moved away." : floorNote],
+    [9, "Steps / locomotion", nSteps !== null || exMin ? S.ok : S.no, nSteps !== null ? nSteps.toLocaleString("en-GB") : exMin ? `${exMin} min` : "—",
+      nSteps !== null ? `Leg sensor: one leg's hoof strikes × 4${exMin ? `; exercise ${exMin} min` : ""}.` : exMin ? "Exercise time; no step counts." : "Requires the leg sensor on the horse."],
+    [10, "Lameness (trot)", trot || gaitV.length ? S.ok : S.no, trot ? `${f1(trot.value)} mm` : gaitV.length ? `${Math.round(med(gaitV) * 100)}%` : "—",
+      trot ? `${limb ? `${limb[0].toUpperCase()}${limb.slice(1)} favoured` : "No limb singled out"} (${plural(trots.length, "trot")}). A screening measure being validated; a vet should confirm.`
+        : gaitV.length ? "Gait asymmetry index; a vet should confirm." : "Requires the leg and head or pelvis sensors, at a straight trot."],
+    [11, "Watering", waterIn || waterSeen ? S.ok : S.no, waterIn ? `${f1(total(of("water_ml")) / 1000)} L` : waterSeen ? "None" : "—",
+      waterIn ? `${drinks ? `${plural(drinks, "drink")}, ` : ""}water meter${of("water_refill").length ? "; refills not counted" : ""}.` : waterSeen ? "No drinking during the session." : "Requires a water meter or weighed bucket."],
+    [12, "Feeding", meals.length || hayIn || feederSeen ? S.ok : S.no,
+      ateKnown ? `${kg(meals.reduce((a, m) => a + (m.eatenG ?? 0), 0) + hayG)}` : meals.length ? plural(meals.length, "meal") : feederSeen ? "None" : "—",
+      meals.length ? `${plural(meals.length, "meal")}: offered ${kg(offered)}, left ${kg(left)}${hayIn ? `; hay ${kg(hayG)}` : ""}.`
+        : hayIn ? `Hay ${kg(hayG)} eaten.` : feederSeen ? "No meal during the session." : "Requires a weigh-back feeder or hay scale."],
   ];
   const recs = [
     eyeMinutes < 0.3 * Math.max(1, anyMin.size) && `<b>Aim the camera where ${esc(name)}'s head spends most time</b> (hay net or door), 3.5–4 m away and level with the head, so the eye and nostrils are in the thermal view more often. Temperature and breathing are read whenever they are.`,
@@ -423,7 +455,7 @@ tr.dim td{color:var(--muted)}
 .page section.card{padding:14px 16px;border-radius:12px}.page .sh h2{font-size:15.5px}.page .sub{font-size:11.5px}
 .page .exec,.page .obs{grid-template-columns:1.15fr 1fr;gap:16px}.page .exec p.lead{font-size:12.5px;margin:6px 0 8px}.page .find{padding:6px 0}.page .find b{font-size:12px}.page .find span{font-size:11px}
 .page .stats{grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}.page .stat{padding:8px 10px}.page .stat b{font-size:15px}.page .stat span{font-size:10.5px}
-.page table{font-size:11px}.page td{padding:6px 8px}.page th{padding:5px 8px;font-size:10px}.page .pt-val{font-size:13px}.page .pt-note{font-size:10.5px}
+.page table{font-size:11px}.page td{padding:6px 8px}.page table.pts td{padding:5px 8px}.page .pts .pt-name small{font-size:10px;line-height:1.25}.page th{padding:5px 8px;font-size:10px}.page .pt-val{font-size:13px}.page .pt-note{font-size:10.5px}
 .page .legend,.page .dlegend{font-size:10.5px;gap:12px}.page .rec li{padding:6px 0;font-size:11.5px}.page .gal{grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}.page .gal figcaption{font-size:9.5px}.page .fig{font-size:10px;margin-top:6px}
 .page .note{font-size:11px;padding:9px 11px}.page .obs h3{font-size:11px}
 @media (max-width:820px){.gal{grid-template-columns:repeat(2,1fr)}.exec,.obs{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr);margin:-56px 10px 0}.stats{grid-template-columns:repeat(2,1fr)}.cover h1{font-size:30px}.cover{padding:24px 22px 80px}}
@@ -478,8 +510,8 @@ ${notSeen.length ? `<div class="note"><b>Not captured this session</b>${esc(notS
 <div class="gal">${gallery.map((g) => `<figure><img src="${g.img}" alt="${esc(name)} at ${clock(g.at)}"><figcaption><b>${clock(g.at)}</b>${esc(caption(g.m).replace(/^./, (c) => c.toUpperCase()))}</figcaption></figure>`).join("")}</div></section>
 ${foot(2)}</div>
 <div class="page">
-<section class="card"><div class="sh"><span class="n">04</span><h2>Monitoring points</h2></div><p class="sub">Results for the eight camera monitoring points.</p>
-<table style="margin-top:12px"><thead><tr><th>Monitoring point</th><th>Result</th><th>Status</th><th>Notes</th></tr></thead><tbody>
+<section class="card"><div class="sh"><span class="n">04</span><h2>Monitoring points</h2></div><p class="sub">Results for the twelve monitoring points: 1–8 from the camera, 9–12 from horse and stall sensors.</p>
+<table class="pts" style="margin-top:10px"><thead><tr><th>Monitoring point</th><th>Result</th><th>Status</th><th>Notes</th></tr></thead><tbody>
 ${points.map(([n, pname, st, val, note]) => `<tr><td class="pt-name">${esc(pname)}<small>Point ${n}</small></td><td class="pt-val">${esc(val)}</td><td><span class="st ${st[0]}"><i>${st[1]}</i>${st[2]}</span></td><td class="pt-note">${esc(note)}</td></tr>`).join("")}
 </tbody></table></section>
 

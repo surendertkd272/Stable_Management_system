@@ -1,4 +1,4 @@
-// Session report: the 8 points over a window, honest about coverage.
+// Session report: the 12 points over a window, honest about coverage.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sessionReport } from "./session.mjs";
@@ -20,7 +20,7 @@ test("an hour with readings: every point summarised, coverage and gaps reported"
   rd.push(R("excretion_event", 1, 33, { source: "visible_video", confidence: 0.45, meta: { tier: "colour only" } }));
   rd.push(R("body_temp_c", 99, -30));                                           // before the window: ignored
   const rep = sessionReport({ readings: rd, from, to });
-  assert.equal(rep.points.length, 8);
+  assert.equal(rep.points.length, 12, "1–8 from the camera, 9–12 from the wearable and stall sensors");
   const p = (n) => rep.points.find((x) => x.n === n);
   assert.equal(p(1).stats.n, 40, "only this window");
   assert.match(p(1).summary, /40 of 60 min/);

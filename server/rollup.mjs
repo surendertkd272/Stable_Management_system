@@ -44,6 +44,21 @@ const NIGHT_COVERAGE_MIN = 360;                     // a night counts only with 
 const VICE_PHASE_GAP_MIN = 10;                      // bouts <= 10 min apart are one phase (Sambraus 1989)
 const VICE_RISE = 1.5;                              // x own 7-day minutes/day
 const MANURE_LOW_FRAC = 0.5;                        // < 50 % of own daily count
+// Stall sensors (water meter / weighed bucket, weigh-back feeder, hay scale)
+// and the wearable set (leg tag, halter hub, pelvis sensor). None of this
+// hardware has been run on our horses yet and no published threshold exists
+// for any of these rules: every number below is OUR starting point, stated as
+// such in the alert, to be tuned with a vet. All raise watch notes, never alarms.
+const LEFT_FEED_FRAC = 0.3, LEFT_FEED_OVER_USUAL = 0.15; // left 30 %+ of a meal AND 15 points over own 7-day median
+const NO_DRINK_H = 10, WATER_SEEN_H = 48;           // no drink for 10 h, where the meter reported in the last 48 h
+const HAY_LOW_FRAC = 0.6;                           // < 60 % of own 7-day daily average, pro rata
+const HAY_MIN_DAY_H = 6, HAY_BASELINE_DAYS = 3;     // judge after 6 h of the day, with 3+ earlier days of hay
+const FEEDER_FAULT_H = 2;                           // a fault in the last 2 h
+const BATTERY_LOW_PCT = 20, BATTERY_WINDOW_H = 1;   // battery < 20 % on a status from the last hour
+const DETACHED_H = 2, WEARABLE_SILENT_MIN = 20;     // came off in the last 2 h; silent 20 min while the stall reports
+const LAME_RISE_MM = 6, LAME_ABS_MM = 12;           // +6 mm on own normal; 12 mm when there is no normal yet
+const LAME_HISTORY_DAYS = 14, LAME_HISTORY_MIN = 3; // own normal = median of 3+ earlier trots in 14 days
+const LAME_FRESH_H = 72;                            // a trot older than 3 days is not news
 
 // Monitoring-gap thresholds. A 24/7 monitor that goes blind must SAY so —
 // otherwise stale data reads as "calm" and the barn is silently unwatched.
@@ -126,6 +141,100 @@ export function eyeBaseline(rd, cur) {
   return rows.reduce((a, r) => a + r.value, 0) / rows.length;
 }
 
+// ---- stall sensors and the wearable: shared helpers ---------------------- //
+const H_MS = 3600 * 1000;
+const sumV = (rows) => rows.reduce((a, r) => a + r.value, 0);
+const newestMs = (rows) => rows.reduce((m, r) => Math.max(m, Date.parse(r.ts)), -Infinity);   // no spread: 100k+ rows
+function medianOf(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b), m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+const fmtG = (g) => (g >= 1000 ? `${(g / 1000).toFixed(1)} kg` : `${Math.round(g)} g`);
+// "Today" for meals, hay, water and steps is the stable's calendar day (the
+// site server's clock), as the staff mean it — not the last 24 h. Days are
+// compared as [start, end) ms, not as date strings: a leg tag reporting every
+// minute gives tens of thousands of readings, too many to format one by one.
+/** The last `n` calendar days, oldest first, as [start, end) ms. */
+function lastDays(n) {
+  return [...Array(n)].map((_, i) => {
+    const d = new Date(Date.now()); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (n - 1 - i));
+    const e = new Date(d.getTime()); e.setDate(e.getDate() + 1);
+    return [d.getTime(), e.getTime()];
+  });
+}
+const isToday = (ts) => { const [a, b] = lastDays(1)[0], t = Date.parse(ts); return t >= a && t < b; };
+/** Per-day totals over `days`, null for a day without rows (not measured). */
+function perDay(rows, days, total = (xs) => Math.round(sumV(xs))) {
+  const buckets = days.map(() => []);
+  for (const r of rows) {
+    const t = Date.parse(r.ts), i = days.findIndex(([a, b]) => t >= a && t < b);
+    if (i >= 0) buckets[i].push(r);
+  }
+  return buckets.map((xs) => (xs.length ? total(xs) : null));
+}
+
+export const LIMB_NAME = { LF: "left fore", RF: "right fore", LH: "left hind", RH: "right hind" };
+const SENSOR_ORDER = ["leg", "head", "pelvis"];
+const FAULT_TEXT = { empty: "empty hopper", jam: "jam", motor_stall: "motor stalled", under_run: "less feed dispensed than set",
+  over_run: "more feed dispensed than set", sensor: "sensor fault" };
+const MEAL_TEXT = { morning: "morning feed", midday: "midday feed", evening: "evening feed" };
+
+/** A reading from the wearable set (leg tag, halter hub, pelvis sensor). */
+const fromWearable = (r) => METRICS[r.metric]?.source === "imu" || r.meta?.sensor != null;
+/** A reading from the wearable or the stall's water / feed sensors rather than
+ *  the camera. Kept out of "camera data" coverage: a hub reporting every minute
+ *  must not make a camera that has gone blind look live. */
+// Not from the camera: the metric is a wearable / stall-sensor one, or this
+// reading came from one (a wearable's activity_index carries source "imu").
+const OFF_CAMERA = new Set(["imu", "flow_meter", "feeder"]);
+export const offCamera = (r) => OFF_CAMERA.has(METRICS[r.metric]?.source) || OFF_CAMERA.has(r.source) || r.meta?.sensor != null;
+
+/** Meals from the weigh-back feeder, oldest first — { at, meal, offeredG,
+ *  eatenG, refusedG }, each null when that weight was not reported. Grouped by
+ *  meta.mealId; a reading without one (an older feeder) pairs with the others
+ *  stamped at the same second. at = when the meal was served. */
+export function mealsOf(rd) {
+  const KEY = { feed_offered_g: "offeredG", feed_intake_g: "eatenG", feed_refusal_g: "refusedG" };
+  const by = new Map();
+  for (const r of rd.filter((x) => KEY[x.metric]).sort((a, b) => a.ts.localeCompare(b.ts))) {
+    const id = r.meta?.mealId ?? `at:${r.ts}`;
+    const m = by.get(id) ?? { at: r.ts, meal: null, offeredG: null, eatenG: null, refusedG: null };
+    m[KEY[r.metric]] = r.value;                      // newest wins (a re-sent weigh-back)
+    if (r.metric === "feed_offered_g") m.at = r.ts;
+    m.meal = r.meta?.meal ?? m.meal;
+    by.set(id, m);
+  }
+  return [...by.values()].sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** Grams left of a meal (the weigh-back, or offered − eaten), or null. */
+export const leftOf = (m) => m.refusedG ?? (m.offeredG !== null && m.eatenG !== null ? Math.max(0, m.offeredG - m.eatenG) : null);
+/** Share of a meal left (0..1); null unless the meal was weighed both ways. */
+const leftShare = (m) => (m.offeredG > 0 && leftOf(m) !== null ? Math.min(1, leftOf(m) / m.offeredG) : null);
+
+/** Steps over some rows. Counts derived from an uploaded raw session
+ *  (meta.rawSessionIds) cover strides the leg tag already counted live, so they
+ *  stand in only where there are no live counts — never added to them. null =
+ *  no count at all (not measured), distinct from a counted 0. */
+export function stepsTotal(rows) {
+  const live = rows.filter((r) => !r.meta?.rawSessionIds);
+  const use = live.length ? live : rows;
+  return use.length ? Math.round(sumV(use)) : null;
+}
+
+/** A trot result against this horse's own normal: the median of its earlier
+ *  results in the 14 days before it (3+ of them). flagged = our watch rule:
+ *  +LAME_RISE_MM on the normal, or LAME_ABS_MM with no normal yet. */
+export function lamenessVsNormal(rd, cur) {
+  const t = Date.parse(cur.ts);
+  const prev = rd.filter((r) => r.metric === "lameness_result" && r !== cur && Date.parse(r.ts) < t
+    && t - Date.parse(r.ts) <= LAME_HISTORY_DAYS * DAY_MS).map((r) => r.value);
+  const baselineMm = prev.length >= LAME_HISTORY_MIN ? medianOf(prev) : null;
+  return { baselineMm, earlier: prev.length,
+    flagged: baselineMm === null ? cur.value >= LAME_ABS_MM : cur.value - baselineMm >= LAME_RISE_MM };
+}
+
 /** Evaluate all rule checks for one horse -> list of {type, severity, detail, ts}. */
 function evaluate(bio, rd) {
   const out = [];
@@ -171,8 +280,13 @@ function evaluate(bio, rd) {
       const d = base === null ? null : temp.value - base;
       const vs = base === null ? "" : ` (${d >= 0 ? "+" : ""}${d.toFixed(1)} C vs this horse's usual ${base.toFixed(1)} C)`;
       const confirm = " Eye surface, screening-grade; confirm with a rectal thermometer.";
-      if (temp.value >= TEMP_FEVER || (d !== null && d >= EYE_RISE_ALERT)) push("Elevated body temperature", "alert",
-        `Eye temperature ${temp.value.toFixed(1)} C${vs} — well above normal.${confirm}`, temp.ts);
+      if (temp.value >= TEMP_FEVER || (d !== null && d >= EYE_RISE_ALERT)) {
+        // Say which line was crossed: a horse whose usual reading is itself
+        // high must not read "+0.0 C … well above normal".
+        const why = d !== null && d >= EYE_RISE_ALERT ? "well above normal"
+          : `above the ${TEMP_FEVER} C fever line${base !== null && base >= TEMP_FEVER - 0.3 ? ", and this horse's usual reading is high too" : ""}`;
+        push("Elevated body temperature", "alert", `Eye temperature ${temp.value.toFixed(1)} C${vs} — ${why}.${confirm}`, temp.ts);
+      }
       else if (d !== null && d >= EYE_RISE_WARN) push("Body temperature rising", "warn",
         `Eye temperature ${temp.value.toFixed(1)} C${vs} — watching the trend.${confirm}`, temp.ts);
       else if (d !== null && d <= -EYE_DROP_WARN) push("Eye temperature below usual", "warn",
@@ -209,7 +323,9 @@ function evaluate(bio, rd) {
   if (actAvg > 0.55 && restRows.length > 0 && recentRest < 60) push("Abnormal activity — colic pattern", "alert",
     "Restlessness well above baseline with little lying in the last few hours — possible colic.", now);
   else if (countToday(rd, "rest_minutes") > 0 && restToday < REST_MIN_LOW) push("Low lying-down time", "warn",
-    `Only ${fmtHM(restToday)} lying in the last 24h — below the ~3h comfort floor.`, now);
+    `Only ${fmtHM(restToday)} lying in the last 24h — below the ~3h comfort floor.` +
+    (rd.filter((r) => r.metric === "rest_minutes" && within(r, DAY_MS)).every(prototype)
+      ? " Prototype wearable measure, not yet validated — worth a look." : ""), now);
 
   const gait = latest(rd, "gait_asymmetry");
   if (gait && gait.value >= GAIT_WATCH) push("Possible lameness", "warn",
@@ -229,7 +345,7 @@ function evaluate(bio, rd) {
   const b = behaviourForHorse(rd);
   if (b.activity?.unusual) push("Activity unusual for this horse", "warn",
     `Activity over the last 4 h is ${b.activity.unusual === "high" ? "well above" : "well below"} this horse's own ` +
-    `7-day level (${b.activity.avg4h.toFixed(2)} vs ${b.activity.baseline.toFixed(2)}) — prototype camera measure; worth a look. ` +
+    `7-day level (${b.activity.avg4h.toFixed(2)} vs ${b.activity.baseline.toFixed(2)}) — prototype ${b.stream === "imu" ? "wearable" : "camera"} measure; worth a look. ` +
     (b.activity.unusual === "high"
       ? "Why: restlessness is a colic sign when seen with rolling, flank watching or kicking at the belly; alone it is often feed anticipation."
       : "Why: a dull horse, head low at the back of the box, can be in pain — or simply dozing."), now);
@@ -289,6 +405,122 @@ function evaluate(bio, rd) {
       push(`${label} increased`, "ok",
         `${v.minutes24h} min in 24 h vs usual ~${v.baselineMinPerDay} min/day — prototype camera detector. ` +
         "Why: more stereotypy time suggests more stress or a routine/feeding change; it peaks around feeds.", v.last);
+  }
+
+  // ---- stall sensors: feed, water, hay (watch notes; thresholds are ours) -- //
+  // Left feed: the latest meal today that was weighed both ways, against the
+  // share this horse usually leaves (median of its meals in the 7 days before).
+  const meals = mealsOf(rd).filter((m) => leftShare(m) !== null);
+  const meal = meals.filter((m) => isToday(m.at)).at(-1);
+  if (meal) {
+    const share = leftShare(meal);
+    const usual = medianOf(meals.filter((m) => m.at < meal.at && Date.parse(meal.at) - Date.parse(m.at) <= 7 * DAY_MS).map(leftShare));
+    if (share >= LEFT_FEED_FRAC && (usual === null || share >= usual + LEFT_FEED_OVER_USUAL)) push("Left feed", "warn",
+      `Refused ${Math.round(share * 100)}% of the ${MEAL_TEXT[meal.meal] || "feed"} at ${localHm(Date.parse(meal.at))} ` +
+      `(${fmtG(leftOf(meal))} of ${fmtG(meal.offeredG)}) — ` +
+      (usual === null ? "no earlier meals to compare with yet. " : `this horse usually leaves ~${Math.round(usual * 100)}%. `) +
+      "Our watch rule: 30 %+ left and 15 points over its usual. Why: going off feed is often an early sign of pain or " +
+      "illness (colic, fever, teeth); a change of feed or a hot day can do it too.", meal.at);
+  }
+
+  // No drinking: only where the water meter is known to work here (it
+  // reported in the last 48 h) — otherwise silence is "not measured".
+  const water = rd.filter((r) => r.metric === "water_ml");
+  if (water.some((r) => within(r, WATER_SEEN_H * H_MS))) {
+    const drank = newestMs(water.filter((r) => r.value > 0));
+    const last = drank === -Infinity ? null : drank;
+    if (last === null || Date.now() - last >= NO_DRINK_H * H_MS) push("No drinking recorded", "warn",
+      `${last === null ? "No drinking recorded since the water meter started reporting" : `No drinking recorded for ${gapText(Date.now() - last)}`} — ` +
+      "check the water (tap, bowl or bucket) and the horse; a blocked or disconnected meter reads the same. Our watch rule: 10 h. " +
+      "Why: horses drink several times a day; going without raises the risk of impaction colic.",
+      now, last === null ? undefined : new Date(last).toISOString());
+  }
+
+  // Low hay: eaten so far today against this horse's 7-day daily average,
+  // pro rata for the hours gone. Not judged early in the day (a few hourly
+  // totals say little), without 3 earlier days, or when the scale is silent.
+  const hay = rd.filter((r) => r.metric === "hay_intake_g");
+  if (hay.length) {
+    const days = lastDays(8), totals = perDay(hay, days, sumV);
+    const daily = totals.slice(0, -1).filter((v) => v !== null);
+    const avg = daily.length >= HAY_BASELINE_DAYS ? daily.reduce((a, b) => a + b, 0) / daily.length : null;
+    const dayH = (Date.now() - days.at(-1)[0]) / H_MS;
+    if (avg > 0 && dayH >= HAY_MIN_DAY_H && hay.some((r) => within(r, 2 * H_MS))) {
+      const sofar = totals.at(-1) ?? 0, expected = (avg * dayH) / 24;
+      if (sofar < expected * HAY_LOW_FRAC) push("Low hay intake", "warn",
+        `${fmtG(sofar)} of hay eaten so far today vs ~${fmtG(expected)} expected by now from this horse's 7-day average ` +
+        `of ${fmtG(avg)} a day — check the hay net or rack is full and within reach, then the horse. Our watch rule: under ` +
+        "60 % of its usual, pro rata. Why: eating less forage is an early sign of pain, dental trouble or colic.", now);
+    }
+  }
+
+  const faults = rd.filter((r) => r.metric === "feeder_fault" && within(r, FEEDER_FAULT_H * H_MS)).sort((a, b) => a.ts.localeCompare(b.ts));
+  if (faults.length) {
+    const kinds = {};
+    for (const r of faults) (kinds[r.meta?.kind || "unknown"] ||= []).push(r.ts);
+    push("Feeder fault", "warn",
+      `Feeder reported ${Object.entries(kinds).map(([k, ts]) => `${FAULT_TEXT[k] || k.replace(/_/g, " ")} ` +
+        (ts.length > 1 ? `(${ts.length} times, last at ${localHm(Date.parse(ts.at(-1)))})` : `at ${localHm(Date.parse(ts[0]))}`)).join("; ")} — ` +
+      "check the feeder; a meal may not have been served as set.", faults.at(-1).ts);
+  }
+
+  // ---- the wearable: charge it, refit it, it went quiet ------------------- //
+  const statusRows = rd.filter((r) => r.metric === "device_status");
+  const newestStatus = new Map();                   // one per physical sensor (two pelvis sensors are two)
+  const hourAgo = new Date(Date.now() - BATTERY_WINDOW_H * H_MS).toISOString();
+  for (const r of statusRows) {
+    if (r.ts < hourAgo) continue;                   // ISO strings compare in time order (cheap on 100k rows)
+    const k = `${r.meta?.sensor ?? ""}|${r.meta?.hardwareId ?? ""}`;
+    if (!newestStatus.has(k) || r.ts >= newestStatus.get(k).ts) newestStatus.set(k, r);
+  }
+  const low = {};
+  for (const r of newestStatus.values())
+    if (Number.isFinite(r.value) && r.value < BATTERY_LOW_PCT) (low[r.meta?.sensor || "wearable"] ||= []).push(r);
+  for (const [sensor, rows] of Object.entries(low)) push(`Charge the ${sensor} sensor`, "ok",
+    `Battery ${rows.map((r) => `${Math.round(r.value)}%${r.meta?.hardwareId ? ` (${r.meta.hardwareId})` : ""}`).join(", ")} on the ` +
+    `${sensor} sensor — charge or swap it before it stops recording. Our reminder line: 20 %.`, rows.at(-1).ts);
+
+  // Came off: unless a later status from that sensor says it is back on.
+  const off = rd.filter((r) => r.metric === "device_detached" && within(r, DETACHED_H * H_MS)
+    && !statusRows.some((s) => s.meta?.sensor === r.meta?.sensor && s.ts > r.ts && s.meta?.attached === true
+      && (r.meta?.hardwareId == null || s.meta?.hardwareId === r.meta.hardwareId)))
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+  if (off.length) {
+    const which = [...new Set(off.map((r) => r.meta?.sensor || "wearable"))];
+    push("Wearable came off", "warn",
+      `The ${which.join(" and ")} sensor${which.length > 1 ? "s" : ""} reported coming off at ${localHm(Date.parse(off.at(-1).ts))} — ` +
+      `refit ${which.length > 1 ? "them" : "it"}; nothing from ${which.length > 1 ? "them" : "it"} is recorded until then.`, off.at(-1).ts);
+  }
+
+  // Gone quiet: the horse has a wearable, nothing from it for 20 min, while
+  // the stall's other sensors still report (a whole-site outage is the
+  // monitoring-gap rule's job, above).
+  if (statusRows.length) {
+    let newest = "";
+    for (const r of rd) if (r.ts > newest && fromWearable(r)) newest = r.ts;
+    const lastW = Date.parse(newest);
+    const others = rd.some((r) => !fromWearable(r) && within(r, WEARABLE_SILENT_MIN * 60000));
+    if (others && Date.now() - lastW >= WEARABLE_SILENT_MIN * 60000) push("Wearable not reporting", "warn",
+      `Nothing from ${bio.name}'s wearable for ${gapText(Date.now() - lastW)} while the stall's other sensors are reporting — ` +
+      "check the halter hub is on the horse and charged, and the mobile signal. Our watch rule: 20 min.",
+      now, new Date(lastW).toISOString());
+  }
+
+  // ---- trot lameness vs the horse's own normal (prototype wearable) ------- //
+  // Beside, not instead of, the legacy gait_asymmetry rule above.
+  const trot = latest(rd, "lameness_result");
+  if (trot && within(trot, LAME_FRESH_H * H_MS)) {
+    const vs = lamenessVsNormal(rd, trot);
+    const limb = LIMB_NAME[trot.meta?.limb] || null;
+    // The part before " — " is the horse card's status line: it says prototype.
+    if (vs.flagged) push(`Possible lameness — ${limb || "limb unclear"}`, "warn",
+      `Prototype trot measure: ${trot.value.toFixed(1)} mm asymmetry (${limb || "limb unclear"}), ` +
+      (vs.baselineMm === null ? "no earlier trots to compare with"
+        : `+${(trot.value - vs.baselineMm).toFixed(1)} mm on its usual ${vs.baselineMm.toFixed(1)} mm`) +
+      " — from the wearable, not yet validated on horses; trot the horse up in hand and ask the vet if it looks uneven. " +
+      `Our watch line: ${vs.baselineMm === null ? "12 mm while there is no normal yet" : "+6 mm on the median of its earlier trots (14 days)"}. ` +
+      `Trot at ${relTime(trot.ts)}. Why: a lame horse moves its head (forelimb) or pelvis (hindlimb) unevenly at the trot; ` +
+      "a rise on its own normal matters more than the number.", trot.ts);
   }
 
   return out;
@@ -529,6 +761,115 @@ export function behaviourForHorse(rd) {
     headTossing: vice("head_tossing"),
     breathing: resp ? { regularity: resp.meta?.regularity ?? resp.confidence ?? null, method: resp.meta?.method ?? null,
       band: resp.meta?.band ?? null, intervalCv: resp.meta?.intervalCv ?? null, at: resp.ts } : null,
+  };
+}
+
+/** Steps, trot lameness, exercise and the wearable's own state, for the horse
+ *  page. null when the horse has no wearable data at all. Everything here is a
+ *  prototype wearable measure (the readings carry meta.prototype). null parts
+ *  mean "not measured", never zero. steps7d: oldest first, the last is today;
+ *  lamenessRecent: newest first. */
+export function motionForHorse(rd) {
+  const of = (m) => rd.filter((r) => r.metric === m).sort((a, b) => a.ts.localeCompare(b.ts));
+  const steps = of("steps"), trots = of("lameness_result"), status = of("device_status");
+  const sessions = of("exercise_session"), fixes = of("gps_fix"), detached = of("device_detached");
+  if (!steps.length && !trots.length && !status.length && !sessions.length && !fixes.length && !detached.length) return null;
+  const nowMs = Date.now(), LIVE_MS = 5 * 60000;
+
+  const steps7d = perDay(steps, lastDays(7), stepsTotal);
+
+  let lameness = null;
+  const trot = trots.at(-1);
+  if (trot) {
+    const m = trot.meta || {}, vs = lamenessVsNormal(rd, trot);
+    const num = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
+    lameness = { at: trot.ts, limb: LIMB_NAME[m.limb] ? m.limb : null, valueMm: num(trot.value),
+      headMinDiffMm: num(m.head?.minDiffMm), headMaxDiffMm: num(m.head?.maxDiffMm),
+      pelvisMinDiffMm: num(m.pelvis?.minDiffMm), pelvisMaxDiffMm: num(m.pelvis?.maxDiffMm),
+      strides: num(m.strides), baselineMm: num(vs.baselineMm), flagged: vs.flagged };
+  }
+  const lamenessRecent = trots.slice(-10).reverse().map((r) => ({ at: r.ts, valueMm: Math.round(r.value * 10) / 10, limb: r.meta?.limb ?? null }));
+
+  // Exercise: the newest session. It is live while it is open (no end yet)
+  // and the leg tag's live steps or a GPS fix arrived in the last 5 min.
+  let exercise = null;
+  const ses = sessions.at(-1);
+  if (ses) {
+    const m = ses.meta || {};
+    const startMs = Number.isFinite(Date.parse(m.start)) ? Date.parse(m.start) : Date.parse(ses.ts);
+    const open = m.end == null || Date.parse(m.end) > nowMs;
+    const liveSteps = steps.filter((r) => r.meta?.sensor && !r.meta?.rawSessionIds);
+    const fix = fixes.at(-1);
+    const live = open && nowMs - newestMs([...liveSteps, ...fixes]) < LIVE_MS;
+    const since = liveSteps.filter((r) => Date.parse(r.ts) >= startMs);
+    exercise = {
+      at: new Date(startMs).toISOString(),
+      minutes: Math.round(live ? Math.max(ses.value, (nowMs - startMs) / 60000) : ses.value),
+      steps: live && since.length ? Math.round(sumV(since)) : m.steps ?? null,
+      distanceM: m.distanceM ?? null,
+      live,
+      speedMps: live && fix && nowMs - Date.parse(fix.ts) < LIVE_MS ? Math.round(fix.value * 100) / 100 : null,
+    };
+  }
+
+  // The wearable itself: the newest status of each physical sensor; a later
+  // "came off" overrides what the status said about being attached.
+  let wearable = null;
+  if (status.length) {
+    const bySensor = new Map();
+    for (const r of status) {
+      if (!SENSOR_ORDER.includes(r.meta?.sensor)) continue;
+      const k = `${r.meta.sensor}|${r.meta.hardwareId ?? ""}`;
+      if (!bySensor.has(k) || r.ts >= bySensor.get(k).ts) bySensor.set(k, r);
+    }
+    const sensors = [...bySensor.values()]
+      .sort((a, b) => SENSOR_ORDER.indexOf(a.meta.sensor) - SENSOR_ORDER.indexOf(b.meta.sensor))
+      .map((r) => {
+        const cameOff = detached.some((d) => d.meta?.sensor === r.meta.sensor && d.ts > r.ts
+          && (d.meta?.hardwareId == null || d.meta.hardwareId === r.meta.hardwareId));
+        return { sensor: r.meta.sensor, batteryPct: Number.isFinite(r.value) ? Math.round(r.value) : null,
+          signalDbm: r.meta.signalDbm ?? null, attached: cameOff ? false : r.meta.attached ?? null, lastSeen: r.ts };
+      });
+    wearable = { lastSeen: new Date(newestMs(rd.filter(fromWearable))).toISOString(), sensors };
+  }
+
+  return { stepsToday: steps7d.at(-1), steps7d, lameness, lamenessRecent, exercise, wearable };
+}
+
+const INTAKE_METRICS = new Set(["water_ml", "water_visit", "water_refill", "feed_offered_g", "feed_intake_g",
+  "feed_refusal_g", "hay_intake_g", "feeder_fault"]);
+
+/** Water, meals, hay and feeder faults, for the horse page. null when no stall
+ *  sensor has reported for this horse. Series are oldest first, the last is
+ *  today; faults newest first (7 days). null = not measured, never zero:
+ *  today's water is 0 only where the meter is known to work (it reported in
+ *  the last 48 h) — drinking comes as bouts, so no bout today IS a measurement
+ *  there. drinksToday likewise, and null where the meter reports no bouts. */
+export function intakeForHorse(rd) {
+  if (!rd.some((r) => INTAKE_METRICS.has(r.metric))) return null;
+  const of = (m) => rd.filter((r) => r.metric === m).sort((a, b) => a.ts.localeCompare(b.ts));
+  const water = of("water_ml"), visits = of("water_visit"), refills = of("water_refill");
+  const hay = of("hay_intake_g");
+  const days = lastDays(7);
+
+  const meterKnown = [...water, ...visits, ...refills].some((r) => within(r, WATER_SEEN_H * H_MS));
+  const water7dMl = perDay(water, days);
+  if (water7dMl[6] === null && meterKnown) water7dMl[6] = 0;
+  const visitsToday = visits.filter((r) => isToday(r.ts)).length;
+  const lastDrink = newestMs([...visits, ...water.filter((r) => r.value > 0)]);
+
+  const hay7dG = perDay(hay, days);
+  const g = (v) => (v === null ? null : Math.round(v));
+  return {
+    waterTodayMl: water7dMl[6], water7dMl,
+    // A meter that reports only volumes (no bouts) cannot count drinks.
+    drinksToday: visits.length && meterKnown ? visitsToday : null,
+    lastDrinkAt: lastDrink === -Infinity ? null : new Date(lastDrink).toISOString(),
+    mealsToday: mealsOf(rd).filter((m) => isToday(m.at))
+      .map((m) => ({ at: m.at, meal: m.meal, offeredG: g(m.offeredG), eatenG: g(m.eatenG), refusedG: g(m.refusedG) })),
+    hayTodayG: hay7dG[6], hay7dG,
+    faults: of("feeder_fault").filter((r) => within(r, 7 * DAY_MS)).reverse().slice(0, 10)
+      .map((r) => ({ at: r.ts, kind: r.meta?.kind ?? "unknown" })),
   };
 }
 
