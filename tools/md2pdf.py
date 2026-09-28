@@ -15,6 +15,7 @@ Usage:
     python3 tools/md2pdf.py RFI_IMU.md [more.md ...]        # -> pdf/<name>.pdf
     python3 tools/md2pdf.py --all                           # all RFI_*.md
     python3 tools/md2pdf.py doc.md --out /tmp/doc.pdf
+    python3 tools/md2pdf.py doc.md --plain             # white page, black text only
 """
 import re
 import sys
@@ -101,6 +102,21 @@ td:first-child { white-space: nowrap; text-align: center; background: #fafbfc; }
 
 /* footer note in italics at the end of the doc */
 .footnote { font-size: 9.4pt; color: #5a6772; font-style: italic; }
+"""
+
+
+# --plain: a white page with black text — no tints, no coloured rules.
+PLAIN_CSS = """
+body, h1, h2, h3, strong, .meta, .meta strong, .footnote, .reply .lbl { color: #000; }
+h2 { border-bottom: 0.8pt solid #000; }
+h3 { text-transform: none; letter-spacing: 0; font-size: 11pt; }
+code, pre { background: #fff; border: 0.5pt solid #000; }
+hr { border-top: 0.8pt solid #000; }
+th { background: #fff; border: 0.6pt solid #000; color: #000; }
+td { border: 0.6pt solid #000; }
+td:first-child { background: #fff; white-space: normal; text-align: left; }
+.reply { background: #fff; border-left: 1pt solid #000; }
+.reply .rule { border-bottom: 0.5pt solid #000; }
 """
 
 
@@ -285,7 +301,11 @@ def main():
     ap.add_argument("files", nargs="*", help="markdown files")
     ap.add_argument("--all", action="store_true", help="convert all RFI_*.md in repo root")
     ap.add_argument("--out", help="output path (single input only)")
+    ap.add_argument("--plain", action="store_true", help="white page, black text, no colour")
     a = ap.parse_args()
+    if a.plain:
+        global CSS
+        CSS += PLAIN_CSS
 
     srcs = [Path(f) for f in a.files]
     if a.all:
