@@ -18,7 +18,7 @@ const HI: Record<string, string> = {
   "Health Scheduling": "स्वास्थ्य कार्यक्रम", "Feed & Nutrition": "चारा और पोषण", Billing: "बिलिंग",
   "Owner Portal": "मालिक पोर्टल", "Live view": "लाइव दृश्य", "Session report": "सत्र रिपोर्ट", Hardware: "हार्डवेयर", "Footage & labels": "फुटेज और लेबल", Settings: "सेटिंग्स",
   // top bar
-  "Add horse": "घोड़ा जोड़ें", "Search horses": "घोड़े खोजें", Notifications: "सूचनाएँ", "Sign out": "साइन आउट",
+  "Add horse": "घोड़ा जोड़ें", "Search horses": "घोड़े खोजें", Notifications: "सूचनाएँ", "Sign out": "साइन आउट", "none yet today": "आज अभी तक नहीं",
   Light: "हल्का", Dark: "गहरा", Back: "वापस", Close: "बंद करें", Save: "सहेजें", Cancel: "रद्द करें",
   Menu: "मेनू", "Open menu": "मेनू खोलें", "Close menu": "मेनू बंद करें",
   // status
@@ -53,6 +53,18 @@ const HI: Record<string, string> = {
   camera: "कैमरा", "Body temperature · uncalibrated": "शरीर का तापमान · कैलिब्रेट नहीं",
   "Respiratory rate · uncalibrated": "साँस की दर · कैलिब्रेट नहीं", "Daily rest · camera prototype": "रोज़ का आराम · कैमरा प्रोटोटाइप",
   "Water intake": "पानी", "Time outside box": "बॉक्स के बाहर समय",
+  // horse page — wearable (leg tag, halter hub, pelvis) and stall sensors (water, feeder, hay)
+  "Steps and lameness": "कदम और लंगड़ापन", "Steps today": "आज के कदम", Steps: "कदम", "Last 7 days": "पिछले 7 दिन",
+  today: "आज", "Latest trot": "आख़िरी दुलकी जाँच", "Recent trots": "हाल की दुलकी जाँचें",
+  flagged: "चिह्नित", "not flagged": "चिह्नित नहीं", "own normal": "इसका सामान्य", "no leg singled out": "कोई एक पैर नहीं",
+  "left front": "बायाँ अगला पैर", "right front": "दायाँ अगला पैर", "left hind": "बायाँ पिछला पैर", "right hind": "दायाँ पिछला पैर",
+  Exercise: "व्यायाम", "Last session": "पिछला सत्र", live: "लाइव", Wearable: "पहनने वाले सेंसर",
+  "Leg tag": "पैर का टैग", "Halter hub": "हॉल्टर हब", Pelvis: "कूल्हा", battery: "बैटरी",
+  "on the horse": "घोड़े पर लगा है", "came off": "निकल गया",
+  "Water and feed": "पानी और चारा", "Water today": "आज पानी", "Drinks today": "आज कितनी बार पिया", "last drink": "आख़िरी बार पिया",
+  "Meals today": "आज के भोजन", Meal: "भोजन", Morning: "सुबह", Midday: "दोपहर", Evening: "शाम", Other: "अन्य",
+  offered: "दिया", eaten: "खाया", refused: "छोड़ा", "Hay today": "आज सूखी घास", "Hay, 7 days": "सूखी घास, 7 दिन",
+  "Feeder faults": "फ़ीडर की खराबी",
   // dashboard
   "Stress level": "तनाव स्तर", "Yard map": "यार्ड नक्शा", "Alerts this week": "इस हफ़्ते के अलर्ट",
   "Foaling watch": "ब्याने पर नज़र", "Risk radar": "जोखिम रडार", "What we monitor here": "हम यहाँ क्या देखते हैं",

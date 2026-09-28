@@ -7,8 +7,11 @@
 //                   fetches its device list from here, so what is on this page
 //                   is what gets measured.
 //   Thermal cameras polled by an edge box; aimed with the ROI calibrator.
-//   Modbus sensors  any Modbus/TCP device, described by a register map.
+//   Modbus sensors  any Modbus/TCP or RS-485 (Modbus RTU) device, described
+//                   by a register map.
 //   Push devices    gateways that send their own readings with a token.
+//   Wearables       a halter hub with a SIM and the sensors paired to it (leg
+//                   tag, pelvis); it has a token and belongs to one horse.
 //
 // Everything that touches a device goes through the site server (the browser
 // cannot reach the barn LAN, and never holds a camera password or a token after
@@ -18,12 +21,12 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as RPointer
 import {
   Camera as CameraIcon, Plus, PlugZap, Crosshair, Pencil, Trash2, CheckCircle2, XCircle,
   Loader2, Wifi, Info, Ruler, ScanLine, Server, Gauge, Send, KeyRound, History, Copy,
-  AlertTriangle, ShieldCheck, Power, Focus,
+  AlertTriangle, ShieldCheck, Power, Focus, Footprints, Database,
 } from "lucide-react";
 import * as api from "../data/api";
 import type {
   CameraProbe, CameraTemps, CameraVerification, Device, RoiBox, DeviceEvent, DeviceKind, DeviceState, EdgeBox, ModbusRegister,
-  ModbusSensor, PushDevice, SensorProbe, ThermalCamera,
+  ModbusSensor, PushDevice, RegisterUse, SensorProbe, ThermalCamera, WearableHub, HorseMotion,
 } from "../data/api";
 import { SC_IT6420_HB_V2 as SPEC, assessOptics, focusFor, lensesFor, variants } from "../../server/hardware-spec.mjs";
 import { METRICS } from "../../server/contract.mjs";
@@ -53,14 +56,38 @@ const KIND: Record<DeviceKind, { title: string; one: string; icon: ReactNode; bl
   },
   modbus_sensor: {
     title: "Modbus sensors", one: "Modbus sensor", icon: <Gauge size={17} />,
-    blurb: "Water meters, load cells, feeders — any Modbus/TCP device. Describe its registers from the datasheet; no code per model.",
+    blurb: "Water meters, load cells, feeders — any Modbus/TCP device, or an RS-485 (Modbus RTU) one wired to an edge box. Describe its registers from the datasheet; no code per model.",
   },
   push_device: {
     title: "Push devices", one: "push device", icon: <Send size={17} />,
     blurb: "A device or vendor gateway that sends its own readings to this server with a token, limited to the metrics you allow.",
   },
+  wearable_hub: {
+    title: "Wearables (horse sensors with SIM)", one: "wearable", icon: <Footprints size={17} />,
+    blurb: "A halter hub with a SIM card and the sensors paired to it — a leg tag and optionally pelvis sensors — for steps, lying, exercise and the trot (lameness) check. It belongs to one horse: the server puts every reading on that horse, whichever stall it is in.",
+  },
 };
-const KIND_ORDER: DeviceKind[] = ["edge_box", "thermal_camera", "modbus_sensor", "push_device"];
+const KIND_ORDER: DeviceKind[] = ["edge_box", "thermal_camera", "modbus_sensor", "wearable_hub", "push_device"];
+/** Kinds that authenticate with their own token (shown once). */
+const TOKEN_KINDS = new Set<DeviceKind>(["edge_box", "push_device", "wearable_hub"]);
+
+// Register "use": what the edge box makes of a register beyond a plain gauge or
+// counter. `metric` / `mode` are what the register is then set to.
+const REG_USES: { use: RegisterUse; label: string; metric: string; mode: ModbusRegister["mode"]; hint: string }[] = [
+  { use: "flow", label: "Water meter flow", metric: "water_ml", mode: "counter",
+    hint: "The meter's running total, scaled to ml (a meter counting litres: scale 1000). The edge box groups the increases into drinking bouts — a bout ends after 60 s without flow." },
+  { use: "bucket", label: "Water bucket (load cell)", metric: "water_ml", mode: "gauge",
+    hint: "The bucket's weight, scaled to grams (1 g of water ≈ 1 ml). The edge box tells drinking from staff refilling it, and ignores the horse nudging the bucket." },
+  { use: "feed_bowl", label: "Feed bowl (weigh-back feeder)", metric: "feed_intake_g", mode: "gauge",
+    hint: "The bowl's weight, scaled to grams. A rise of 200 g or more is a meal served; what is eaten and left is read once the weight settles (20 min) or at the next fill." },
+  { use: "hay", label: "Hay net / rack (load cell)", metric: "hay_intake_g", mode: "gauge",
+    hint: "The hay's weight, scaled to grams. Hay eaten is reported hourly; swinging is smoothed out and refills are not counted as eating." },
+  { use: "fault", label: "Feeder fault code", metric: "feeder_fault", mode: "gauge",
+    hint: "The feeder's fault-code register. Each new non-zero code is reported as a feeder fault (the code table is in the edge agent)." },
+];
+const BAUDS = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200];
+const PARITY: Record<string, string> = { N: "none", E: "even", O: "odd" };
+const SENSOR_NAME: Record<string, string> = { leg: "Leg tag", head: "Halter hub", pelvis: "Pelvis" };
 
 const STATE: Record<DeviceState, { cls: string; label: string }> = {
   online: { cls: "ok", label: "Online" },
@@ -101,17 +128,22 @@ export default function Hardware() {
   const [history, setHistory] = useState<Device | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [openProbe, setOpenProbe] = useState<string | null>(null);
+  // /api/health's storage block; only its `advice` (set by the server when the
+  // JSON store is at its cap) is shown.
+  const [storage, setStorage] = useState<api.HealthStatus["storage"] | null>(null);
 
   const load = useCallback(async () => {
     if (api.demoMode) {
       setDevices([]);
       return;
     }
-    const r = await api.listDevices();
+    const [r, health] = await Promise.all([api.listDevices(), api.getHealth()]);
     if (r.ok) {
       setDevices(r.data);
       setLoadError("");
     } else setLoadError(r.error);
+    // A failed health check says nothing about storage — keep what was shown.
+    if (health) setStorage(health.storage ?? null);
   }, []);
 
   // Status is live (edge heartbeats, readings arriving), so keep it fresh
@@ -226,6 +258,21 @@ export default function Hardware() {
         </div>
       )}
 
+      {storage?.advice && (
+        <div className="row watch" style={{ marginBottom: 14, alignItems: "flex-start" }}>
+          <Database size={18} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span style={{ fontSize: 13 }}>
+            <b>Storage:</b> {storage.advice}
+            {storage.droppedByCap > 0 && (
+              <span className="muted">
+                {" "}· {storage.droppedByCap.toLocaleString()} readings dropped so far
+                {storage.cap ? ` (the ${storage.backend} store keeps at most ${storage.cap.toLocaleString()})` : ""}
+              </span>
+            )}
+          </span>
+        </div>
+      )}
+
       {devices && !api.demoMode && <SetupGuide devices={all} />}
 
       {KIND_ORDER.map((kind) => {
@@ -266,6 +313,7 @@ export default function Hardware() {
           dev={editing.dev}
           edges={edges}
           stalls={stalls}
+          horses={horses}
           onClose={() => setEditing(null)}
           onSaved={(dev, tok) => {
             setEditing(null);
@@ -353,18 +401,24 @@ type CardActions = {
 };
 
 function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardActions }) {
+  const { horses } = useStable();
   const edgeName = (id: string | null) => (id ? all.find((d) => d.id === id)?.name ?? "removed" : "none");
   const bad = ["error", "offline", "edge-offline", "stale", "silent", "unassigned", "needs-calibration"].includes(dev.status.state);
   const canEdit = a.isAdmin && !api.demoMode;
+  // A wearable has no stall of its own: it is wherever its horse is.
+  const wornBy = dev.kind === "wearable_hub" ? horses.find((h) => h.id === dev.horseId) : undefined;
+  const where =
+    dev.kind === "edge_box" ? dev.location || "on site"
+      : dev.kind === "wearable_hub"
+        ? `${wornBy?.name ?? `horse ${dev.horseId} (not in the roster)`} · Stall ${dev.stall || wornBy?.stall || "—"}`
+        : `Stall ${dev.stall || "—"}`;
 
   return (
     <div className="card" style={dev.enabled ? undefined : { opacity: 0.7 }}>
       <div className="card-head">
         <div>
           <h3>{dev.name}</h3>
-          <span className="muted" style={{ fontSize: 12.5 }}>
-            {dev.kind === "edge_box" ? dev.location || "on site" : `Stall ${dev.stall || "—"}`}
-          </span>
+          <span className="muted" style={{ fontSize: 12.5 }}>{where}</span>
         </div>
         <StatePill dev={dev} />
       </div>
@@ -386,8 +440,16 @@ function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardAction
         {dev.kind === "modbus_sensor" && (
           <>
             <div><span>Edge box</span><b>{edgeName(dev.edgeId)}</b></div>
-            <div><span>Address</span><b>{dev.host}:{dev.port} · unit {dev.unitId} · FC{dev.function} · {dev.addressing}</b></div>
-            <div><span>Registers</span><b>{dev.registers.map((r) => `${r.name} @${r.address} → ${METRICS[r.metric as keyof typeof METRICS]?.label ?? r.metric}${r.mode === "counter" ? " (counter)" : ""}`).join(" · ")}</b></div>
+            <div>
+              <span>Address</span>
+              <b>
+                {dev.transport === "rtu"
+                  ? `RS-485 ${dev.serialPort || "?"} · ${dev.baud ?? 9600} baud, parity ${PARITY[dev.parity ?? "N"] ?? dev.parity}, ${dev.stopBits ?? 1} stop bit${(dev.stopBits ?? 1) === 2 ? "s" : ""}`
+                  : `${dev.host}:${dev.port}`}{" "}
+                · unit {dev.unitId} · FC{dev.function} · {dev.addressing}
+              </b>
+            </div>
+            <div><span>Registers</span><b>{dev.registers.map((r) => `${r.name} @${r.address} → ${r.use ? REG_USES.find((u) => u.use === r.use)?.label ?? r.use : `${METRICS[r.metric as keyof typeof METRICS]?.label ?? r.metric}${r.mode === "counter" ? " (counter)" : ""}`}`).join(" · ")}</b></div>
             <div><span>Last reading</span><b>{ago(dev.lastSeen)} · every {dev.pollSeconds} s</b></div>
           </>
         )}
@@ -398,6 +460,7 @@ function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardAction
             <div><span>Token</span><b>{dev.hasToken ? `issued · ends …${dev.tokenHint ?? "?"}` : "none"}</b></div>
           </>
         )}
+        {dev.kind === "wearable_hub" && <WearableFacts hub={dev} />}
         {dev.notes && <div><span>Notes</span><b>{dev.notes}</b></div>}
       </div>
 
@@ -416,7 +479,7 @@ function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardAction
               <Crosshair size={15} /> Calibrate ROIs
             </button>
           )}
-          {(dev.kind === "edge_box" || dev.kind === "push_device") && (
+          {TOKEN_KINDS.has(dev.kind) && (
             <button className="btn-ghost" onClick={a.onToken}>
               <KeyRound size={15} /> {dev.hasToken ? "New token" : "Issue token"}
             </button>
@@ -492,6 +555,63 @@ function CameraFacts({ cam, edge }: { cam: ThermalCamera; edge: string }) {
           </b>
         </div>
       )}
+    </>
+  );
+}
+
+/** A wearable's pairing, and — from its horse's own readings — each sensor's
+ *  battery and whether it is still on the horse. */
+function WearableFacts({ hub }: { hub: WearableHub }) {
+  // undefined = still asking; null = no wearable readings for this horse yet.
+  const [worn, setWorn] = useState<HorseMotion["wearable"] | undefined>(undefined);
+  // Asked again when the hub reports (at most once a minute), not on every refresh.
+  const minute = hub.lastSeen ? Math.floor(Date.parse(hub.lastSeen) / 60000) : 0;
+  useEffect(() => {
+    if (!hub.horseId || api.demoMode) return;
+    let stop = false;
+    api.getHorseDetail(hub.horseId).then((d) => {
+      if (!stop) setWorn(d ? d.motion?.wearable ?? null : null);
+    });
+    return () => {
+      stop = true;
+    };
+  }, [hub.horseId, minute]);
+  const pelvis = hub.sensors?.pelvis ?? [];
+  return (
+    <>
+      <div>
+        <span>Paired sensors</span>
+        <b>
+          Leg tag {hub.sensors?.leg || <span className="muted">not entered</span>} · Pelvis{" "}
+          {pelvis.length ? pelvis.join(", ") : <span className="muted">none</span>}
+        </b>
+      </div>
+      <div><span>SIM (IMEI)</span><b>{hub.imei || <span className="muted">not entered</span>}</b></div>
+      <div><span>Last reading</span><b>{ago(hub.lastSeen)}</b></div>
+      <div>
+        <span>Sensors</span>
+        <b>
+          {worn === undefined && hub.horseId && !api.demoMode ? (
+            <span className="muted">…</span>
+          ) : !worn || !worn.sensors?.length ? (
+            <span className="muted">battery and fit not reported yet</span>
+          ) : (
+            worn.sensors.map((x, i) => (
+              <span key={x.sensor + i} style={{ display: "block" }}>
+                {SENSOR_NAME[x.sensor] ?? x.sensor}:{" "}
+                {x.batteryPct == null ? <span className="muted">battery not reported</span>
+                  : <span style={x.batteryPct < 20 ? { color: "var(--warn)", fontWeight: 600 } : undefined}>{Math.round(x.batteryPct)}%</span>}
+                {" · "}
+                {x.attached === false ? <span style={{ color: "var(--alert)", fontWeight: 600 }}>came off</span>
+                  : x.attached ? "on the horse" : <span className="muted">fit not reported</span>}
+                {x.signalDbm != null && <span className="muted"> · signal {x.signalDbm} dBm</span>}
+                <span className="muted"> · {ago(x.lastSeen)}</span>
+              </span>
+            ))
+          )}
+        </b>
+      </div>
+      <div><span>Token</span><b>{hub.hasToken ? `issued · ends …${hub.tokenHint ?? "?"}` : "none"}</b></div>
     </>
   );
 }
@@ -605,9 +725,11 @@ function CopyBlock({ text }: { text: string }) {
 }
 
 function TokenModal({ dev, token, onClose }: { dev: Device; token: string; onClose: () => void }) {
+  const { horses } = useStable();
   const origin = api.serverOrigin();
   const edge = dev.kind === "edge_box";
   const example = dev.kind === "push_device" ? dev.metrics[0] : "water_ml";
+  const nowIso = new Date().toISOString();
   return (
     <Modal open wide onClose={onClose} title={`Token for ${dev.name}`}
       footer={<button className="btn-primary" onClick={onClose}>I have saved it</button>}>
@@ -619,7 +741,24 @@ function TokenModal({ dev, token, onClose }: { dev: Device; token: string; onClo
       </div>
       <p className="hw-legend" style={{ marginTop: 0 }}>Token</p>
       <CopyBlock text={token} />
-      {edge ? (
+      {dev.kind === "wearable_hub" ? (
+        <>
+          <p className="hw-legend">Send readings (format equicare-wearable/1)</p>
+          <CopyBlock
+            text={`curl -X POST ${origin}/ingest/readings \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-EquiCare-Format: equicare-wearable/1" \\\n  -d '{"readings":[{"metric":"device_status","value":87,"ts":"${nowIso}","meta":{"sensor":"leg","hardwareId":"${dev.sensors?.leg || "LEG-TAG-ID"}"}}]}'`}
+          />
+          <p className="hw-legend">Upload raw motion (for the trot check)</p>
+          <CopyBlock
+            text={`curl -X POST ${origin}/ingest/raw \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "X-Sensor: leg" -H "X-Start: ${nowIso}" -H "X-Rate-Hz: 100" \\\n  -H "Content-Encoding: gzip" --data-binary @leg.csv.gz`}
+          />
+          <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            Readings are attributed to {horses.find((h) => h.id === dev.horseId)?.name ?? "the horse chosen for it"} by this
+            server, in whatever stall it is; the hub cannot choose a horse. Raw motion is CSV <code>t,ax,ay,az,gx,gy,gz</code>{" "}
+            (seconds from X-Start, m/s², °/s). A hub on the mobile network cannot reach this address: it sends to the
+            relay (DEPLOY_CLOUD.md) on the same paths with the same token, and this server collects from the relay.
+          </p>
+        </>
+      ) : edge ? (
         <>
           <p className="hw-legend">Run the edge agent on the edge box</p>
           <CopyBlock text={`python3 edge/edge_agent.py --server ${origin} --token ${token}`} />
@@ -850,6 +989,11 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
       dev as unknown as Record<string, unknown>;
     void status; void health; void lastSeen; void lastProbe; void rois; void identity; void agent;
     void hasPassword; void hasToken; void tokenHint; void createdAt; void updatedAt; void id;
+    if (kind === "wearable_hub") {
+      // Sensor IDs are edited as text; save() turns them back into { leg, pelvis[] }.
+      const sensors = (rest.sensors ?? {}) as Partial<WearableHub["sensors"]>;
+      return { ...rest, kind, legId: sensors.leg ?? "", pelvisIds: (sensors.pelvis ?? []).join(", ") } as Form;
+    }
     return { ...rest, kind, password: "" } as Form;
   }
   const common = { kind, name: "", enabled: true, notes: "" };
@@ -861,15 +1005,19 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
       protocol: "auto", record: false, behaviourStream: "visible", colourStream: "sub",
     };
     case "modbus_sensor": return {
-      ...common, stall, edgeId, host: "", port: 502, unitId: 1, function: 3, addressing: "zero-based", pollSeconds: 10,
+      ...common, stall, edgeId, transport: "tcp", host: "", port: 502,
+      serialPort: "/dev/ttyUSB0", baud: 9600, parity: "N", stopBits: 1,
+      unitId: 1, function: 3, addressing: "zero-based", pollSeconds: 10,
       registers: [blankRegister()],
     };
     case "push_device": return { ...common, stall, metrics: [] };
+    case "wearable_hub": return { ...common, horseId: "", legId: "", pelvisIds: "", imei: "" };
   }
 }
 
-function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
+function DeviceForm({ kind, dev, edges, stalls, horses, onClose, onSaved }: {
   kind: DeviceKind; dev?: Device; edges: EdgeBox[]; stalls: string[];
+  horses: { id: string; name: string; stall: string }[];
   onClose: () => void; onSaved: (d: Device, token: string | null) => void;
 }) {
   const [f, setF] = useState<Form>(() => initialForm(kind, dev, stalls[0] ?? "", edges.length === 1 ? edges[0].id : null));
@@ -882,9 +1030,20 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
   const save = async () => {
     setBusy(true);
     setErrors([]);
-    const payload: Form = { ...f };
+    let payload: Form = { ...f };
     if (dev && !payload.password) delete payload.password;   // blank = keep the stored one
     if (kind !== "thermal_camera") delete payload.password;
+    if (kind === "wearable_hub") {
+      // Only what the registry stores: the stall follows the horse, and the
+      // metrics a hub may send are fixed by the server.
+      payload = {
+        kind, name: f.name, enabled: f.enabled, notes: f.notes, horseId: f.horseId, imei: s("imei").trim(),
+        sensors: {
+          leg: s("legId").trim() || null,
+          pelvis: s("pelvisIds").split(",").map((x) => x.trim()).filter(Boolean),
+        },
+      };
+    }
     if (dev) {
       const r = await api.updateDevice(dev.id, payload);
       setBusy(false);
@@ -928,8 +1087,22 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
       </select>
     </div>
   );
+  const horseField = (
+    <div className="field">
+      <label>Worn by</label>
+      <select value={s("horseId")} onChange={(e) => set("horseId", e.target.value)}>
+        <option value="">— choose the horse —</option>
+        {/* keep a horse that has since left the roster selectable, so an edit does not silently move the hub */}
+        {s("horseId") && !horses.some((h) => h.id === s("horseId")) && (
+          <option value={s("horseId")}>{s("horseId")} (not in the roster)</option>
+        )}
+        {horses.map((h) => <option key={h.id} value={h.id}>{h.name}{h.stall && h.stall !== "—" ? ` · stall ${h.stall}` : ""}</option>)}
+      </select>
+    </div>
+  );
 
   const isCamera = kind === "thermal_camera";
+  const rtu = kind === "modbus_sensor" && s("transport") === "rtu";
   const title = dev ? `Edit ${dev.name}` : `Add ${KIND[kind].one}`;
 
   return (
@@ -950,8 +1123,10 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
       <div className={isCamera ? "grid cols-2" : ""} style={{ gap: 20, alignItems: "start" }}>
         <div>
           <div className="grid cols-2" style={{ gap: 10 }}>
-            {text("name", "Name", kind === "edge_box" ? "Barn A edge" : kind === "modbus_sensor" ? "A-04 water meter" : "Stall A-04 thermal")}
-            {kind === "edge_box" ? text("location", "Location", "Barn A comms cabinet") : stallField}
+            {text("name", "Name", kind === "edge_box" ? "Barn A edge" : kind === "modbus_sensor" ? "A-04 water meter"
+              : kind === "wearable_hub" ? "Zarina's halter hub" : "Stall A-04 thermal")}
+            {kind === "edge_box" ? text("location", "Location", "Barn A comms cabinet")
+              : kind === "wearable_hub" ? horseField : stallField}
           </div>
 
           {(isCamera || kind === "modbus_sensor") && (
@@ -964,7 +1139,41 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
               )}
               <div className="grid cols-2" style={{ gap: 10 }}>
                 {edgeField}
-                {text("host", "IP address", "192.168.1.102", { onChange: (e) => set("host", e.target.value.trim()) })}
+                {kind === "modbus_sensor" && (
+                  <div className="field">
+                    <label>Link</label>
+                    <select value={s("transport") || "tcp"} onChange={(e) => set("transport", e.target.value)}>
+                      <option value="tcp">Modbus/TCP — over the network</option>
+                      <option value="rtu">RS-485 (Modbus RTU) — wired to the edge box</option>
+                    </select>
+                  </div>
+                )}
+                {rtu ? (
+                  <>
+                    {text("serialPort", "Serial port on the edge box", "/dev/ttyUSB0", { onChange: (e) => set("serialPort", e.target.value.trim()) })}
+                    <div className="field">
+                      <label>Baud rate</label>
+                      <select value={n("baud") || 9600} onChange={(e) => set("baud", Number(e.target.value))}>
+                        {BAUDS.map((b) => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>Parity</label>
+                      <select value={s("parity") || "N"} onChange={(e) => set("parity", e.target.value)}>
+                        {Object.entries(PARITY).map(([k, v]) => <option key={k} value={k}>{v} ({k})</option>)}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>Stop bits</label>
+                      <select value={n("stopBits") || 1} onChange={(e) => set("stopBits", Number(e.target.value))}>
+                        <option value={1}>1</option>
+                        <option value={2}>2</option>
+                      </select>
+                    </div>
+                  </>
+                ) : (
+                  text("host", "IP address", "192.168.1.102", { onChange: (e) => set("host", e.target.value.trim()) })
+                )}
                 {isCamera ? (
                   <>
                     {number("httpPort", "HTTP port")}
@@ -984,7 +1193,7 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
                   </>
                 ) : (
                   <>
-                    {number("port", "TCP port")}
+                    {!rtu && number("port", "TCP port")}
                     {number("unitId", "Unit (slave) id", { min: 0, max: 247 })}
                     <div className="field">
                       <label>Function</label>
@@ -1004,6 +1213,12 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
                   </>
                 )}
               </div>
+              {rtu && (
+                <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
+                  The sensor&apos;s RS-485 lines go to a USB–RS-485 adapter on the edge box chosen above; set baud, parity and
+                  stop bits to match the sensor&apos;s datasheet. The edge box needs pyserial installed for this.
+                </p>
+              )}
               {isCamera && (
                 <>
                   <label className="hw-check">
@@ -1099,6 +1314,22 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
             />
           )}
 
+          {kind === "wearable_hub" && (
+            <>
+              <p className="hw-legend">Paired sensors</p>
+              <div className="grid cols-2" style={{ gap: 10 }}>
+                {text("legId", "Leg tag hardware ID", "on the tag's label", { autoComplete: "off" })}
+                {text("pelvisIds", "Pelvis sensor hardware IDs", "comma-separated, if fitted", { autoComplete: "off" })}
+                {text("imei", "Hub SIM (IMEI)", "15 digits, on the hub", { autoComplete: "off", inputMode: "numeric" })}
+              </div>
+              <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
+                The leg tag goes on the left front cannon. The IDs let the server tell which sensor a reading came from
+                and report each one&apos;s battery. The hub may send only the wearable set&apos;s own readings (steps,
+                lying, exercise, trot checks, sensor status).
+              </p>
+            </>
+          )}
+
           {kind === "push_device" && (
             <>
               <p className="hw-legend">Metrics it may send</p>
@@ -1123,7 +1354,7 @@ function DeviceForm({ kind, dev, edges, stalls, onClose, onSaved }: {
             <label>Notes</label>
             <input value={s("notes")} onChange={(e) => set("notes", e.target.value)} placeholder="Mounting, cabling, vendor contact…" />
           </div>
-          {(kind === "edge_box" || kind === "push_device") && !dev && (
+          {TOKEN_KINDS.has(kind) && !dev && (
             <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
               A token is issued when you add it and shown once.
             </p>
@@ -1153,17 +1384,34 @@ function RegisterEditor({ registers, addressing, onChange }: {
   registers: ModbusRegister[]; addressing: string; onChange: (r: ModbusRegister[]) => void;
 }) {
   const upd = (i: number, patch: Partial<ModbusRegister>) => onChange(registers.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  // A use fixes what the register feeds: the edge box turns it into bouts,
+  // meals or faults, so its metric and mode follow from the use.
+  const setUse = (i: number, v: RegisterUse | "") => {
+    const u = REG_USES.find((x) => x.use === v);
+    if (!u) {
+      return onChange(registers.map((r, j) => {
+        if (j !== i) return r;
+        const plain = { ...r };
+        delete plain.use;
+        return plain;
+      }));
+    }
+    upd(i, { use: u.use, mode: u.mode, unit: "", ...(u.metric in METRICS ? { metric: u.metric } : {}) });
+  };
   const numOr = (v: string) => (v === "" ? ("" as unknown as number) : Number(v));
   return (
     <>
       <p className="hw-legend">Registers</p>
       <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
         value = raw × scale + offset. Addresses are {addressing}. Use <b>counter</b> for a running total (a meter&apos;s
-        total litres): the edge box reports the increase since the last poll and handles the meter resetting. Use
-        &nbsp;<b>Test read</b> after saving to check the numbers against the device&apos;s own display.
+        total litres): the edge box reports the increase since the last poll and handles the meter resetting. Pick a
+        &nbsp;<b>Use</b> for a water meter, water bucket, feed bowl, hay net or feeder fault register — the edge box then
+        reports drinks, meals, hay eaten or faults instead of the raw value. Use <b>Test read</b> after saving to check
+        the numbers against the device&apos;s own display.
       </p>
       {registers.map((r, i) => {
         const wide = r.type !== "uint16" && r.type !== "int16";
+        const use = r.use ? REG_USES.find((u) => u.use === r.use) : undefined;
         return (
           <div key={i} className="hw-reg">
             <div className="grid cols-4" style={{ gap: 8 }}>
@@ -1197,19 +1445,28 @@ function RegisterEditor({ registers, addressing, onChange }: {
                 <input type="number" step="any" value={r.offset} onChange={(e) => upd(i, { offset: numOr(e.target.value) })} />
               </div>
               <div className="field">
+                <label>Use</label>
+                <select value={r.use ?? ""} onChange={(e) => setUse(i, e.target.value as RegisterUse | "")}>
+                  <option value="">none — plain reading</option>
+                  {REG_USES.map((u) => <option key={u.use} value={u.use}>{u.label}</option>)}
+                </select>
+              </div>
+              <div className="field">
                 <label>Feeds metric</label>
-                <select value={r.metric} onChange={(e) => upd(i, { metric: e.target.value, unit: "" })}>
+                <select value={r.metric} disabled={Boolean(use)} onChange={(e) => upd(i, { metric: e.target.value, unit: "" })}>
+                  {!METRIC_KEYS.includes(r.metric as keyof typeof METRICS) && <option value={r.metric}>{r.metric}</option>}
                   {METRIC_KEYS.map((m) => <option key={m} value={m}>{METRICS[m].label} ({METRICS[m].unit})</option>)}
                 </select>
               </div>
               <div className="field">
                 <label>Mode</label>
-                <select value={r.mode} onChange={(e) => upd(i, { mode: e.target.value as ModbusRegister["mode"] })}>
+                <select value={r.mode} disabled={Boolean(use)} onChange={(e) => upd(i, { mode: e.target.value as ModbusRegister["mode"] })}>
                   <option value="gauge">gauge (current value)</option>
                   <option value="counter">counter (running total)</option>
                 </select>
               </div>
             </div>
+            {use && <p className="muted" style={{ fontSize: 11.5, margin: "6px 0 0" }}>{use.hint}</p>}
             {registers.length > 1 && (
               <button className="sub" style={{ color: "var(--alert)", marginTop: 4 }} onClick={() => onChange(registers.filter((_, j) => j !== i))}>
                 Remove register

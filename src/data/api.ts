@@ -145,6 +145,38 @@ export interface ViceSummary {
   count24h: number; last: string; minutes24h?: number; phases24h?: number; baselineMinPerDay?: number | null; isNew?: boolean;
 }
 
+/** Leg on which the trot analysis found the largest asymmetry. */
+export type Limb = "LF" | "RF" | "LH" | "RH";
+export type WearableSensor = "leg" | "head" | "pelvis";
+
+/** From the wearable set (leg tag + halter hub + pelvis sensor). null = none
+ *  of its readings for this horse. The 7-day arrays run oldest → today; null
+ *  entries are days with no reading. Lameness and exercise are prototype. */
+export interface HorseMotion {
+  stepsToday: number | null; steps7d: (number | null)[];
+  lameness: null | {
+    at: string; limb: Limb | null; valueMm: number;
+    headMinDiffMm: number | null; headMaxDiffMm: number | null; pelvisMinDiffMm: number | null; pelvisMaxDiffMm: number | null;
+    /** baselineMm: median of this horse's earlier trots (14 days, ≥ 3), null until there are enough */
+    strides: number | null; baselineMm: number | null; flagged: boolean;
+  };
+  lamenessRecent: { at: string; valueMm: number; limb: string | null }[];
+  /** live = a session is open and its readings are < 5 min old */
+  exercise: null | { at: string; minutes: number; steps: number | null; distanceM: number | null; live: boolean; speedMps: number | null };
+  wearable: null | {
+    lastSeen: string;
+    sensors: { sensor: WearableSensor; batteryPct: number | null; signalDbm: number | null; attached: boolean | null; lastSeen: string }[];
+  };
+}
+/** From the water meter / weighed bucket, weigh-back feeder and hay load cell.
+ *  null = no water, feed or hay readings for this horse. */
+export interface HorseIntake {
+  waterTodayMl: number | null; water7dMl: (number | null)[]; drinksToday: number | null; lastDrinkAt: string | null;
+  mealsToday: { at: string; meal: string | null; offeredG: number | null; eatenG: number | null; refusedG: number | null }[];
+  hayTodayG: number | null; hay7dG: (number | null)[];
+  faults: { at: string; kind: string }[];
+}
+
 // Per-horse live detail (summary + latest vitals + 7-day charts).
 export interface HorseDetail {
   behaviour?: HorseBehaviour;
@@ -152,9 +184,20 @@ export interface HorseDetail {
   vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number; calibrated?: boolean; detail?: string | null }>;
   // null entries are days with no reading — never render them as zero.
   charts: Record<string, (number | null)[]>;
+  /** Absent from a server that predates the wearable / stall sensors. */
+  motion?: HorseMotion | null;
+  intake?: HorseIntake | null;
 }
 export const getHorseDetail = (id: string) =>
   get<HorseDetail & Record<string, unknown>>(`/api/horses/${encodeURIComponent(id)}`);
+
+/** The server's status check. `storage` is absent from a server that predates it. */
+export interface HealthStatus {
+  ok: boolean; backend?: string; readings?: number; authRequired?: boolean;
+  /** advice: set when the JSON store is dropping readings at its cap (use Postgres, DATABASE_URL) */
+  storage?: { backend: string; readings: number; cap: number | null; droppedByCap: number; advice: string | null };
+}
+export const getHealth = () => get<HealthStatus>("/api/health");
 
 export const getHorses = () => get<Horse[]>("/api/horses");
 export const getAlerts = () => get<Alert[]>("/api/alerts");
@@ -243,7 +286,7 @@ export async function exportReadingsCsv(horseId: string, days = 30): Promise<boo
    Every device runs through the site server, which is the only thing that can
    reach the barn LAN. The browser never sees a camera password or a device
    token after it is first shown — only `hasPassword` / `hasToken`. */
-export type DeviceKind = "edge_box" | "thermal_camera" | "modbus_sensor" | "push_device";
+export type DeviceKind = "edge_box" | "thermal_camera" | "modbus_sensor" | "push_device" | "wearable_hub";
 export type DeviceState =
   | "online" | "offline" | "never" | "disabled" | "unassigned" | "edge-offline"
   | "needs-calibration" | "error" | "stale" | "waiting" | "silent";
@@ -282,7 +325,13 @@ export interface ModbusRegister {
   scale: number; offset: number; metric: string; unit: string;
   /** counter = a running total (litres dispensed); readings are the increase */
   mode: "gauge" | "counter";
+  /** What the edge box makes of it. Absent = the plain gauge / counter above.
+   *  flow: a water meter's counter → drinking bouts · bucket: a water bucket's
+   *  load cell · feed_bowl: a weigh-back feeder's bowl · hay: a hay net / rack
+   *  load cell · fault: a feeder's fault-code register. */
+  use?: RegisterUse;
 }
+export type RegisterUse = "flow" | "bucket" | "feed_bowl" | "hay" | "fault";
 
 interface DeviceCommon {
   id: string; kind: DeviceKind; name: string; enabled: boolean; notes: string;
@@ -324,14 +373,29 @@ export interface CameraVerification {
 }
 export interface ModbusSensor extends DeviceCommon {
   kind: "modbus_sensor"; stall: string; edgeId: string | null;
-  host: string; port: number; unitId: number; function: 3 | 4;
+  /** tcp (default, Modbus/TCP at host:port) or rtu (Modbus RTU over the edge
+   *  box's RS-485 port — host/port unused). Absent on a server that predates it. */
+  transport?: "tcp" | "rtu";
+  host: string; port: number;
+  serialPort?: string; baud?: number; parity?: "N" | "E" | "O"; stopBits?: 1 | 2;
+  unitId: number; function: 3 | 4;
   addressing: "zero-based" | "one-based"; pollSeconds: number;
   registers: ModbusRegister[]; lastProbe: SensorProbe | null;
 }
 export interface PushDevice extends DeviceCommon {
   kind: "push_device"; stall: string; metrics: string[];
 }
-export type Device = EdgeBox | ThermalCamera | ModbusSensor | PushDevice;
+/** The halter hub with a SIM, and the sensors paired to it. The server
+ *  attributes every reading to `horseId` — the hub cannot name a horse — so it
+ *  has no stall of its own: `stall`, when sent, is that horse's current stall. */
+export interface WearableHub extends DeviceCommon {
+  kind: "wearable_hub"; horseId: string;
+  sensors: { leg: string | null; pelvis: string[] };
+  imei: string;
+  stall?: string | null;
+  metrics?: string[];
+}
+export type Device = EdgeBox | ThermalCamera | ModbusSensor | PushDevice | WearableHub;
 
 /** What an owner account receives: status only, no address or credentials. */
 export interface OwnerDevice {
@@ -376,7 +440,7 @@ const dpath = (id: string, action = "") => `/api/devices/${encodeURIComponent(id
 export const listDevices = () => call<Device[]>("GET", "/api/devices");
 /** Owner accounts get the status-only projection. */
 export const listOwnerDevices = () => call<OwnerDevice[]>("GET", "/api/devices");
-/** `token` is returned exactly once, for edge boxes and push devices. */
+/** `token` is returned exactly once, for edge boxes, push devices and wearable hubs. */
 export const createDevice = (d: DeviceInput) => call<{ device: Device; token: string | null }>("POST", "/api/devices", d);
 export const updateDevice = (id: string, d: Partial<DeviceInput>) => call<Device>("PATCH", dpath(id), d);
 export const deleteDevice = (id: string, force = false) =>

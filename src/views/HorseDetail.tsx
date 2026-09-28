@@ -4,10 +4,10 @@ import { useT } from "../i18n";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge, Crosshair, FlaskConical } from "lucide-react";
+import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge, Crosshair, FlaskConical, Footprints } from "lucide-react";
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
-import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour } from "../data/api";
+import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour, type HorseMotion, type HorseIntake } from "../data/api";
 import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand, details } from "../components/ui";
 
 const CATEGORY: { icon: DiaryEntry["icon"]; label: string }[] = [
@@ -50,15 +50,23 @@ export default function HorseDetail() {
   const [live, setLive] = useState<HorseVitals | null>(null);
   const horse = horses.find((h) => h.id === id);
 
-  // live camera-derived vitals (points 2/3/4) when a backend is reachable
+  // live camera-derived vitals (points 2/3/4) when a backend is reachable,
+  // and the wearable / stall-sensor blocks. Refreshed every minute while the
+  // page is visible, so an exercise session shows as it happens.
   useEffect(() => {
     if (!id) return;
     let stop = false;
-    getHorseDetail(id).then((d) => {
-      if (!stop && d) setLive({ vitals: d.vitals, charts: d.charts, behaviour: d.behaviour });
-    });
+    const fetchLive = () =>
+      getHorseDetail(id).then((d) => {
+        if (!stop && d) setLive({ vitals: d.vitals, charts: d.charts, behaviour: d.behaviour, motion: d.motion, intake: d.intake });
+      });
+    fetchLive();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") fetchLive();
+    }, 60_000);
     return () => {
       stop = true;
+      clearInterval(timer);
     };
   }, [id]);
 
@@ -274,6 +282,16 @@ export default function HorseDetail() {
           color={stressColor}
         />
       </div>
+
+      {/* Wearable (leg tag + halter hub) and stall sensors (water, feeder, hay).
+          undefined = a server that predates them: not shown. null = shown as
+          "not measured", never as zero. */}
+      {live && (live.motion !== undefined || live.intake !== undefined) && (
+        <div className="grid cols-2" style={{ marginBottom: 24, alignItems: "start" }}>
+          {live.motion !== undefined && <MotionCard m={live.motion} />}
+          {live.intake !== undefined && <IntakeCard x={live.intake} />}
+        </div>
+      )}
 
       {/* predictive risk */}
       <div className="card" style={{ marginBottom: 24 }}>
@@ -752,6 +770,312 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
       <p className="muted" style={{ fontSize: 11.5, margin: "10px 0 0" }}>
         What each pattern may mean, with sources: <a href="/guide">Behaviour guide</a>.
       </p>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Wearable set (leg tag + halter hub + pelvis sensor) and the stall sensors
+// (water meter / weighed bucket, weigh-back feeder, hay load cell). Every
+// field the server sends as null reads "not measured" — a missing day is an
+// empty slot in the bars, never a zero.
+// --------------------------------------------------------------------------- //
+const LIMB: Record<string, string> = { LF: "left front", RF: "right front", LH: "left hind", RH: "right hind" };
+const SENSOR: Record<string, string> = { leg: "Leg tag", head: "Halter hub", pelvis: "Pelvis" };
+const MEAL: Record<string, string> = { morning: "Morning", midday: "Midday", evening: "Evening", other: "Other" };
+const FAULT: Record<string, string> = {
+  empty: "feeder empty", jam: "jammed", motor_stall: "motor stalled", under_run: "gave less than set",
+  over_run: "gave more than set", sensor: "sensor fault",
+};
+const grams = (g: number) => (Math.abs(g) >= 1000 ? `${(g / 1000).toFixed(1)} kg` : `${Math.round(g)} g`);
+const litres = (ml: number) => `${(ml / 1000).toFixed(1)} L`;
+const mm = (v: number) => `${v.toFixed(1)} mm`;
+const dayHm = (iso: string) =>
+  new Date(iso).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const sinceMin = (iso: string) => Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+const agoText = (iso: string) => {
+  const m = sinceMin(iso);
+  return m < 2 ? "just now" : m < 90 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : dayHm(iso);
+};
+
+/** Seven days, oldest → today (the last, darker bar). A day with no reading is
+ *  a dashed empty slot; a measured zero is a flat line. Hover a day for its value. */
+function DayBars({ data, format, label }: { data: (number | null)[]; format: (v: number) => string; label: string }) {
+  const { t } = useT();
+  const n = data.length;
+  const max = Math.max(0, ...data.filter((v): v is number => v != null));
+  const dayName = (i: number) =>
+    i === n - 1 ? t("today") : new Date(Date.now() - (n - 1 - i) * 86_400_000).toLocaleDateString([], { weekday: "short" });
+  const valueText = (v: number | null) => (v == null ? t("not measured") : format(v));
+  return (
+    <span
+      role="img"
+      aria-label={`${label}: ${data.map((v, i) => `${dayName(i)} ${valueText(v)}`).join(", ")}`}
+      style={{ display: "block", width: "100%", maxWidth: 240 }}
+    >
+      <span style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 36 }}>
+        {data.map((v, i) => (
+          <span
+            key={i}
+            title={`${dayName(i)}: ${valueText(v)}`}
+            style={{ flex: "1 1 0", minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}
+          >
+            {v == null ? (
+              <span style={{ display: "block", height: 8, border: "1.5px dashed var(--border)", borderBottom: "none", borderRadius: "4px 4px 0 0" }} />
+            ) : (
+              <span
+                style={{
+                  display: "block",
+                  height: v > 0 && max > 0 ? `${Math.max(8, (v / max) * 100)}%` : 2,
+                  background: "var(--accent)",
+                  opacity: i === n - 1 ? 1 : 0.5,
+                  borderRadius: v > 0 ? "4px 4px 0 0" : 0,
+                }}
+              />
+            )}
+          </span>
+        ))}
+      </span>
+      <span style={{ display: "flex", gap: 2, marginTop: 3 }}>
+        {data.map((_, i) => (
+          <span key={i} className="muted" style={{ flex: "1 1 0", minWidth: 0, fontSize: 9.5, textAlign: "center", overflow: "hidden", whiteSpace: "nowrap" }}>
+            {dayName(i)}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
+function NotMeasuredCard({ title, text }: { title: string; text: string }) {
+  const { t } = useT();
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3>{t(title)}</h3>
+        <span className="pill muted">{t("not measured")}</span>
+      </div>
+      <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>{text}</p>
+    </div>
+  );
+}
+
+function MotionCard({ m }: { m: HorseMotion | null }) {
+  const { t } = useT();
+  if (!m)
+    return (
+      <NotMeasuredCard
+        title="Steps and lameness"
+        text="No wearable readings for this horse. Steps, exercise and the trot check need its leg tag and halter hub (Hardware → Wearables)."
+      />
+    );
+  const none = <span className="muted">{t("not measured")}</span>;
+  const limb = (l: string | null) => (l ? t(LIMB[l] ?? l) : t("no leg singled out"));
+  // `?? null` / `?? []`: a field missing from the response reads as not measured.
+  const lm = m.lameness ?? null;
+  const recent = [...(m.lamenessRecent ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 5);
+  const ex = m.exercise ?? null;
+  const steps7d = m.steps7d ?? [];
+  const sensors = m.wearable?.sensors ?? [];
+  const diff = (min: number | null, max: number | null) =>
+    min == null && max == null ? null : `MinDiff ${min == null ? "—" : mm(min)} / MaxDiff ${max == null ? "—" : mm(max)}`;
+  return (
+    <div className="card">
+      <div className="card-head" style={{ gap: 8 }}>
+        <h3 className="flex center gap-sm"><Footprints size={16} /> {t("Steps and lameness")}</h3>
+        <span className="pill warn" title="Steps, exercise and the trot check come from methods not yet validated on horses">
+          <FlaskConical size={12} /> {t("prototype")}
+        </span>
+      </div>
+      <div className="hw-facts">
+        <div>
+          <span>{t("Steps today")}</span>
+          <b>
+            {/* sensor working (earlier days have data) but nothing yet today: not "not measured" */}
+            {m.stepsToday == null ? ((m.steps7d ?? []).some((v) => v != null) ? <span className="muted">{t("none yet today")}</span> : none) : (
+              <>
+                {m.stepsToday.toLocaleString()}
+                <br />
+                <small className="muted">estimated from the leg tag: its strides × 4</small>
+              </>
+            )}
+          </b>
+        </div>
+        <div>
+          <span>{t("Last 7 days")}</span>
+          <b>
+            {steps7d.some((v) => v != null)
+              ? <DayBars data={steps7d} format={(v) => `${Math.round(v).toLocaleString()} steps`} label={t("Steps")} />
+              : none}
+          </b>
+        </div>
+        <div>
+          <span>{t("Latest trot")}</span>
+          <b>
+            {!lm ? none : (
+              <>
+                {limb(lm.limb)} · {mm(lm.valueMm)}
+                {lm.flagged
+                  ? <span className="pill warn" style={{ marginLeft: 6, fontSize: 10.5 }}>{t("flagged")}</span>
+                  : <span className="pill muted" style={{ marginLeft: 6, fontSize: 10.5 }}>{t("not flagged")}</span>}
+                <br />
+                <span className="muted">
+                  {lm.baselineMm != null
+                    ? `${t("own normal")} ${mm(lm.baselineMm)} (${lm.valueMm - lm.baselineMm >= 0 ? "+" : ""}${(lm.valueMm - lm.baselineMm).toFixed(1)} mm)`
+                    : "own normal not learned yet (needs 3 trots in 14 days)"}
+                  {" · "}{dayHm(lm.at)}{lm.strides != null ? ` · ${lm.strides} strides` : ""}
+                </span>
+                {(diff(lm.headMinDiffMm, lm.headMaxDiffMm) || diff(lm.pelvisMinDiffMm, lm.pelvisMaxDiffMm)) && (
+                  <>
+                    <br />
+                    <small className="muted">
+                      {[diff(lm.headMinDiffMm, lm.headMaxDiffMm) && `head ${diff(lm.headMinDiffMm, lm.headMaxDiffMm)}`,
+                        diff(lm.pelvisMinDiffMm, lm.pelvisMaxDiffMm) && `pelvis ${diff(lm.pelvisMinDiffMm, lm.pelvisMaxDiffMm)}`]
+                        .filter(Boolean).join(" · ")}
+                    </small>
+                  </>
+                )}
+              </>
+            )}
+          </b>
+        </div>
+        {recent.length > 0 && (
+          <div>
+            <span>{t("Recent trots")}</span>
+            <b>
+              {recent.map((r, i) => (
+                <span key={r.at + i} style={{ display: "block" }}>
+                  {mm(r.valueMm)} · {limb(r.limb)} <span className="muted">· {dayHm(r.at)}</span>
+                </span>
+              ))}
+            </b>
+          </div>
+        )}
+        <div>
+          <span>{t("Exercise")}</span>
+          <b>
+            {!ex ? none : (
+              <>
+                {ex.live
+                  ? <span className="pill ok" style={{ marginRight: 6, fontSize: 10.5 }}>{t("live")}</span>
+                  : <span className="muted">{t("Last session")} {dayHm(ex.at)} · </span>}
+                {Math.round(ex.minutes)} min
+                {ex.steps != null && <> · {ex.steps.toLocaleString()} steps</>}
+                {ex.live && ex.speedMps != null && <> · {ex.speedMps.toFixed(1)} m/s ({(ex.speedMps * 3.6).toFixed(1)} km/h)</>}
+                {ex.distanceM != null && <span className="muted"> · {ex.distanceM >= 1000 ? `${(ex.distanceM / 1000).toFixed(2)} km` : `${Math.round(ex.distanceM)} m`}</span>}
+              </>
+            )}
+          </b>
+        </div>
+        <div>
+          <span>{t("Wearable")}</span>
+          <b>
+            {sensors.length === 0 ? none : sensors.map((x, i) => (
+              <span key={x.sensor + i} style={{ display: "block" }}>
+                {t(SENSOR[x.sensor] ?? x.sensor)}:{" "}
+                {x.batteryPct == null
+                  ? <span className="muted">{t("battery")} {t("not measured")}</span>
+                  : <span style={x.batteryPct < 20 ? { color: "var(--warn)", fontWeight: 600 } : undefined}>{t("battery")} {Math.round(x.batteryPct)}%</span>}
+                {" · "}
+                {x.attached === false
+                  ? <span style={{ color: "var(--alert)", fontWeight: 600 }}>{t("came off")}</span>
+                  : x.attached ? t("on the horse") : <span className="muted">fit not reported</span>}
+                <span className="muted"> · {agoText(x.lastSeen)}</span>
+              </span>
+            ))}
+          </b>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 11.5, margin: "10px 0 0" }}>
+        The trot check compares up-and-down movement of the head and pelvis between the two halves of each stride on a
+        straight trot. It flags a rise of 6 mm over this horse&apos;s own normal, or 12 mm with no history — our
+        thresholds, not validated on horses. It is a prompt to trot the horse up for a vet, not a diagnosis.
+      </p>
+    </div>
+  );
+}
+
+function IntakeCard({ x }: { x: HorseIntake | null }) {
+  const { t } = useT();
+  if (!x)
+    return (
+      <NotMeasuredCard
+        title="Water and feed"
+        text="No water, feed or hay readings for this horse. They need a water meter or weighed bucket, a weigh-back feeder or a hay load cell in its stall (Hardware → Modbus sensors)."
+      />
+    );
+  const none = <span className="muted">{t("not measured")}</span>;
+  // `?? []` / `== null`: a field missing from the response reads as not measured.
+  const water7d = x.water7dMl ?? [], hay7d = x.hay7dG ?? [], meals = x.mealsToday ?? [], faults = x.faults ?? [];
+  // The sensor reported on earlier days but not yet today (e.g. just after midnight).
+  const noneYet = <span className="muted">{t("none yet today")}</span>;
+  const waterNone = water7d.some((v) => v != null) ? noneYet : none;
+  const feederNone = hay7d.some((v) => v != null) ? noneYet : none;
+  const water = x.waterTodayMl != null;
+  const hasFeeder = meals.length > 0 || x.hayTodayG != null || hay7d.some((v) => v != null);
+  const amount = (g: number | null) => (g == null ? <span className="muted">{t("not measured")}</span> : grams(g));
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3 className="flex center gap-sm"><Droplet size={16} /> {t("Water and feed")}</h3>
+      </div>
+      <div className="hw-facts">
+        <div>
+          <span>{t("Water today")}</span>
+          <b>{water ? litres(x.waterTodayMl!) : waterNone}</b>
+        </div>
+        <div>
+          <span>{t("Last 7 days")}</span>
+          <b>{water7d.some((v) => v != null) ? <DayBars data={water7d} format={litres} label={t("Water intake")} /> : none}</b>
+        </div>
+        <div>
+          <span>{t("Drinks today")}</span>
+          <b>
+            {/* no water reading today: a count of 0 would read as "did not drink" */}
+            {x.drinksToday == null || (!water && x.drinksToday === 0) ? waterNone : x.drinksToday}
+            <span className="muted"> · {t("last drink")} </span>
+            {x.lastDrinkAt ? <>{hm(x.lastDrinkAt)} <span className="muted">({agoText(x.lastDrinkAt)})</span></> : none}
+          </b>
+        </div>
+        <div>
+          <span>{t("Meals today")}</span>
+          <b>
+            {meals.length === 0 ? feederNone : [...meals].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).map((ml, i) => {
+              const leftPct = ml.offeredG && ml.refusedG != null ? Math.round((ml.refusedG / ml.offeredG) * 100) : null;
+              return (
+                <span key={ml.at + i} style={{ display: "block", marginBottom: 2 }}>
+                  {t(MEAL[ml.meal ?? ""] ?? (ml.meal || "Meal"))} <span className="muted">{hm(ml.at)}</span> · {t("offered")} {amount(ml.offeredG)}
+                  {" · "}{t("eaten")} {amount(ml.eatenG)} · {t("refused")} {amount(ml.refusedG)}
+                  {leftPct !== null && <span className={leftPct >= 30 ? undefined : "muted"} style={leftPct >= 30 ? { color: "var(--warn)", fontWeight: 600 } : undefined}> ({leftPct}%)</span>}
+                </span>
+              );
+            })}
+          </b>
+        </div>
+        <div>
+          <span>{t("Hay today")}</span>
+          <b>
+            {x.hayTodayG == null ? feederNone : <>{grams(x.hayTodayG)} <span className="muted">so far</span></>}
+          </b>
+        </div>
+        <div>
+          <span>{t("Hay, 7 days")}</span>
+          <b>{hay7d.some((v) => v != null) ? <DayBars data={hay7d} format={grams} label={t("Hay, 7 days")} /> : none}</b>
+        </div>
+        <div>
+          <span>{t("Feeder faults")}</span>
+          <b>
+            {faults.length > 0
+              ? [...faults].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 5).map((f, i) => (
+                  <span key={f.at + i} style={{ display: "block" }}>
+                    <span style={{ color: "var(--warn)", fontWeight: 600 }}>{FAULT[f.kind] ?? f.kind}</span>{" "}
+                    <span className="muted">· {dayHm(f.at)}</span>
+                  </span>
+                ))
+              : hasFeeder ? <span className="muted">none reported</span> : none}
+          </b>
+        </div>
+      </div>
     </div>
   );
 }
