@@ -86,30 +86,25 @@ fi
 
 # ---- where is the camera? ---------------------------------------------------
 # On a direct cable the Mac has no IPv4 route to the camera, but it can reach
-# it over IPv6 link-local — an address that includes the adapter's name
-# (e.g. %en8), which changes if the adapter moves to another port. Find the
-# camera by its full MAC on every active interface and print what to use.
-# The whole address, never just the maker's prefix: the stable's own network
-# has other Sparsh devices (same 18:74:e2 prefix), and picking one of them
-# would send our login to someone else's camera. ndp drops leading zeros
-# ("1:da"), so both sides are normalised before comparing.
-CAMERA_MAC="${CAMERA_MAC:-18:74:e2:dc:d5:d0}"
-find_camera() {
+# it over IPv6 link-local: an address that includes the adapter's name
+# (e.g. %en8), which changes if the adapter moves to another port. neighbours
+# lists every device that answered on an active interface ("address mac
+# interface"); scripts/sync-cameras.mjs matches them to the saved cameras by
+# address (it comes from the camera's MAC) and only reports the others, so no
+# login goes to a device nobody added, such as another Sparsh camera on the
+# stable's network. Unanswered ("incomplete", "expired") and the Mac's own
+# ("permanent") entries are left out.
+WIFI_IF="$(networksetup -listallhardwareports 2>/dev/null | awk '/Hardware Port: Wi-Fi/ { getline; print $2; exit }')"
+WIFI_IF="${WIFI_IF:-en0}"
+neighbours() {
   for ifc in $(ifconfig -l); do
     ifconfig "$ifc" 2>/dev/null | grep -q "status: active" || continue
     ping6 -c 1 -i 0.2 "ff02::1%$ifc" >/dev/null 2>&1
   done
-  ndp -an 2>/dev/null | awk -v want="$CAMERA_MAC" '
-    function norm(m,   a, n, i, o) { n = split(tolower(m), a, ":"); o = ""
-      for (i = 1; i <= n; i++) o = o (i > 1 ? ":" : "") (length(a[i]) == 1 ? "0" a[i] : a[i]); return o }
-    norm($2) == norm(want) { print $1; exit }'
+  ndp -an 2>/dev/null | awk 'NR > 1 && tolower($1) ~ /^fe80:/ && $2 != "(incomplete)" && $4 != "permanent" && $4 != "expired" { print $1, $2, $3 }'
 }
-CAM_ADDR="$(find_camera)"
-if [ -n "$CAM_ADDR" ]; then
-  say "camera found at $CAM_ADDR — use this as its IP address in the Hardware page"
-else
-  say "camera not found on any cable — check its power and the USB-Ethernet adapter (continuing anyway)"
-fi
+# What changes when a cable is plugged or moved (Wi-Fi neighbours come and go).
+wired() { awk -v w="$WIFI_IF" '$3 ~ /^en[0-9]+$/ && $3 != w' | sort; }
 
 # ---- server ---------------------------------------------------------------
 # Each part is started by a function so the watch loop at the end can start it
@@ -171,26 +166,14 @@ if [ ! -s "$TOKEN_FILE" ]; then
     *) say "that is not an edge-box token (they start with eqd_) — continuing without the edge agent" ;;
   esac
 fi
-# The camera's link-local address includes the adapter's name (%en8), which
-# changes if the adapter moves to another port: keep the camera record in step.
-sync_camera() {  # $1: the address find_camera printed
+# Keep each camera record on the adapter port its camera is on now.
+sync_cameras() {  # $1: what neighbours printed
   [ -f "$HOME_DIR/admin-password.txt" ] || return 0
-  ADMIN_PW="$(sed -n "s/.*password: //p" "$HOME_DIR/admin-password.txt" | head -1)"
-  CAM_ADDR="$1" ADMIN_PW="$ADMIN_PW" URL="$URL" node -e '
-    const { URL: u, ADMIN_PW: pw, CAM_ADDR: addr } = process.env;
-    (async () => {
-      const login = await (await fetch(u + "/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: "admin", password: pw }) })).json();
-      if (!login.token) return;
-      const h = { Authorization: "Bearer " + login.token, "Content-Type": "application/json" };
-      const cams = (await (await fetch(u + "/api/devices", { headers: h })).json()).filter((d) => d.kind === "thermal_camera");
-      for (const c of cams) if (c.host !== addr && c.host.startsWith("fe80::")) {
-        await fetch(u + "/api/devices/" + c.id, { method: "PATCH", headers: h, body: JSON.stringify({ host: addr }) });
-        console.log("[demo] camera \"" + c.name + "\" now at " + addr);
-      }
-    })().catch(() => {});' 2>/dev/null
+  NB="$1" WIFI_IF="$WIFI_IF" URL="$URL" ADMIN_PW="$(sed -n "s/.*password: //p" "$HOME_DIR/admin-password.txt" | head -1)" \
+    node scripts/sync-cameras.mjs 2>/dev/null
 }
-[ -n "$CAM_ADDR" ] && sync_camera "$CAM_ADDR"
+NB_NOW="$(neighbours)"
+sync_cameras "$NB_NOW"
 
 if [ -s "$TOKEN_FILE" ]; then
   if [ "$PY" = python3 ]; then
@@ -220,10 +203,10 @@ start_archive
 caffeinate -ims -w $$ &
 # The camera plugged in after the start, or its adapter moved to another port:
 # look again every 20 s and keep the camera record in step, no restart needed.
-( last="$CAM_ADDR"
+( last="$(printf '%s\n' "$NB_NOW" | wired)"
   while sleep 20; do
-    a="$(find_camera)"
-    if [ -n "$a" ] && [ "$a" != "$last" ]; then say "camera found at $a"; sync_camera "$a"; last="$a"; fi
+    nb="$(neighbours)"; now="$(printf '%s\n' "$nb" | wired)"
+    if [ "$now" != "$last" ]; then sync_cameras "$nb"; last="$now"; fi
   done ) &
 WATCH=$!
 say "ready → $URL   (Ctrl-C to stop) — keep the lid open and the charger in; live view: $URL/live"

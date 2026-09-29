@@ -34,7 +34,11 @@ export default function Live() {
       if (!r.ok) return setError(r.error);
       const list = r.data.filter((d): d is api.ThermalCamera => d.kind === "thermal_camera");
       setCams(list);
-      if (list[0]) setCamId(list[0].id);
+      // Open the camera that is working: a camera replaced by another one
+      // stays listed (switched off) for its history.
+      const on = list.filter((c) => c.enabled !== false);
+      const pick = on.find((c) => c.status?.state === "online") ?? on[0] ?? list[0];
+      if (pick) setCamId(pick.id);
     });
   }, []);
   const cam = cams?.find((c) => c.id === camId) ?? null;
