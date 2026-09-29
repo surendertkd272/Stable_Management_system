@@ -126,3 +126,10 @@ test("photos pair colour with thermal; the comparison page is about the horse, n
   assert.doesNotMatch(page6, /lens|camera|coverage|sun|monitoring points/i, "nothing about the equipment");
   assert.ok(clean(html));
 });
+
+test("recommendations are about the horse: no equipment instructions", async () => {
+  const { html } = await clientReport({ horse, readings: hourOf({ eyeEvery: 1000 }), from, to: from + hour, floorWatched: false, tz: "Asia/Kolkata" });
+  const recs = html.slice(html.indexOf("Recommendations"), html.indexOf("About this report"));
+  assert.match(recs, /Run longer sessions/);
+  assert.doesNotMatch(recs, /camera|lens|thermal view|mark the stall floor/i);
+});

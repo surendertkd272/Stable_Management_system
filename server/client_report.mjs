@@ -303,9 +303,9 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
       meals.length ? `${plural(meals.length, "meal")}: offered ${kg(offered)}, left ${kg(left)}${hayIn ? `; hay ${kg(hayG)}` : ""}.`
         : hayIn ? `Hay ${kg(hayG)} eaten.` : feederSeen ? "No meal during the session." : "Requires a weigh-back feeder or hay scale."],
   ];
+  // For the owner: what to do for the horse. Setting up the equipment is not
+  // the reader's business and is left out.
   const recs = [
-    eyeMinutes < 0.3 * Math.max(1, anyMin.size) && `<b>Aim the camera where ${esc(name)}'s head spends most time</b> (hay net or door), 3.5–4 m away and level with the head, so the eye and nostrils are in the thermal view more often. Temperature and breathing are read whenever they are.`,
-    !(floorWatched === true) && `<b>Mark the stall floor in the camera's view</b> where the bedding is visible, so urination and excretion are counted.`,
     `<b>Run longer sessions, such as overnight,</b> to establish ${esc(name)}'s personal baseline; changes in temperature and activity are then flagged automatically.`,
     `<b>Keep the stall clear of people during monitoring</b> so activity reflects the horse alone.`,
   ].filter(Boolean).slice(0, 4);
