@@ -365,8 +365,27 @@ export class MtrpcCamera extends MtrpcClient {
     });
   }
 
+  /** Switch off the camera's own copies of EquiCare's boxes (earlier versions
+   *  mirrored them as its measurement rules). The camera draws enabled rules
+   *  into its video, which put fixed boxes over the horse in the live view,
+   *  in every recording and in the video the breathing is read from, while
+   *  EquiCare measures the boxes itself and follows the horse. Other rules
+   *  are left alone. Reads back to confirm. */
+  async hideRules() {
+    const cur = await this.getConfig("Thermal.thermometry_rule_all");
+    const ours = (r) => r?.name === RULE_NAMES.eye || r?.name === RULE_NAMES.nostril;
+    const rules = (cur?.thermometry_rules || []).map((r) => (ours(r) && r.enable ? { ...r, enable: false } : r));
+    if (rules.some((r, i) => r !== cur.thermometry_rules[i]))
+      await this.setConfig("Thermal.thermometry_rule_all", { ...cur, thermometry_rules: rules });
+    const back = (await this.getConfig("Thermal.thermometry_rule_all"))?.thermometry_rules || [];
+    return back.some((r) => ours(r) && r.enable)
+      ? { verified: false, detail: "stored in EquiCare; the camera still draws its own copy of the boxes" }
+      : { verified: true, detail: "stored in EquiCare, which measures the boxes itself; the camera does not draw them on its video" };
+  }
+
   /** Mirror the ROIs as the camera's own measurement rules, so its web page
-   *  and overlays show the same boxes. Reads them back to confirm. */
+   *  and overlays show the same boxes. Reads them back to confirm. Not used
+   *  by calibration any more (see hideRules). */
   async writeRules(eye, nostril) {
     const cur = await this.getConfig("Thermal.thermometry_rule_all");
     const rules = placeRules(cur?.thermometry_rules, eyeRule(eye), nostrilRule(nostril));

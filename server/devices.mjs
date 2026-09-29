@@ -979,15 +979,16 @@ export function deviceApi({ store, json, CORS }) {
       const box = (b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 });
       if (await protocolOf(dev) === "mtrpc") {
         // EquiCare measures these ROIs itself (pixel sampling), so storing
-        // them is what matters. They are also mirrored as the camera's own
-        // rules, so its web page shows the same boxes — best effort. The
-        // camera's emissivity/distance are not touched here.
+        // them is what matters. The camera is not given copies: it would
+        // draw them as fixed boxes into its video (and the recordings), and
+        // copies from earlier versions are switched off. The camera's
+        // emissivity/distance are not touched here.
         let verify;
         try {
-          verify = await camera(dev, (c) => c.writeRules(eye, n));
+          verify = await camera(dev, (c) => c.hideRules());
         } catch (e) {
           if (e instanceof IdentityMismatch) return json(409, { error: e.message, code: e.code });
-          verify = { verified: null, detail: `stored in EquiCare; the camera's own rule display was not updated (${e.message})` };
+          verify = { verified: null, detail: `stored in EquiCare; the camera's own copies could not be checked (${e.message})` };
         }
         const rois = { eye: box(eye), nostril: box(n), ...(floor ? { floor: box(floor) } : {}), ...(flank ? { flank: box(flank) } : {}), ...(colourFloor ? { colourFloor: box(colourFloor) } : {}), pushedAt: now(), verified: verify.verified };
         store.update("devices", dev.id, { rois, verification: null });

@@ -79,7 +79,9 @@ test("snapshots: thermal is camera channel 1, visible is channel 0", async () =>
   }
 });
 
-test("calibration stores the ROIs and mirrors them as the camera's own rules", async () => {
+test("calibration stores the ROIs and switches off the camera's own copies (no fixed boxes in its video)", async () => {
+  const cfg = cam.st.config["Thermal.thermometry_rule_all"];
+  cfg.thermometry_rules[1] = { ...cfg.thermometry_rules[1], enable: true, name: "equicare-eye" };   // a copy from an earlier version
   const r = await admin("PUT", `/api/devices/${ids.cam}/rois`, {
     eye: { x0: 3000, y0: 3000, x1: 3600, y1: 3600 },          // around the hot spot at cam (2700,2700) ≈ (3296,3296)
     nostril: { x0: 5000, y0: 6200, x1: 6000, y1: 7000 },
@@ -87,7 +89,8 @@ test("calibration stores the ROIs and mirrors them as the camera's own rules", a
   assert.equal(r.status, 200, r.raw);
   assert.equal(r.body.verify.verified, true);
   const rules = cam.st.config["Thermal.thermometry_rule_all"].thermometry_rules;
-  assert.ok(rules.find((x) => x.name === "equicare-eye" && Number.isInteger(x.rule_id)));
+  assert.equal(rules.find((x) => x.name === "equicare-eye").enable, false, "the camera no longer draws the eye box");
+  assert.equal(rules.find((x) => x.name === "vendor-default").enable, true, "the camera's other rules are left alone");
   assert.equal(cam.st.config["Thermal.thermal_global_config"].target_radiation_coefficient, 0.95,
     "the camera's own emissivity is left as the operator set it");
 });
