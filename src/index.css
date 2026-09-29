@@ -1577,7 +1577,16 @@ button {
 .zoom-frame{overflow:hidden;border-radius:10px;background:#000;cursor:zoom-in;touch-action:pan-y pinch-zoom}
 .zoom-frame.zoomed{cursor:grab;touch-action:none}
 .zoom-frame.zoomed:active{cursor:grabbing}
-.zoom-frame img{width:100%;display:block;transform-origin:center;user-select:none;-webkit-user-drag:none;will-change:transform}
+.zoom-content{position:relative;transform-origin:center;will-change:transform}
+.zoom-frame img{width:100%;display:block;user-select:none;-webkit-user-drag:none}
+/* Where the system found the eye / the breathing this minute (Live view). */
+.live-mark{position:absolute;pointer-events:none;border:2px solid var(--mark);box-shadow:0 0 0 1px rgba(0,0,0,.55)}
+.live-mark.eye{--mark:#ff453a;width:16px;height:16px;border-radius:50%;transform:translate(-50%,-50%)}
+.live-mark.breath{--mark:#30d158;border-radius:4px}
+.live-mark span{position:absolute;left:0;top:100%;margin-top:3px;white-space:nowrap;background:rgba(0,0,0,.72);color:#fff;
+  font-size:11px;line-height:1.3;padding:1px 5px;border-radius:4px;font-variant-numeric:tabular-nums}
+.live-mark.eye span{left:50%;transform:translateX(-50%)}
+.live-mark.old{opacity:.5}
 .zoom-bar{position:absolute;right:8px;bottom:8px;display:flex;gap:2px;align-items:center;background:rgba(0,0,0,.6);color:#fff;border-radius:8px;padding:3px 4px;font-size:11.5px}
 .zoom-bar button{background:transparent;border:0;color:#fff;padding:4px 6px;cursor:pointer;display:grid;place-items:center;border-radius:5px;min-height:26px}
 .zoom-bar button:disabled{opacity:.35;cursor:default}

@@ -180,8 +180,10 @@ export interface HorseIntake {
 // Per-horse live detail (summary + latest vitals + 7-day charts).
 export interface HorseDetail {
   behaviour?: HorseBehaviour;
-  /** breathing_check (a diagnostic) carries `detail`: why the last minute had no breathing rate. */
-  vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number; calibrated?: boolean; detail?: string | null }>;
+  /** breathing_check / eye_check (diagnostics) carry `detail`: how, or why the last minute had no reading.
+   *  `where` (eye) and `box` (breathing) say where in the thermal view (0–10000) it was found. */
+  vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number; calibrated?: boolean;
+    detail?: string | null; method?: string; where?: { x: number; y: number }; box?: { x0: number; y0: number; x1: number; y1: number } }>;
   // null entries are days with no reading — never render them as zero.
   charts: Record<string, (number | null)[]>;
   /** Absent from a server that predates the wearable / stall sensors. */

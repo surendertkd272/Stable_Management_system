@@ -8,7 +8,7 @@
 // double-click to zoom in, and buttons for touch screens. The view is kept
 // while the picture refreshes, and can be shared between the thermal and
 // colour pictures, which show about the same area.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Minus, Plus, Maximize2 } from "lucide-react";
 
 /** z: zoom (1 = whole picture); x, y: the centre of the view, 0..1 of the picture. */
@@ -29,7 +29,11 @@ export function zoomAt(view: ZoomView, factor: number, u = 0.5, v = 0.5): ZoomVi
   return clampView({ z, x: px - (u - 0.5) / z, y: py - (v - 0.5) / z });
 }
 
-export function ZoomImage({ src, alt, view, onView }: { src: string; alt: string; view: ZoomView; onView: (v: ZoomView) => void }) {
+/** children: an overlay in the picture's own 0–100 % coordinates (e.g. where
+ *  something was found); it zooms and pans with the picture. */
+export function ZoomImage({ src, alt, view, onView, children }: {
+  src: string; alt: string; view: ZoomView; onView: (v: ZoomView) => void; children?: ReactNode;
+}) {
   const frame = useRef<HTMLDivElement>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -76,9 +80,11 @@ export function ZoomImage({ src, alt, view, onView }: { src: string; alt: string
         onPointerCancel={() => { drag.current = null; }}
         onDoubleClick={(e) => { const { u, v } = rel(e); onView(view.z >= MAX ? WHOLE : zoomAt(view, 2, u, v)); }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} draggable={false}
-          style={{ transform: `scale(${z}) translate(${(0.5 - x) * 100}%, ${(0.5 - y) * 100}%)` }} />
+        <div className="zoom-content" style={{ transform: `scale(${z}) translate(${(0.5 - x) * 100}%, ${(0.5 - y) * 100}%)` }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={src} alt={alt} draggable={false} />
+          {children}
+        </div>
       </div>
       <div className="zoom-bar">
         <button type="button" aria-label="Zoom out" disabled={z <= 1} onClick={() => onView(zoomAt(view, 1 / 1.5))}><Minus size={14} /></button>

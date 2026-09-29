@@ -17,6 +17,13 @@ import { useStable } from "../store";
 import { ZoomImage, WHOLE, type ZoomView } from "../components/Zoom";
 
 type Snap = { url?: string; error?: string; at?: number; live?: boolean };
+/** Where the system found the eye / the breathing in the last minutes, drawn on the thermal picture. */
+type LiveMark = { kind: "eye"; x: number; y: number; label: string; old: boolean }
+  | { kind: "breath"; x0: number; y0: number; x1: number; y1: number; label: string; old: boolean };
+const MARK_MAX_S = 180;                 // a mark older than this is not shown at all
+const EYE_FRESH_MS = 10 * 60 * 1000;    // older than this, the eye row says why it is not read now
+const hms = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const SESSION_KEY = (cam: string) => `bsv-session-start:${cam}`;
 const SESSION_STALE_MS = 24 * 3600 * 1000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -62,8 +69,8 @@ export default function Live() {
 /** One of the camera's two pictures: live video while the server can give it,
  *  otherwise a snapshot every couple of seconds (and live video tried again
  *  now and then). Its own component, so 25 frames a second redraw only it. */
-function LivePicture({ camId, name, paused, view, onView }: {
-  camId: string; name: "Thermal" | "Colour"; paused: boolean; view: ZoomView; onView: (v: ZoomView) => void;
+function LivePicture({ camId, name, paused, view, onView, marks = [] }: {
+  camId: string; name: "Thermal" | "Colour"; paused: boolean; view: ZoomView; onView: (v: ZoomView) => void; marks?: LiveMark[];
 }) {
   const [snap, setSnap] = useState<Snap>({});
   useEffect(() => {
@@ -109,7 +116,14 @@ function LivePicture({ camId, name, paused, view, onView }: {
         </span>
       </div>
       {snap.url
-        ? <ZoomImage src={snap.url} alt={`${name} camera`} view={view} onView={onView} />
+        ? (
+          <ZoomImage src={snap.url} alt={`${name} camera`} view={view} onView={onView}>
+            {marks.map((m) => m.kind === "eye"
+              ? <div key="eye" className={`live-mark eye${m.old ? " old" : ""}`} style={{ left: `${m.x / 100}%`, top: `${m.y / 100}%` }}><span>{m.label}</span></div>
+              : <div key="breath" className={`live-mark breath${m.old ? " old" : ""}`}
+                  style={{ left: `${m.x0 / 100}%`, top: `${m.y0 / 100}%`, width: `${(m.x1 - m.x0) / 100}%`, height: `${(m.y1 - m.y0) / 100}%` }}><span>{m.label}</span></div>)}
+          </ZoomImage>
+        )
         : <div className="hw-stage-empty">{snap.error ? `No picture: ${snap.error}` : <Loader2 className="spin" size={20} />}</div>}
     </div>
   );
@@ -142,8 +156,17 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 1000); return () => clearInterval(t); }, []);
 
   // What the system is reading: the horse's latest vitals and behaviour.
+  // When the panel last got the horse's readings — a panel that silently
+  // stopped updating (the server restarted, the login expired) showed old
+  // readings as if they were now.
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const load = useCallback(async () => {
-    if (horse) { const d = await api.getHorseDetail(horse.id); if (alive.current && d) setDetail(d); }
+    if (horse) {
+      const d = await api.getHorseDetail(horse.id);
+      if (!alive.current) return;
+      if (d) { setDetail(d); setUpdatedAt(Date.now()); setLoadFailed(false); } else setLoadFailed(true);
+    }
     const r = await api.listDevices();
     if (r.ok && alive.current) setStatus(r.data.find((d) => d.id === cam.id)?.status ?? null);
   }, [horse, cam.id]);
@@ -160,6 +183,17 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
   };
   const elapsed = start ? Math.floor((Date.now() - Date.parse(start)) / 1000) : 0;
   const v = detail?.vitals ?? {};
+  // The moving boxes: where this minute's eye and breathing were found.
+  const ageS = (ts?: string) => (ts ? (Date.now() - Date.parse(ts)) / 1000 : Infinity);
+  const marks: LiveMark[] = [];
+  const ec = v.eye_check, rr = v.respiratory_rate_bpm;
+  if (ec?.value === 1 && ec.where && ageS(ec.ts) < MARK_MAX_S)
+    marks.push({ kind: "eye", x: ec.where.x, y: ec.where.y, old: ageS(ec.ts) > 90,
+      label: `eye${v.body_temp_c && v.body_temp_c.ts >= ec.ts ? ` ${v.body_temp_c.value.toFixed(1)} °C` : ""} · ${hm(ec.ts)}` });
+  if (rr?.box && ageS(rr.ts) < MARK_MAX_S)
+    marks.push({ kind: "breath", ...rr.box, old: ageS(rr.ts) > 90, label: `breathing ${Math.round(rr.value)}/min · ${hm(rr.ts)}` });
+  const eyeFresh = v.body_temp_c && ageS(v.body_temp_c.ts) * 1000 < EYE_FRESH_MS;
+  const eyeWhy = !eyeFresh && ec && ec.value === 0 && ec.detail && (!v.body_temp_c || ec.ts > v.body_temp_c.ts) ? ec : null;
   const b = detail?.behaviour;
   const reportHref = horse ? `/session?horse=${encodeURIComponent(horse.id)}${start ? `&from=${encodeURIComponent(start)}` : ""}` : "/session";
 
@@ -194,7 +228,7 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
       <div className="grid cols-2" style={{ gap: 14, alignItems: "start" }}>
         {(["Thermal", "Colour"] as const).map((name) => (
           <LivePicture key={name} camId={cam.id} name={name} paused={paused}
-            view={views[name]} onView={name === "Thermal" ? onThermal : onColour} />
+            view={views[name]} onView={name === "Thermal" ? onThermal : onColour} marks={name === "Thermal" ? marks : []} />
         ))}
       </div>
       <div className="flex" style={{ flexWrap: "wrap", gap: "4px 18px", marginTop: 8 }}>
@@ -215,7 +249,16 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
         <div className="card-head"><h3>What the system reads now</h3><span className="pill warn">behaviour: prototype</span></div>
         {!horse ? <p className="muted">Give a horse this camera&apos;s stall ({cam.stall}) on the Horses page to see its readings here.</p> : (
           <div className="hw-facts">
-            <div><span><Thermometer size={13} /> Eye temperature</span><b>{v.body_temp_c ? `${v.body_temp_c.value.toFixed(1)} °C · ${ago(v.body_temp_c.ts)}${v.body_temp_c.calibrated === false ? " · not aimed" : ""}` : "not read yet — the head has not been in the thermal view"}</b></div>
+            <div><span><Thermometer size={13} /> Eye temperature</span><b>
+              {eyeWhy ? `not measured now — ${eyeWhy.detail}`
+                : v.body_temp_c ? `${v.body_temp_c.value.toFixed(1)} °C · ${ago(v.body_temp_c.ts)}${v.body_temp_c.calibrated === false ? " · not aimed" : ""}`
+                : "not read yet — the head has not been in the thermal view"}
+              {eyeWhy && (
+                <span className="muted" style={{ display: "block", fontWeight: 400, fontSize: 12 }}>
+                  checked {ago(eyeWhy.ts)}{v.body_temp_c ? ` · last reading ${v.body_temp_c.value.toFixed(1)} °C, ${ago(v.body_temp_c.ts)}` : ""}
+                </span>
+              )}
+            </b></div>
             <div><span><Wind size={13} /> Breathing</span><b>{v.respiratory_rate_bpm ? `${Math.round(v.respiratory_rate_bpm.value)} /min · ${ago(v.respiratory_rate_bpm.ts)}${b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : "no rate yet — needs 30 s with the head still"}
               {v.breathing_check && v.breathing_check.value === 0 && v.breathing_check.detail && (!v.respiratory_rate_bpm || v.breathing_check.ts > v.respiratory_rate_bpm.ts) && (
                 <span className="muted" style={{ display: "block", fontWeight: 400, fontSize: 12 }}>last minute: no rate — {v.breathing_check.detail} ({ago(v.breathing_check.ts)})</span>
@@ -226,7 +269,16 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
             <div><span>Urination / manure</span><b>{`${b?.urination?.count24h ?? 0} / ${b?.excretion?.count24h ?? 0} in 24 h`}</b></div>
           </div>
         )}
-        <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>Readings arrive once a minute from the edge agent; this panel refreshes every 15 s.</p>
+        <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
+          Readings arrive once a minute from the edge agent; this panel refreshes every 15 s
+          {updatedAt ? ` · updated ${hms(updatedAt)}` : ""}.
+          {marks.length > 0 && " On the thermal picture: red = where the eye was read, green = where the breathing was read (the last minutes)."}
+        </p>
+        {loadFailed && (
+          <p style={{ fontSize: 12.5, marginTop: 6, color: "var(--warn, #b26a00)" }}>
+            Not updating{updatedAt ? ` since ${hms(updatedAt)}` : ""}: the server did not answer. Reload the page (and sign in again if asked).
+          </p>
+        )}
       </div>
     </>
   );
