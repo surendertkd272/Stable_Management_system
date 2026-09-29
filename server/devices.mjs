@@ -91,6 +91,9 @@ function safeEq(a, b) {
 // --------------------------------------------------------------------------- //
 const num = (v, d) => (v === undefined || v === "" || v === null ? d : Number(v));
 const isPort = (p) => Number.isInteger(p) && p > 0 && p < 65536;
+// The same address with only its IPv6 zone changed ("fe80::…%en8" -> "%en9")
+// is the same camera reached through another adapter port, not a camera moved.
+export const sameAddress = (a, b) => String(a ?? "").replace(/%.*$/, "").toLowerCase() === String(b ?? "").replace(/%.*$/, "").toLowerCase();
 const str = (v, d = "") => String(v ?? d).trim();
 
 export function validateDevice(kind, body, existing = {}, all = [], { horses = [] } = {}) {
@@ -843,7 +846,8 @@ export function deviceApi({ store, json, CORS }) {
       if (dev.kind === "thermal_camera") {
         if (body.password) { patch.passwordEnc = seal(body.password); changes.push("password"); }
         // Moving the camera or changing its optics invalidates the aim.
-        if (["host", "stall", "variant", "thermalLens", "distanceM"].some((k) => changes.includes(k)) && dev.rois)
+        const moved = changes.includes("host") && !sameAddress(out.host, dev.host);
+        if ((moved || ["stall", "variant", "thermalLens", "distanceM"].some((k) => changes.includes(k))) && dev.rois)
           patch.rois = { ...dev.rois, stale: true };
         // A new address may legitimately be a replacement unit; identity is
         // re-confirmed on the next test rather than silently carried over.

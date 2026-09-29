@@ -110,8 +110,10 @@ SERVER=$!
 AGENT=""
 TAIL=""
 ARCHIVE=""
+WATCH=""
 cleanup() {
   say "stopping…"
+  [ -n "$WATCH" ] && pkill -P "$WATCH" 2>/dev/null; [ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null
   [ -n "$TAIL" ] && pkill -P "$TAIL" 2>/dev/null; [ -n "$TAIL" ] && kill "$TAIL" 2>/dev/null
   [ -n "$AGENT" ] && kill "$AGENT" 2>/dev/null
   [ -n "$ARCHIVE" ] && kill "$ARCHIVE" 2>/dev/null
@@ -148,9 +150,10 @@ if [ ! -s "$TOKEN_FILE" ]; then
 fi
 # The camera's link-local address includes the adapter's name (%en8), which
 # changes if the adapter moves to another port: keep the camera record in step.
-if [ -n "$CAM_ADDR" ] && [ -f "$HOME_DIR/admin-password.txt" ]; then
+sync_camera() {  # $1: the address find_camera printed
+  [ -f "$HOME_DIR/admin-password.txt" ] || return 0
   ADMIN_PW="$(sed -n "s/.*password: //p" "$HOME_DIR/admin-password.txt" | head -1)"
-  CAM_ADDR="$CAM_ADDR" ADMIN_PW="$ADMIN_PW" URL="$URL" node -e '
+  CAM_ADDR="$1" ADMIN_PW="$ADMIN_PW" URL="$URL" node -e '
     const { URL: u, ADMIN_PW: pw, CAM_ADDR: addr } = process.env;
     (async () => {
       const login = await (await fetch(u + "/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -160,10 +163,11 @@ if [ -n "$CAM_ADDR" ] && [ -f "$HOME_DIR/admin-password.txt" ]; then
       const cams = (await (await fetch(u + "/api/devices", { headers: h })).json()).filter((d) => d.kind === "thermal_camera");
       for (const c of cams) if (c.host !== addr && c.host.startsWith("fe80::")) {
         await fetch(u + "/api/devices/" + c.id, { method: "PATCH", headers: h, body: JSON.stringify({ host: addr }) });
-        console.log("[demo] camera \"" + c.name + "\" now at " + addr + " (re-aim it in Calibrate if the boxes are off)");
+        console.log("[demo] camera \"" + c.name + "\" now at " + addr);
       }
     })().catch(() => {});' 2>/dev/null
-fi
+}
+[ -n "$CAM_ADDR" ] && sync_camera "$CAM_ADDR"
 
 if [ -s "$TOKEN_FILE" ]; then
   if [ "$PY" = python3 ]; then
@@ -184,6 +188,14 @@ ARCHIVE=$!
 # Keep the Mac awake while the demo runs (a sleeping Mac records nothing).
 # Closing the lid still sleeps it: keep it open and on the charger.
 caffeinate -ims -w $$ &
+# The camera plugged in after the start, or its adapter moved to another port:
+# look again every 20 s and keep the camera record in step, no restart needed.
+( last="$CAM_ADDR"
+  while sleep 20; do
+    a="$(find_camera)"
+    if [ -n "$a" ] && [ "$a" != "$last" ]; then say "camera found at $a"; sync_camera "$a"; last="$a"; fi
+  done ) &
+WATCH=$!
 say "ready → $URL   (Ctrl-C to stop) — keep the lid open and the charger in; live view: $URL/live"
 say "admin login: $HOME_DIR/admin-password.txt · research archive: $HOME_DIR/research"
 open "$URL/hardware" 2>/dev/null

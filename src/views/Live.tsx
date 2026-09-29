@@ -16,6 +16,7 @@ import { ZoomImage, WHOLE, type ZoomView } from "../components/Zoom";
 
 type Snap = { url?: string; error?: string; at?: number };
 const SESSION_KEY = (cam: string) => `bsv-session-start:${cam}`;
+const SESSION_STALE_MS = 24 * 3600 * 1000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const ago = (iso?: string | null) => {
   if (!iso) return "never";
@@ -70,7 +71,13 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   useEffect(() => {
-    try { setStart(localStorage.getItem(SESSION_KEY(cam.id))); } catch { /* not remembered */ }
+    try {
+      // A start from over a day ago is an earlier session left running, not
+      // this one: drop it, so its report is not mixed into the next.
+      const s = localStorage.getItem(SESSION_KEY(cam.id));
+      if (s && !(Date.now() - Date.parse(s) < SESSION_STALE_MS)) localStorage.removeItem(SESSION_KEY(cam.id));
+      else setStart(s);
+    } catch { /* not remembered */ }
   }, [cam.id]);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 1000); return () => clearInterval(t); }, []);
 

@@ -429,3 +429,12 @@ test("the first-version camera records migrate into the registry", async () => {
   assert.equal(mem.devices[0].kind, "thermal_camera");
   assert.equal(mem.devices[0].identity.serial, "SN-OLD");
 });
+
+test("the camera reached through another adapter port is not a moved camera", async () => {
+  const { sameAddress } = await import("./devices.mjs");
+  assert.equal(sameAddress("fe80::1a74:e2ff:fedc:d5d0%en8", "fe80::1a74:e2ff:fedc:d5d0%en9"), true);
+  assert.equal(sameAddress("FE80::1A74:E2FF:FEDC:D5D0%en8", "fe80::1a74:e2ff:fedc:d5d0"), true);
+  assert.equal(sameAddress("fe80::1a74:e2ff:fedc:d5d0%en8", "fe80::1a74:e2ff:fedc:d5d1%en8"), false);
+  assert.equal(sameAddress("192.168.0.10", "192.168.0.150"), false);
+  assert.equal(sameAddress("192.168.0.10", "192.168.0.10"), true);
+});
