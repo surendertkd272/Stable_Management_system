@@ -55,6 +55,16 @@ def make_mask(w, h):
 MASK = make_mask(W, H)
 
 
+def _fast_highpass(x, fs, seconds):
+    """highpass() with a running sum: the breathing search runs it on every block."""
+    half = max(1, int(fs * seconds / 2))
+    pre = [0.0]
+    for v in x:
+        pre.append(pre[-1] + v)
+    n = len(x)
+    return [x[i] - (pre[min(n, i + half + 1)] - pre[max(0, i - half)]) / (min(n, i + half + 1) - max(0, i - half)) for i in range(n)]
+
+
 def box_px(box, w=W, h=H):
     """EquiCare box (0–10000) -> pixel bounds in the small frame."""
     fx = lambda v: max(0, min(w - 1, int(v / 10000 * w + 0.5)))
@@ -202,6 +212,9 @@ class WindowAnalyzer:
     WALK_BAND = (0.03, 0.15)      # a lap of the box every ~7–30 s
     WALK_MIN_LAPS = 3             # ... and at least 3 of them in the window
     POSTURE_EVERY = 5             # thermal blob posture at 2 samples/s
+    SEARCH_COLS, SEARCH_ROWS = 16, 12     # breathing search: blocks over the whole thermal view
+    SEARCH_BAND = (0.1, 0.6)              # 6–36 breaths a minute
+    SEARCH_TOP = 3                        # blocks given the full check (breath_analysis)
 
     def __init__(self, fs=FPS, w=W, h=H, mode="thermal", posture=None):
         self.fs, self.w, self.h, self.mode = fs, w, h, mode
@@ -217,6 +230,7 @@ class WindowAnalyzer:
     def reset(self):
         self.fracs, self.cx, self.mx, self.sx, self.sy, self.t0 = [], [], [], [], [], time.time()
         self.nostril, self.nref, self.glob, self.flank = [], [], [], []
+        self.blocks = []
         self.scene_changes = self.motion.scene_changes
         self.sway.paired()
 
@@ -233,6 +247,8 @@ class WindowAnalyzer:
         sx, sy = self.sway.feed(frame)
         self.sx.append(sx)
         self.sy.append(sy)
+        if self.mode == "thermal":
+            self.blocks.append(self._block_means(frame))
         if nostril_bounds:
             self.nostril.append(box_mean(frame, nostril_bounds, self.w))
             self.nref.append(ring_mean(frame, nostril_bounds, ring_bounds(nostril_bounds, self.w, self.h), self.w))
@@ -248,6 +264,63 @@ class WindowAnalyzer:
             self.flank_bounds, self.flank = None, []
         if self.posture is not None and self.n_frames % self.POSTURE_EVERY == 0 and self.mode == "thermal":
             self.posture.feed(t, warm_blob_box(frame, self.w, self.h, self.mask), self.recent_motion())
+
+    def _block_means(self, frame):
+        """Mean brightness of each search block (every 2nd pixel and row)."""
+        C, R, w = self.SEARCH_COLS, self.SEARCH_ROWS, self.w
+        bw, bh = w // C, self.h // R
+        out = []
+        for r in range(R):
+            rows = range(r * bh, (r + 1) * bh, 2)
+            sums = [0] * C
+            for y in rows:
+                base = y * w
+                for c in range(C):
+                    sums[c] += sum(frame[base + c * bw: base + (c + 1) * bw: 2])
+            per = len(rows) * len(range(0, bw, 2))
+            out.extend(v / per for v in sums)
+        return out
+
+    def breath_search(self, compute_resp_rate):
+        """Breathing wherever the head is, for when it is not where the boxes
+        were drawn: the block of the thermal view whose brightness, against
+        the eight blocks around it (which cancels the palette re-ranging, as
+        the ring does for the nostril box), rises and falls at a breathing
+        pace. Only warm blocks (the horse, in the white-hot palette), away
+        from the camera's painted text. The best few go through the same
+        checks as the nostril box (breath_analysis: a 30 s still stretch, the
+        rate cross-checked by counting breaths). Its result with the block as
+        `box` (0–10000), or None."""
+        C, R, n = self.SEARCH_COLS, self.SEARCH_ROWS, len(self.blocks)
+        if n < self.fs * 30:
+            return None
+        k = C * R
+        means = [sum(f[i] for f in self.blocks) / n for i in range(k)]
+        warm = sorted(means)[k // 2]
+        bw, bh = self.w / C, self.h / R
+        ring = lambda i: (i - C - 1, i - C, i - C + 1, i - 1, i + 1, i + C - 1, i + C, i + C + 1)
+        quick, qfs = self.blocks[::2], self.fs / 2           # the first look at half the frame rate
+        scored = []
+        for r in range(1, R - 1):
+            for c in range(1, C - 1):
+                i = r * C + c
+                if means[i] < warm or overlay((c + 0.5) * bw, (r + 0.5) * bh, self.w, self.h):
+                    continue
+                sig = [f[i] - sum(f[j] for j in ring(i)) / 8 for f in quick]
+                f_hz, strength = periodicity(_fast_highpass(sig, qfs, 12), qfs, *self.SEARCH_BAND)
+                if f_hz:
+                    scored.append((strength, i))
+        glob = [sum(f) / k for f in self.blocks]
+        best = None
+        for _, i in sorted(scored, reverse=True)[:self.SEARCH_TOP]:
+            ref = [sum(f[j] for j in ring(i)) / 8 for f in self.blocks]
+            sig = [f[i] - rv for f, rv in zip(self.blocks, ref)]
+            res = breath_analysis(sig, self.fs, compute_resp_rate, bad_samples(ref, glob, self.fs))
+            if res.get("bpm") and (best is None or res["strength"] > best["strength"]):
+                c, r = i % C, i // C
+                best = dict(res, box={"x0": round(c * 10000 / C), "y0": round(r * 10000 / R),
+                                      "x1": round((c + 1) * 10000 / C), "y1": round((r + 1) * 10000 / R)})
+        return best
 
     def recent_motion(self, seconds=2):
         k = int(self.fs * seconds)
@@ -336,6 +409,8 @@ class WindowAnalyzer:
             br = breath_analysis(sig, self.fs, compute_resp_rate, bad)
             br["swing"] = max(sig) - min(sig)
             out["breathing"] = br
+        if self.mode == "thermal" and not (out.get("breathing") or {}).get("bpm"):
+            out["breathing_search"] = self.breath_search(compute_resp_rate)
         if len(self.flank) >= self.fs * 30:
             out["flank_breathing"] = breath_analysis(self.flank, self.fs, compute_resp_rate)
         if self.posture is not None:
@@ -441,7 +516,7 @@ class VideoStream(threading.Thread):
             cred = f"{urllib.parse.quote(self.username)}:{urllib.parse.quote(self.password)}"
             url = f"rtsp://{cred}@127.0.0.1:{port}{self.path}"
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "8000000",
-                   "-i", url, "-vf", f"fps={FPS},scale={self.w}:{self.h},format=gray", "-f", "rawvideo", "pipe:1"]
+                   "-i", url, "-map", "0:v:0", "-an", "-vf", f"fps={FPS},scale={self.w}:{self.h},format=gray", "-f", "rawvideo", "pipe:1"]
             try:
                 self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             except FileNotFoundError:

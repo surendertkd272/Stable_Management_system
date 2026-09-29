@@ -56,6 +56,9 @@ export const METRICS = {
   // rate was found, 0 not; meta.nostril / meta.flank say why (BREATHING_WHY).
   // A diagnostic — never a vital sign, never in coverage or alerts.
   breathing_check:      { point: 4,  label: "Breathing check",      unit: "0/1",   source: "thermal_video",  kind: "diagnostic" },
+  // The same for the eye temperature: value 1 an eye was read, 0 not;
+  // meta.detail says how or why not, meta.where (0–10000) where it was found.
+  eye_check:            { point: 2,  label: "Eye check",            unit: "0/1",   source: "thermal_camera", kind: "diagnostic" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },
 };

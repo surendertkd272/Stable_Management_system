@@ -880,7 +880,11 @@ export function vitalsForHorse(rd) {
     // >= for the same last-write-wins reason as latest()
     if (!out[r.metric] || r.ts >= out[r.metric].ts)
       out[r.metric] = { value: r.value, unit: r.unit, ts: r.ts, source: r.source, confidence: r.confidence,
-                        calibrated: !uncalibrated(r), ...(r.metric === "breathing_check" ? { detail: r.meta?.detail ?? null } : {}) };
+                        calibrated: !uncalibrated(r),
+                        ...(r.metric === "breathing_check" || r.metric === "eye_check" ? { detail: r.meta?.detail ?? null } : {}),
+                        // Where in the thermal view (0–10000) the eye / the breathing was found, for the Live view.
+                        ...(r.meta?.where ? { where: r.meta.where } : {}), ...(r.meta?.box ? { box: r.meta.box } : {}),
+                        ...(r.meta?.method ? { method: r.meta.method } : {}) };
   }
   return out;
 }

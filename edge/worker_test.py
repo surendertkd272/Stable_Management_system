@@ -200,6 +200,11 @@ check("behaviourStream thermal: activity from the thermal stream", act and act[0
 w, got = make_worker("visible", eye_in_box=False)
 run_window(w, lambda: feed(w.vanalyzer, [bytes(150 for _ in range(W * H))] * 300))
 temp = [r for r in got if r["metric"] == "body_temp_c"]
+ec = [r for r in got if r["metric"] == "eye_check"]
+check("eye found elsewhere: the eye check says so and where (for the Live view)",
+      ec and ec[0]["value"] == 1 and "anywhere in view" in ec[0]["meta"]["detail"]
+      and 0 <= ec[0]["meta"]["where"]["x"] <= 10000 and 0 <= ec[0]["meta"]["where"]["y"] <= 10000, ec)
+check("... the temperature reading carries the same place", temp and temp[0]["meta"].get("where") == ec[0]["meta"]["where"], temp)
 check("eye box missed: temperature from the head found elsewhere in view",
       temp and abs(temp[0]["value"] - 36.7) < 0.01 and "anywhere in view" in temp[0]["meta"]["method"], temp)
 check("... reported with lower confidence than a boxed eye", temp and temp[0]["confidence"] < 0.95, temp)
@@ -211,6 +216,8 @@ w, got = make_worker("visible", coat=True)
 run_window(w, lambda: feed(w.vanalyzer, weave_frames()))
 metrics = {r["metric"] for r in got}
 check("horse facing away (warm coat, no eye): no body temperature from the coat", "body_temp_c" not in metrics, metrics)
+ec = [r for r in got if r["metric"] == "eye_check"]
+check("... and the eye check says why, with no place", ec and ec[0]["value"] == 0 and ec[0]["meta"]["detail"] and "where" not in ec[0]["meta"], ec)
 check("... no nostril temperature either", "nostril_temp_c" not in metrics, metrics)
 check("... behaviour still reported", "activity_index" in metrics, metrics)
 w, got = make_worker("visible", eye_in_box=False, lamp=True)

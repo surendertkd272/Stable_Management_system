@@ -985,6 +985,15 @@ BREATHING_WHY = {
 }
 
 
+def _warmest(vals, pts):
+    """The point (0–10000, rounded) of the warmest read, or None."""
+    best = max(((v, i) for i, v in enumerate(vals) if v is not None), default=None)
+    if best is None:
+        return None
+    p = pts[best[1]]
+    return {"x": int(round(p["x"])), "y": int(round(p["y"]))}
+
+
 def breathing_why(video_ok, head_in_view, has_eye_box, in_boxes, nostril_res, vis_ok, flank_res):
     """(nostril reason, flank reason), each a BREATHING_WHY key."""
     def of(res):
@@ -1190,7 +1199,8 @@ class MtrpcCameraWorker(CameraWorker):
         """An eye anywhere in the thermal view: a coarse 16×12 scan of pixel
         reads for warm points on a head, then a close 7×7 look around each of
         the three warmest; the first that is eye-shaped (behaviour.eye_spot)
-        wins. (°C, None), or (None, why not)."""
+        wins. (°C, None, where), or (None, why not, None); where is the
+        warmest read of that eye, 0–10000, for the Live view."""
         from behaviour import eye_spot, hotspot_candidates  # noqa
         from mtrpc import to_cam, clamp_cam  # noqa
         cols, rows = 16, 12
@@ -1198,17 +1208,19 @@ class MtrpcCameraWorker(CameraWorker):
                for j in range(rows) for i in range(cols)]
         cands = hotspot_candidates(self.cam.read_pixels(pts), cols, rows, 3)
         if not cands:
-            return None, "no eye-warm point on a head in the thermal view"
+            return None, "no eye-warm point on a head in the thermal view", None
         why = None
         hw, hh = 10000 / cols, 10000 / rows
         for c, r, _ in cands:
             cx, cy = (c + 0.5) * hw, (r + 0.5) * hh
             fine = [{"x": clamp_cam(to_cam(cx - hw + 2 * hw * i / 6)), "y": clamp_cam(to_cam(cy - hh + 2 * hh * j / 6))}
                     for j in range(7) for i in range(7)]
-            eye, why = eye_spot(self.cam.read_pixels(fine), 7, 7)
+            vals = self.cam.read_pixels(fine)
+            eye, why = eye_spot(vals, 7, 7)
             if eye is not None:
-                return eye, None
-        return None, why
+                return eye, None, _warmest(vals, [{"x": cx - hw + 2 * hw * i / 6, "y": cy - hh + 2 * hh * j / 6}
+                                                  for j in range(7) for i in range(7)])
+        return None, why, None
 
     def _note_eye(self, why):
         """Log once when the eye goes out of view (and why), and when it is back."""
@@ -1300,17 +1312,22 @@ class MtrpcCameraWorker(CameraWorker):
             self._save_posture()
         # The eye, if it is in view: eye-shaped, not just warm (see behaviour.eye_spot).
         from behaviour import eye_spot  # noqa
-        eye, eye_why, eye_method, box_peak, eye_at = None, "no eye box drawn", None, None, None
+        eye, eye_why, eye_method, box_peak, eye_at, eye_where = None, "no eye box drawn", None, None, None, None
         if rois.get("eye") and "x0" in rois["eye"]:
             vals, cols, rows = self.cam.box_grid(rois["eye"])
             eye, eye_why = eye_spot(vals, cols, rows)
             eye_method, eye_at = "eye box, eye-shaped hot spot", time.time()
             box_peak = max((v for v in vals if v is not None), default=None)
+            if eye is not None:
+                b = rois["eye"]
+                eye_where = _warmest(vals, [{"x": b["x0"] + (b["x1"] - b["x0"]) * i / max(1, cols - 1),
+                                             "y": b["y0"] + (b["y1"] - b["y0"]) * j / max(1, rows - 1)}
+                                            for j in range(rows) for i in range(cols)])
         in_boxes = eye is not None                           # the head is where the boxes were drawn
         if eye is None:
             # The head is not in the eye box: look for the eye anywhere in the
             # thermal view (one camera, aimed where the head spends most time).
-            eye, why = self._auto_eye()
+            eye, why, eye_where = self._auto_eye()
             eye_method, eye_at = "eye-shaped hot spot, found anywhere in view (eye box missed)", time.time()
             eye_why = None if eye is not None else f"eye box: {eye_why}; rest of the view: {why}"
         self._note_eye(eye_why if eye is None else None)
@@ -1346,9 +1363,14 @@ class MtrpcCameraWorker(CameraWorker):
         if head_in_view:                                     # vitals only when the head is in the thermal view
             if eye is not None:
                 add("body_temp_c", eye, "°C", conf=(0.95 if eye_method.startswith("eye box") else 0.7) if calibrated else 0.3,
-                    method=eye_method, readAt=round(eye_at, 1), **vit)      # when the eye was read: a report's photo comes from then
+                    method=eye_method, readAt=round(eye_at, 1), where=eye_where, **vit)   # when the eye was read: a report's photo comes from then
             if nostril_c is not None and in_boxes:          # the nostril box is on the nostril only when the eye box is on the eye
                 add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
+        # Why the eye was (not) read this minute, and where it was found — the
+        # Live view shows it, so a missing temperature says why, not just "old".
+        add("eye_check", 1 if eye is not None and head_in_view else 0, "0/1", conf=1.0,
+            detail=eye_method if eye is not None and head_in_view else (eye_why or "head not in the thermal view"),
+            **({"where": eye_where} if eye is not None and eye_where else {}))
         br = summary.get("breathing") or {} if head_in_view else {}
         fl = vsummary.get("flank_breathing") or {}
         pick, method = None, None
@@ -1361,9 +1383,17 @@ class MtrpcCameraWorker(CameraWorker):
             pick, method = br, "thermal video, nostril box"
         elif fl.get("bpm"):
             pick, method = fl, "colour video, flank movement"
+        bs = (summary.get("breathing_search") or {}) if head_in_view else {}
+        if pick is br and br:
+            pick = dict(br, box=rois.get("nostril"))
+        elif not pick and bs.get("bpm"):
+            # The head was not where the boxes were drawn: breathing found by
+            # searching the whole thermal view. Said so, with less confidence.
+            pick, method = bs, "thermal video, breathing found by search (head not in the boxes)"
         if pick:
-            conf = min(0.95, pick["strength"]) if calibrated else 0.3
+            conf = min(0.8 if pick is bs else 0.95, pick["strength"]) if calibrated else 0.3
             add("respiratory_rate_bpm", pick["bpm"], "bpm", conf=conf, method=method,
+                **({"box": pick["box"]} if pick.get("box") else {}),
                 regularity=None if pick.get("regularity") is None else round(pick["regularity"], 2),
                 intervalCv=None if pick.get("intervalCv") is None else round(pick["intervalCv"], 3),
                 band=pick.get("band"), seconds=pick.get("seconds"), **vit)
@@ -1381,6 +1411,7 @@ class MtrpcCameraWorker(CameraWorker):
         add("breathing_check", 1 if pick else 0, "0/1", source="thermal_video", conf=1.0,
             reason="measured" if pick else nostril, nostril=nostril, flank=flank,
             detail=f"{method}" if pick else BREATHING_WHY[nostril],
+            **({"box": pick["box"]} if pick and pick.get("box") else {}),
             stillS=(summary.get("breathing") or {}).get("seconds"))
         # Behaviour — prototype heuristics, reported as such.
         bstream = self.behaviour_stream()
