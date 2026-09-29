@@ -33,7 +33,7 @@ test("an hour: every section from the numbers, photos where the eye was read, no
   assert.match(html, /14:30–15:30 IST/);
   assert.match(html, /Temperature stable/);
   assert.match(html, /20 min high, 20 min moderate and 0 min low activity; 20 min standing still/);
-  assert.match(html, /Not captured<\/span><\/td><td class="pt-note">The stall floor is not marked/);
+  assert.match(html, /Not captured<\/span><\/td><td class="pt-note">The stall floor was not in view/);
   assert.match(html, /Notes from the stable/);
   assert.ok(html.includes("&lt;script&gt;alert(1)&lt;/script&gt;") && !html.includes("<script>alert(1)"), "notes are escaped");
   assert.doesNotMatch(html, /prototype|ears forward|investigat|Badal|RVC|BSV/i);
@@ -92,7 +92,7 @@ test("an unknown time zone falls back to the server's", () => {
 test("breathing not captured: the main reason, in plain words", async () => {
   const checks = Array.from({ length: 40 }, (_, m) => R("breathing_check", 0, m, { nostril: m < 30 ? "head_off_boxes" : "head_moving" }, "thermal_video"));
   const { html } = await clientReport({ horse, readings: hourOf({ extra: checks }), from, to: from + hour, tz: "UTC" });
-  assert.match(html, /head was in view but away from the position the camera was set up for/);
+  assert.match(html, /the head was not in position for breathing to be read at the nostril/);
   assert.match(html, /<dt>Readings<\/dt><dd>(\d+)<\/dd>/);
   const n = Number(html.match(/<dt>Readings<\/dt><dd>(\d+)<\/dd>/)[1]);
   assert.equal(n, hourOf().length, "the checks are not counted as readings");
@@ -101,7 +101,7 @@ test("breathing not captured: the main reason, in plain words", async () => {
 test("a paused stretch is left out: its readings, its minutes in coverage, and the summary says so", async () => {
   const { html } = await clientReport({ horse, readings: hourOf(), from, to: from + hour, floorWatched: false, tz: "Asia/Kolkata",
     paused: [[from + 20 * 60000, from + 40 * 60000]] });
-  assert.match(html, /monitored for 40 minutes \(the session was paused 14:50–15:10 to adjust the camera; that time is not counted\)/);
+  assert.match(html, /monitored for 40 minutes \(the session was paused 14:50–15:10; that time is not counted\)/);
   assert.match(html, /40 of 40 minutes/, "coverage counts the monitored minutes only");
   assert.match(html, /class="paused"/, "the timeline marks the pause");
   assert.ok(clean(html));
@@ -132,4 +132,11 @@ test("recommendations are about the horse: no equipment instructions", async () 
   const recs = html.slice(html.indexOf("Recommendations"), html.indexOf("About this report"));
   assert.match(recs, /Run longer sessions/);
   assert.doesNotMatch(recs, /camera|lens|thermal view|mark the stall floor/i);
+});
+
+test("the whole report reads without equipment: no camera or sensor anywhere a reader sees", async () => {
+  const { html } = await clientReport({ horse, readings: hourOf(), from, to: from + hour, floorWatched: false, tz: "Asia/Kolkata", grab, grabThermal: grab,
+    paused: [[from + 20 * 60000, from + 30 * 60000]] });
+  const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, " ").replace(/src="data:[^"]+"/g, "").replace(/<[^>]+>/g, " ");
+  assert.doesNotMatch(text, /camera|sensor|lens\b|water meter|feeder/i);
 });
