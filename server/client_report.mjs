@@ -54,12 +54,11 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // (e.g. to adjust the camera). Their readings are left out, and coverage and
 // duration count only the monitored minutes; the timeline marks them.
 // grabThermal: like grab, for the thermal picture at the same second — each
-// photo then shows colour and thermal side by side.
-// setup: this session's camera in words; previous: { summary, setup } of an
-// earlier session (its report's `summary`), for a comparison page; changes:
-// what was changed between the two sessions, one line each.
+// photo then shows colour and thermal side by side. previous: { summary } of
+// an earlier session (its report's `summary`), for a page comparing the horse
+// across the two sessions.
 export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
-  grabThermal = null, setup = "", previous = null, changes = [], clipCount = 0, now = Date.now() }) {
+  grabThermal = null, previous = null, clipCount = 0, now = Date.now() }) {
   tz = safeTimeZone(tz);
   const minutes = Math.max(1, Math.round((to - from) / 60000));
   const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
@@ -419,8 +418,6 @@ ${grid}${bandsSvg}${tk}${bars}${line}
   const foot = (n) => `<div class="pfoot"><span>EquiCare · ${esc(name)} · Ref. ${ref}</span><span>Page ${n} of ${pages}</span></div>`;
   const rangeEnd = to > now ? now : to;
   // ---- this session in numbers (for a later session's comparison) ------------- //
-  const eyeChecks = of("eye_check");
-  const boxHottest = eyeChecks.map((r) => /hottest ([\d.]+) °C, an eye reads/.exec(r.meta?.detail || "")).filter(Boolean).map((x) => Number(x[1]));
   const summary = {
     date: T({ day: "numeric", month: "short", year: "numeric" }).format(from), times: `${clock(from)}–${clock(to)}`,
     minutes: liveMin, pausedMin, pauseText, coverage: anyMin.size,
@@ -430,8 +427,6 @@ ${grid}${bandsSvg}${tk}${bars}${line}
     vices: viceNames, floor: floorOk && floorWatched === true ? { urination: floorEv.urination.length, excretion: floorEv.excretion.length } : null,
     points: points.slice(0, 8).filter((x) => x[2] !== S.no).map((x) => x[0]),
     pointNames: Object.fromEntries(points.slice(0, 8).map((x) => [x[0], x[1]])),
-    eyeTooHot: eyeChecks.length ? { checks: eyeChecks.length, hot: boxHottest.filter((v) => v > 41).length, max: boxHottest.length ? Math.max(...boxHottest) : null } : null,
-    topBreathWhy: topWhy, setup,
   };
   const pages = previous ? 6 : 5;
   const pic = (x, alt) => (x.thermal
@@ -439,53 +434,57 @@ ${grid}${bandsSvg}${tk}${bars}${line}
     : `<img src="${x.img}" alt="${alt}">`);
   const paired = covers.some((c) => c.thermal) || gallery.some((g) => g.thermal);
 
-  // ---- comparison with the previous session ------------------------------------ //
+  // ---- comparison with the previous session: the horse, not the equipment ------- //
+  // For the owner or a prospective client: how the horse was in each session,
+  // from each one's own measurements, with shares of the time (the sessions
+  // can differ in length) and the time of day as context.
   function comparison() {
     const a = previous.summary, b = summary;
-    const durOf = (x) => `${plural(x.minutes, "minute")}${x.pausedMin ? ` (paused ${x.pauseText})` : ""}`;
-    const pct = (x) => Math.round((x.coverage / Math.max(1, x.minutes)) * 100);
-    const eyeT = (x) => (x.eye.n ? `${f1(x.eye.median)} °C median (${f1(x.eye.lo)}–${f1(x.eye.hi)} °C), ${plural(x.eye.n, "reading")}` : "Not captured");
-    const respT = (x) => (x.resp.n ? `${f1(x.resp.median)} /min` : "Not captured");
-    const mixT = (x) => (x.activity ? `${x.activity.high} high · ${x.activity.moderate} moderate · ${x.activity.low} low · ${x.activity.none} none` : "—");
-    const viceT = (x) => (x.activity ? (x.vices.length ? x.vices.join(", ") : "None") : "—");
-    const floorT = (x) => (x.floor ? `Watched: ${x.floor.urination} urination, ${x.floor.excretion} manure seen` : "Not measured (floor not in view)");
+    const share = (n, of) => Math.round((n / Math.max(1, of)) * 100);
+    const measured = (x) => (x.activity ? x.activity.high + x.activity.moderate + x.activity.low + x.activity.none : 0);
+    const mix = (x) => (x.activity ? `${share(x.activity.high, measured(x))}% high · ${share(x.activity.moderate, measured(x))}% moderate · ${share(x.activity.low, measured(x))}% low · ${share(x.activity.none, measured(x))}% none` : "—");
+    const eyeT = (x) => (x.eye.n ? `${f1(x.eye.median)} °C median (${f1(x.eye.lo)}–${f1(x.eye.hi)} °C)` : "Not captured");
+    const floorT = (x) => (x.floor ? (x.floor.urination || x.floor.excretion ? `${x.floor.urination} urination, ${x.floor.excretion} manure` : "None seen") : "Not assessed");
     const rows = [
       ["Session", `${a.date} · ${a.times}`, `${b.date} · ${b.times}`],
-      ["Monitored", durOf(a), durOf(b)],
-      ["Camera", a.setup || previous.setup || "—", b.setup || "—"],
-      ["Monitoring coverage", `${pct(a)}% (${a.coverage} of ${a.minutes} min)`, `${pct(b)}% (${b.coverage} of ${b.minutes} min)`],
-      ["Eye temperature", eyeT(a), eyeT(b)],
-      ["Eye in view", `${a.eye.minutes} min`, `${b.eye.minutes} min`],
-      ["Respiratory rate", respT(a), respT(b)],
+      ["Monitored", plural(a.minutes, "minute"), plural(b.minutes, "minute")],
+      ["Eye-surface temperature", eyeT(a), eyeT(b)],
+      ["Respiratory rate", a.resp.n ? `${f1(a.resp.median)} /min` : "Not captured", b.resp.n ? `${f1(b.resp.median)} /min` : "Not captured"],
       ["Activity (median, 0–1)", a.activity ? f2(a.activity.median) : "—", b.activity ? f2(b.activity.median) : "—"],
-      ["Activity mix (minutes)", mixT(a), mixT(b)],
-      ["Standing rest", `${a.still} min in ${plural(a.spells, "spell")}`, `${b.still} min in ${plural(b.spells, "spell")}`],
-      ["Stable vices", viceT(a), viceT(b)],
-      ["Urination / excretion", floorT(a), floorT(b)],
-      ["Camera points captured (1–8)", `${a.points.length} of 8`, `${b.points.length} of 8`],
+      ["Time by activity level", mix(a), mix(b)],
+      ["Standing rest", `${share(a.still, a.minutes)}% of the time (${a.still} min, ${plural(a.spells, "spell")})`, `${share(b.still, b.minutes)}% of the time (${b.still} min, ${plural(b.spells, "spell")})`],
+      ["Stable vices", a.activity ? (a.vices.length ? a.vices.join(", ") : "None") : "—", b.activity ? (b.vices.length ? b.vices.join(", ") : "None") : "—"],
+      ["Urination / manure", floorT(a), floorT(b)],
     ];
-    const better = [], watch = [];
-    for (const n of b.points) if (!a.points.includes(n))
-      better.push(`<b>${esc(b.pointNames[n])}</b> is now captured${n === 7 || n === 8 ? ": the wider view includes the bedding" : ""}.`);
-    if (pct(b) >= pct(a) + 5) better.push(`<b>Monitoring coverage</b> rose from ${pct(a)}% to ${pct(b)}% of the monitored minutes.`);
-    if (pct(b) <= pct(a) - 5) watch.push(`<b>Monitoring coverage</b> fell from ${pct(a)}% to ${pct(b)}% of the monitored minutes.`);
-    for (const n of a.points) if (!b.points.includes(n)) watch.push(`<b>${esc(a.pointNames[n])}</b> was captured last time but not in this session.`);
-    const hot = b.eyeTooHot;
-    if (!b.eye.n && hot && hot.hot >= Math.max(1, 0.6 * hot.checks))
-      watch.push(`<b>Keep the camera out of direct sun.</b> In ${hot.hot} of ${hot.checks} checks the thermal view read above 41 °C${hot.max ? ` (up to ${Math.round(hot.max)} °C)` : ""}, hotter than a living eye, so no eye temperature could be taken.`);
-    if (!b.resp.n && ["head_off_boxes", "head_out_of_view"].includes(b.topBreathWhy))
-      watch.push(`<b>Aim the thermal view where ${esc(name)}'s head rests</b> (door or hay): in most minutes the head was away from it, so breathing could not be read.`);
-    if (a.activity && b.activity && Math.abs(a.activity.median - b.activity.median) >= 0.05)
-      watch.push(`<b>Activity</b> was ${b.activity.median < a.activity.median ? "lower" : "higher"} than last time (median ${f2(a.activity.median)} → ${f2(b.activity.median)}); the sessions were at different times of day, and activity varies through the day.`);
-    const list = (xs, none) => (xs.length ? `<ul class="clist">${xs.map((x) => `<li>${x}</li>`).join("")}</ul>` : `<p class="sub">${none}</p>`);
+    const seen = [];
+    if (a.activity && b.activity) {
+      const d = b.activity.median - a.activity.median;
+      const hiA = share(a.activity.high, measured(a)), hiB = share(b.activity.high, measured(b));
+      seen.push(Math.abs(d) < 0.05
+        ? `<b>Activity</b> was much the same as on ${esc(a.date)} (median ${f2(b.activity.median)} against ${f2(a.activity.median)}).`
+        : `<b>${esc(name)} was ${d < 0 ? "calmer" : "more active"}</b> than on ${esc(a.date)}: median activity ${f2(b.activity.median)} against ${f2(a.activity.median)}, with high activity ${hiB}% of the time against ${hiA}%.`);
+    }
+    seen.push(`<b>Standing rest</b> took ${share(b.still, b.minutes)}% of the session against ${share(a.still, a.minutes)}% last time (${plural(b.spells, "spell")} against ${a.spells}).`);
+    const vA = a.vices.length, vB = b.vices.length;
+    seen.push(!vA && !vB ? "<b>No stereotypic behaviour</b> in either session: no weaving, box walking or head tossing."
+      : `<b>Stable vices</b>: ${vA ? esc(a.vices.join(", ")) : "none"} on ${esc(a.date)}, ${vB ? esc(b.vices.join(", ")) : "none"} this session.`);
+    if (a.eye.n && b.eye.n) {
+      const d = b.eye.median - a.eye.median;
+      seen.push(`<b>Eye-surface temperature</b> was ${Math.abs(d) < 0.3 ? "steady" : d > 0 ? `${f1(d)} °C higher` : `${f1(-d)} °C lower`} (median ${f1(b.eye.median)} °C against ${f1(a.eye.median)} °C).`);
+    } else if (a.eye.n || b.eye.n) {
+      const had = a.eye.n ? a : b, not = a.eye.n ? b : a;
+      seen.push(`<b>Eye-surface temperature</b> was read on ${esc(had.date)} (${f1(had.eye.median)} °C median) but not on ${esc(not.date)}, so it cannot be compared this time.`);
+    }
+    if (b.floor && !a.floor) seen.push(`<b>Urination and manure</b>: ${b.floor.urination || b.floor.excretion ? `${b.floor.urination} urination and ${b.floor.excretion} manure seen` : "none seen"} this session; not assessed on ${esc(a.date)}.`);
+    const context = `The sessions were at different times of day (${esc(a.times.split("–")[0])} and ${esc(b.times.split("–")[0])}) and of different length (${a.minutes} and ${b.minutes} minutes). Horses' activity and rest change through the day, so a difference between two short sessions describes those sessions rather than a trend; a trend needs a few days of monitoring.`;
     return `<div class="page">
-<section class="card"><div class="sh"><span class="n">11</span><h2>Comparison with the previous session</h2></div><p class="sub">This session against ${esc(a.date)}, ${esc(a.times)}, each from its own measurements.</p>
-<table class="cmp" style="margin-top:10px"><thead><tr><th>Measure</th><th>Previous · ${esc(a.date)}</th><th>This session · ${esc(b.date)}</th></tr></thead><tbody>
+<section class="card"><div class="sh"><span class="n">11</span><h2>${esc(name)} across sessions</h2></div><p class="sub">This session compared with ${esc(a.date)}, each from its own measurements. Shares are of the monitored time, as the sessions differ in length.</p>
+<table class="cmp" style="margin-top:10px"><thead><tr><th>Measure</th><th>${esc(a.date)}</th><th>${esc(b.date)} · this session</th></tr></thead><tbody>
 ${rows.map(([k, x, y]) => `<tr><td><b>${esc(k)}</b></td><td>${esc(x)}</td><td>${esc(y)}</td></tr>`).join("")}
 </tbody></table></section>
-<section class="card"><div class="sh"><span class="n">12</span><h2>What changed, and what it did</h2></div>
-<div class="obs"><div><h3>Changes between the sessions</h3>${list(changes.map(esc), "No changes recorded.")}</div>
-<div><h3>Improved</h3>${list(better, "Nothing measured better than last time.")}<h3 style="margin-top:14px">Needs attention</h3>${list(watch, "Nothing measured worse than last time.")}</div></div></section>
+<section class="card"><div class="sh"><span class="n">12</span><h2>What the comparison shows</h2></div>
+<ul class="clist">${seen.map((x) => `<li>${x}</li>`).join("")}</ul>
+<div class="note" style="margin-top:12px"><b>Context</b>${context}</div></section>
 ${foot(6)}</div>`;
   }
 

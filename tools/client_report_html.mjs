@@ -8,7 +8,7 @@
 //        [--colour-crop "0.46,0.09,0.87,0.91"]   (colour photos zoomed on the horse's stall, 0..1 of the picture)
 //        [--no-thermal]                         (colour photos only; by default each photo pairs colour and thermal)
 //        [--compare-from <ISO> --compare-minutes 60 | --compare-to <ISO>] [--compare-away …] [--compare-paused …]
-//        [--changes-file changes.txt]           (a comparison page with an earlier session; one change per line)
+//                                               (a page comparing the horse with an earlier session)
 //        [--away "16:40-16:59,…"]   (sessions recorded before the eye-shape check,
 //                                    28 Sep 2026: periods the horse faced away)
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, mkdtempSync, statSync } from "node:fs";
@@ -17,7 +17,6 @@ import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { clientReport, safeTimeZone } from "../server/client_report.mjs";
 import { frameGrabber, listClips } from "../server/footage.mjs";
-import { thermalFootprint } from "../server/hardware-spec.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
 const flag = (k) => process.argv.includes(`--${k}`);
@@ -44,12 +43,6 @@ const camsFor = (a, b) => {
   return { cs, cam: cs[0] || devices.find((d) => d.kind === "thermal_camera" && d.stall === horse.stall) || null };
 };
 const floorOf = (cs, c) => (cs.length ? cs.some((d) => d.rois?.floor || d.rois?.colourFloor) : c ? Boolean(c.rois?.floor || c.rois?.colourFloor) : null);
-// The camera in words, from its record.
-const setupOf = (d) => {
-  if (!d) return "";
-  const fp = thermalFootprint(d.variant, d.thermalLens, d.distanceM);
-  return `${d.identity?.model || "Thermal camera"}, ${d.thermalLens} mm thermal lens${fp ? ` (view about ${fp.widthM.toFixed(1)} × ${fp.heightM.toFixed(1)} m at ${d.distanceM} m)` : ""}`;
-};
 const { cs: cams, cam } = camsFor(from, to);
 const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
 
@@ -77,15 +70,14 @@ if (arg("compare-from")) {
   const pTo = arg("compare-to") ? Date.parse(arg("compare-to")) : pFrom + Number(arg("compare-minutes", 60)) * 60000;
   const { cs: pCams, cam: pCam } = camsFor(pFrom, pTo);
   const prev = await clientReport({ horse, readings, from: pFrom, to: pTo, tz, away: windows(arg("compare-away"), pFrom, 59999),
-    paused: windows(arg("compare-paused"), pFrom), floorWatched: floorOf(pCams, pCam), setup: setupOf(pCam) });
+    paused: windows(arg("compare-paused"), pFrom), floorWatched: floorOf(pCams, pCam) });
   previous = { summary: prev.summary };
 }
-const changes = arg("changes-file") ? readFileSync(arg("changes-file"), "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
 const crop = arg("colour-crop") ? arg("colour-crop").split(",").map(Number) : null;
 const notes = arg("notes-file") ? readFileSync(arg("notes-file"), "utf8") : arg("notes", "");
 
 const { html, ref, photos } = await clientReport({
-  horse, readings, from, to, tz, notes, away, paused, previous, changes, setup: setupOf(cam),
+  horse, readings, from, to, tz, notes, away, paused, previous,
   floorWatched: floorOf(cams, cam),
   grab: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
   grabThermal: cam && clips.length && !flag("no-thermal") ? frameGrabber(cam.id, "thermal", undefined, { lift: true }) : null,
