@@ -58,6 +58,15 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   die "the demo is already running (pid $(cat "$PIDFILE"), $(cat "$HOME_DIR/demo.url" 2>/dev/null)). Stop it with Ctrl-C in its window, or: kill $(cat "$PIDFILE")"
 fi
 busy() { lsof -tiTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+# The demo's own server left over from an earlier run (the script itself was
+# stopped hard): take its port back, rather than moving to another port and
+# leaving the open browser tab on a server nothing looks after.
+LEFT="$(cat "$HOME_DIR/server.pid" 2>/dev/null)"
+if [ -n "$LEFT" ] && lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | grep -qx "$LEFT"; then
+  say "stopping the demo's server left over from an earlier run (pid $LEFT)"
+  kill "$LEFT" 2>/dev/null
+  for _ in $(seq 1 20); do busy "$PORT" || break; sleep 0.5; done
+fi
 if busy "$PORT"; then
   # Something else has the port (an editor's dev server keeps taking 8080):
   # use the next free one, unless a port was asked for.
@@ -103,10 +112,25 @@ else
 fi
 
 # ---- server ---------------------------------------------------------------
+# Each part is started by a function so the watch loop at the end can start it
+# again. Logs are appended within a run; the previous run's are kept as *.prev.
+for f in server edge archive; do [ -f "$LOGS/$f.log" ] && mv -f "$LOGS/$f.log" "$LOGS/$f.prev.log"; done
+start_server() {
+  EQUICARE_DATA_DIR="$DATA" NEXT_TELEMETRY_DISABLED=1 PORT="$PORT" HOST=127.0.0.1 \
+    npm start >> "$LOGS/server.log" 2>&1 &
+  SERVER=$!
+}
+server_ready() {
+  for _ in $(seq 1 60); do
+    if curl -s -o /dev/null "$URL/api/health"; then
+      lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 > "$HOME_DIR/server.pid"; return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
 say "starting the server on $URL (data: $DATA)"
-EQUICARE_DATA_DIR="$DATA" NEXT_TELEMETRY_DISABLED=1 PORT="$PORT" HOST=127.0.0.1 \
-  npm start > "$LOGS/server.log" 2>&1 &
-SERVER=$!
+start_server
 AGENT=""
 TAIL=""
 ARCHIVE=""
@@ -120,13 +144,12 @@ cleanup() {
   kill "$SERVER" 2>/dev/null
   # Next.js renames its process, so also stop whatever holds the port.
   lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null
-  rm -f "$PIDFILE" "$HOME_DIR/demo.url"
+  rm -f "$PIDFILE" "$HOME_DIR/demo.url" "$HOME_DIR/server.pid"
   exit 0
 }
 trap cleanup INT TERM
 
-for _ in $(seq 1 60); do curl -s -o /dev/null "$URL/api/health" && break; sleep 0.5; done
-curl -s -o /dev/null "$URL/api/health" || { cat "$LOGS/server.log"; die "the server did not start"; }
+server_ready || { cat "$LOGS/server.log"; die "the server did not start"; }
 
 # First boot prints the admin password once. Keep it where the operator can
 # find it again (mode 600, outside the repo).
@@ -174,16 +197,23 @@ if [ -s "$TOKEN_FILE" ]; then
     say "lying-down detection is off (run scripts/demo.sh --setup-detector once to turn it on)"
   fi
   say "starting the edge agent (log: $LOGS/edge.log)"
-  "$PY" -u edge/edge_agent.py --server "$URL" --token "$(cat "$TOKEN_FILE")" --refresh 15 \
-    > "$LOGS/edge.log" 2>&1 &
-  AGENT=$!
 fi
+start_agent() {
+  [ -s "$TOKEN_FILE" ] || return 0
+  "$PY" -u edge/edge_agent.py --server "$URL" --token "$(cat "$TOKEN_FILE")" --refresh 15 \
+    >> "$LOGS/edge.log" 2>&1 &
+  AGENT=$!
+}
+start_agent
 
 # The live store keeps 21 days; every reading is also copied, every 5 minutes,
 # into a permanent research archive ($HOME_DIR/research/readings/*.jsonl).
-python3 -u tools/archive_readings.py --store "$DATA/state.json" --out "$HOME_DIR/research" --every 300 \
-  > "$LOGS/archive.log" 2>&1 &
-ARCHIVE=$!
+start_archive() {
+  python3 -u tools/archive_readings.py --store "$DATA/state.json" --out "$HOME_DIR/research" --every 300 \
+    >> "$LOGS/archive.log" 2>&1 &
+  ARCHIVE=$!
+}
+start_archive
 
 # Keep the Mac awake while the demo runs (a sleeping Mac records nothing).
 # Closing the lid still sleeps it: keep it open and on the charger.
@@ -198,11 +228,41 @@ caffeinate -ims -w $$ &
 WATCH=$!
 say "ready → $URL   (Ctrl-C to stop) — keep the lid open and the charger in; live view: $URL/live"
 say "admin login: $HOME_DIR/admin-password.txt · research archive: $HOME_DIR/research"
-open "$URL/hardware" 2>/dev/null
+if [ -z "${NO_OPEN:-}" ]; then open "$URL/hardware" 2>/dev/null; fi
 # Show the edge agent's problems as they happen; a healthy agent is quiet.
 if [ -n "$AGENT" ]; then
   ( tail -n 0 -F "$LOGS/edge.log" | grep --line-buffered -v "warnings.warn\|NotOpenSSLWarning" ) &
   TAIL=$!
 fi
-wait "$SERVER"
-cleanup
+
+# ---- keep everything running ------------------------------------------------
+# For as long as the demo runs, with no time limit: a part that stops is
+# started again, and so is a server that stops answering for ~30 s.
+restart_server() {
+  kill "$SERVER" 2>/dev/null
+  lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null
+  for _ in $(seq 1 20); do busy "$PORT" || break; sleep 0.5; done
+  busy "$PORT" && lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null
+  start_server
+  if server_ready; then say "the server is back on $URL"; else say "the server did not come back yet — trying again"; fi
+}
+misses=0
+while :; do
+  sleep 10 & wait $!
+  if ! kill -0 "$SERVER" 2>/dev/null; then
+    say "$(date +%H:%M:%S) the server stopped — starting it again (log: $LOGS/server.log)"; restart_server; misses=0
+  elif curl -s -m 10 -o /dev/null "$URL/api/health"; then misses=0
+  elif [ $((misses += 1)) -ge 3 ]; then
+    say "$(date +%H:%M:%S) the server stopped answering — starting it again"; restart_server; misses=0
+  fi
+  if [ -n "$AGENT" ] && ! kill -0 "$AGENT" 2>/dev/null; then
+    say "$(date +%H:%M:%S) the edge agent stopped — starting it again (log: $LOGS/edge.log)"
+    # Its video readers end on their own once it is gone; make sure no
+    # leftover still holds one of the camera's few streams.
+    ps -axo pid=,ppid=,command= | awk '$2 == 1 && /ffmpeg/ && /media\/live/ { print $1 }' | xargs kill 2>/dev/null
+    start_agent
+  fi
+  if ! kill -0 "$ARCHIVE" 2>/dev/null; then
+    say "$(date +%H:%M:%S) the research archive stopped — starting it again"; start_archive
+  fi
+done

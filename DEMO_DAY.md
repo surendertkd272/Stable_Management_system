@@ -102,6 +102,22 @@ token (Hardware → **Add edge box** → copy the token → paste). After that i
 starts with no questions. **Ctrl-C** stops everything. Horses, devices and
 readings persist in `~/EquiCare-demo`.
 
+**For a session that must not stop** (no time limit), run it as a background
+service instead, once the first start above is done:
+
+```bash
+scripts/demo-service.sh start     # keeps running if the terminal, editor or Claude closes
+scripts/demo-service.sh status
+scripts/demo-service.sh stop      # only when the session is over
+```
+
+Either way, while it runs, a part that stops is started again: the server
+within ~15 s (also if it stops answering), the edge agent and the archive
+within ~10 s. As a service, the script itself is restarted too, and it
+comes back after the Mac restarts once you log in. It does not open the
+browser; open `http://127.0.0.1:8080/live`. Its messages are in
+`~/EquiCare-demo/logs/demo-service.log`.
+
 ## Once, before the day
 
 1. Hardware → **Add camera**: as IP address use what `scripts/demo.sh` prints
