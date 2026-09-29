@@ -97,3 +97,12 @@ test("breathing not captured: the main reason, in plain words", async () => {
   const n = Number(html.match(/<dt>Readings<\/dt><dd>(\d+)<\/dd>/)[1]);
   assert.equal(n, hourOf().length, "the checks are not counted as readings");
 });
+
+test("a paused stretch is left out: its readings, its minutes in coverage, and the summary says so", async () => {
+  const { html } = await clientReport({ horse, readings: hourOf(), from, to: from + hour, floorWatched: false, tz: "Asia/Kolkata",
+    paused: [[from + 20 * 60000, from + 40 * 60000]] });
+  assert.match(html, /monitored for 40 minutes \(the session was paused 14:50–15:10 to adjust the camera; that time is not counted\)/);
+  assert.match(html, /40 of 40 minutes/, "coverage counts the monitored minutes only");
+  assert.match(html, /class="paused"/, "the timeline marks the pause");
+  assert.ok(clean(html));
+});

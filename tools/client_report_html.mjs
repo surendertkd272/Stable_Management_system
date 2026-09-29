@@ -4,6 +4,7 @@
 //
 //   node tools/client_report_html.mjs --horse badal --from 2026-09-27T11:05:56Z [--minutes 60 | --to <ISO>]
 //        [--notes "text" | --notes-file notes.txt] [--tz Asia/Kolkata] [--out <dir>] [--pdf]
+//        [--paused "13:21:13-13:41:13"]   (stretches the session was paused: not counted)
 //        [--away "16:40-16:59,…"]   (sessions recorded before the eye-shape check,
 //                                    28 Sep 2026: periods the horse faced away)
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, mkdtempSync, statSync } from "node:fs";
@@ -42,15 +43,17 @@ const offsetAt = (ms) => {
   return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(ms / 1000) * 1000;
 };
 const localMs = (hm) => {
-  const [h, m] = hm.trim().split(":").map(Number);
+  const [h, m, sec = 0] = hm.trim().split(":").map(Number);
   const off = offsetAt(from), day = new Date(from + off);
-  return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), h, m) - off;
+  return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), h, m, sec) - off;
 };
 const away = (arg("away", "") || "").split(",").filter(Boolean).map((w) => { const [a, b] = w.split("-"); return [localMs(a), localMs(b) + 59999]; });
+// --paused "13:21:13-13:41:13,…": stretches the session was paused (not counted).
+const paused = (arg("paused", "") || "").split(",").filter(Boolean).map((w) => { const [a, b] = w.split("-"); return [localMs(a), localMs(b)]; });
 const notes = arg("notes-file") ? readFileSync(arg("notes-file"), "utf8") : arg("notes", "");
 
 const { html, ref, photos } = await clientReport({
-  horse, readings, from, to, tz, notes, away,
+  horse, readings, from, to, tz, notes, away, paused,
   floorWatched: cams.length ? cams.some((d) => d.rois?.floor || d.rois?.colourFloor) : cam ? Boolean(cam.rois?.floor || cam.rois?.colourFloor) : null,
   grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),

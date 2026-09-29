@@ -39,7 +39,10 @@ export function safeTimeZone(tz) {
  *  consecutive windows. Older single-window flags were a horse turning round. */
 const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test(r.meta?.method || "") || (r.meta?.windowMin ?? 0) >= 2;
 
-export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], tz, grab = null, clipCount = 0, now = Date.now() }) {
+// paused: [[fromMs, toMs], …] — stretches of the session that were paused
+// (e.g. to adjust the camera). Their readings are left out, and coverage and
+// duration count only the monitored minutes; the timeline marks them.
+export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null, clipCount = 0, now = Date.now() }) {
   tz = safeTimeZone(tz);
   const minutes = Math.max(1, Math.round((to - from) / 60000));
   const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
@@ -52,7 +55,10 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const name = horse.name || horse.id;
 
   // ---- readings, minute by minute -------------------------------------------- //
-  const rd = readings.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; }).sort((a, b) => a.ts.localeCompare(b.ts));
+  const inPause = (ms) => paused.some(([a, b]) => ms >= a && ms < b);
+  const rd = readings.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to && !inPause(t); }).sort((a, b) => a.ts.localeCompare(b.ts));
+  const pausedMin = Array.from({ length: minutes }, (_, m) => inPause(from + m * 60000 + 30000)).filter(Boolean).length;
+  const liveMin = Math.max(1, minutes - pausedMin);        // the minutes actually monitored
   const of = (m) => rd.filter((r) => r.metric === m);
   const minuteOf = (r) => Math.max(0, Math.min(minutes - 1, Math.floor((Date.parse(r.ts) - from) / 60000)));
   const inAway = (ms) => away.some(([a, b]) => ms >= a && ms <= b);
@@ -116,7 +122,8 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const avgLabel = `${(2 * rollSpan + 1) * bucket}-minute average`;
   const tick = NICE.find((b) => b >= 5 && minutes / b <= 8) ?? 480;
   const block = NICE.find((b) => b >= 10 && minutes / b <= 10) ?? 480;
-  const dur = minutes < 120 ? plural(minutes, "minute") : `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+  const dur = liveMin < 120 ? plural(liveMin, "minute") : `${Math.floor(liveMin / 60)} h${liveMin % 60 ? ` ${liveMin % 60} min` : ""}`;
+  const pauseText = paused.map(([a, b]) => `${clock(a)}–${clock(b)}`).join(", ");
 
   // Temperature trend: first half against second half of the readings.
   let trend = null;
@@ -189,7 +196,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const viceNames = Object.keys(viceKinds);
   const viceShort = !actV.length ? "" : viceNames.length ? `${viceNames.map((k) => k[0].toUpperCase() + k.slice(1)).join(" and ")} ${viceNames.length > 1 ? "were" : "was"} flagged for review on the recording.`
     : "No stereotypic behaviour was detected.";
-  const lead = `${name} was monitored for ${dur}, with camera data in ${Math.round((anyMin.size / minutes) * 100)}% of the session. ${tempShort} ${actShort} ${viceShort}`.trim();
+  const lead = `${name} was monitored for ${dur}${pausedMin ? ` (the session was paused ${pauseText} to adjust the camera; that time is not counted)` : ""}, with camera data in ${Math.round((anyMin.size / liveMin) * 100)}% of the session. ${tempShort} ${actShort} ${viceShort}`.trim();
 
   const findings = [
     ["thermo", eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : "Temperature not captured",
@@ -253,7 +260,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     [1, "Body temperature", eye.length ? S.ok : S.no, eye.length ? `${f1(eyeMed)} °C` : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.` : "Requires the eye in the thermal view."],
     [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : respNote],
     [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
-    [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${minutes} minutes; ${bands.high} minutes of high activity.` : "No movement data in this session."],
+    [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${liveMin} minutes; ${bands.high} minutes of high activity.` : "No movement data in this session."],
     [5, "Resting pattern", lyingMeasured ? S.ok : actV.length ? S.part : S.no, lyingMeasured ? `${lyingMin} min lying` : actV.length ? `${stillMin} min` : "—", lyingMeasured ? `Lying down ${lyingMin} min; standing still ${stillMin} min.` : actV.length ? "Standing rest. Lying down is measured when the horse's whole body is in view." : "No movement data in this session."],
     [6, "Stable vices", actV.length ? S.ok : S.no, actV.length ? (viceNames.length ? "Flagged" : "None") : "—", actV.length ? (viceNames.length ? `${viceNames.join(", ")} flagged for review on the recording.` : "No weaving, box walking or head tossing identified.") + " Crib-biting is not assessed." : "No movement data in this session."],
     [7, "Urination", floorOk && floorWatched === true ? S.ok : S.no, floorOk && floorWatched === true ? (floorEv.urination.length ? `${floorEv.urination.length} seen` : "None seen") : "—", floorOk && floorWatched === true ? "Wet patches on the bedding after the horse moved away." : floorNote],
@@ -306,7 +313,9 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     const xm = (ms) => x0 + ((ms - from) / 60000 / minutes) * (W - x0 - R);
     const tk = tickMins.map((m) => `<text x="${xm(from + m * 60000)}" y="${H + 16}" class="tick" text-anchor="middle">${clock(from + m * 60000)}</text>`).join("");
     const tm = markTimes.map(([t, what]) => `<g data-tip="${esc(what)} · ${clock(t)}"><path d="M${xm(t) - 6},-2 h12 l-6,10 z" class="turn"/></g>`).join("");
-    return `<svg viewBox="0 -14 ${W} ${H + 36}" role="img" aria-label="Session timeline">${body}${tk}${tm}</svg>`;
+    const pz = paused.map(([a, b]) => { const xa = xm(Math.max(from, a)), xb = xm(Math.min(to, b));
+      return `<rect x="${xa}" y="4" width="${Math.max(2, xb - xa)}" height="${H - 8}" class="paused"/><text x="${(xa + xb) / 2}" y="${H / 2 + 4}" class="tick strong" text-anchor="middle">paused</text>`; }).join("");
+    return `<svg viewBox="0 -14 ${W} ${H + 36}" role="img" aria-label="Session timeline">${body}${pz}${tk}${tm}</svg>`;
   }
 
   function activityChart() {
@@ -426,7 +435,7 @@ td{padding:13px 12px;border-bottom:1px solid var(--grid);vertical-align:top}td.n
 svg{width:100%;height:auto;display:block;overflow:visible}.grid{stroke:var(--grid)}.tick{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.tick.strong{fill:var(--ink2);font-size:12.5px}
 .lbl{fill:var(--ink2);font-size:12px}.zlabel{fill:var(--muted);font-size:11px}.halo{paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
 .bar{fill:var(--accent)}.trend{fill:none;stroke:var(--ink);stroke-width:2;stroke-linejoin:round;opacity:.7}.zone-hi{fill:var(--accentSoft);opacity:.6}
-.dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}.iqr{fill:var(--accentSoft)}.median{stroke:var(--ink2);stroke-width:1.5;stroke-dasharray:5 4}.away{fill:var(--lanebg)}
+.dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}.iqr{fill:var(--accentSoft)}.median{stroke:var(--ink2);stroke-width:1.5;stroke-dasharray:5 4}.away{fill:var(--lanebg)}.paused{fill:var(--surface);stroke:var(--grid);stroke-dasharray:4 3;opacity:.92}
 .lane-bg{fill:var(--lanebg)}.lane-on{fill:var(--accent)}.lane-alt{fill:var(--alt);opacity:.55}.lane-hot{fill:var(--hot)}.turn{fill:var(--hot);stroke:var(--surface);stroke-width:1.5}
 .legend{display:flex;flex-wrap:wrap;gap:18px;font-size:12.5px;color:var(--ink2);margin-top:12px}.legend span{display:inline-flex;align-items:center;gap:7px}
 .sw{display:inline-block;width:12px;height:12px;border-radius:3px}.sw.bar{background:var(--accent)}.sw.line{height:2px;width:18px;background:var(--ink);opacity:.7;border-radius:0}.sw.dot{border-radius:50%;background:var(--accent)}.sw.iqr{background:var(--accentSoft)}.sw.hot{background:var(--hot)}.sw.alt{background:var(--alt);opacity:.55}
@@ -479,7 +488,7 @@ tr.dim td{color:var(--muted)}
 <div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>Eye temperature</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : "eye not in view"}</small></div>
 <div class="kpi"><b>${f2(med(actV))}</b><span>Activity index</span><small>median · scale 0–1</small></div>
 <div class="kpi"><b>${lyingMeasured ? `${lyingMin} min` : `${stillMin} min`}</b><span>${lyingMeasured ? "Lying down" : "Standing rest"}</span><small>of ${dur}</small></div>
-<div class="kpi"><b>${Math.round((anyMin.size / minutes) * 100)}%</b><span>Monitoring coverage</span><small>${anyMin.size} of ${minutes} minutes</small></div>
+<div class="kpi"><b>${Math.round((anyMin.size / liveMin) * 100)}%</b><span>Monitoring coverage</span><small>${anyMin.size} of ${liveMin} minutes</small></div>
 </div>
 
 <section class="card"><div class="exec"><div>
@@ -489,7 +498,7 @@ ${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}<
 <div class="details"><h3>Session details</h3><dl>
 <dt>Horse</dt><dd>${esc(name)}</dd><dt>Stall</dt><dd>${esc(horse.stall || "—")}</dd>
 <dt>Date</dt><dd>${T({ day: "numeric", month: "short", year: "numeric" }).format(from)}</dd><dt>Session</dt><dd>${clock(from)}–${clock(rangeEnd)} ${esc(tzName)}</dd>
-<dt>Monitoring</dt><dd>Thermal + colour camera</dd><dt>Coverage</dt><dd>${anyMin.size} of ${minutes} min</dd>
+<dt>Monitoring</dt><dd>Thermal + colour camera</dd><dt>Coverage</dt><dd>${anyMin.size} of ${liveMin} min${pausedMin ? ` (paused ${pauseText})` : ""}</dd>
 <dt>Readings</dt><dd>${nReadings}</dd><dt>Video recorded</dt><dd>${clipCount ? plural(clipCount, "clip") : "none"}</dd>
 </dl></div>
 </div>
@@ -550,7 +559,7 @@ ${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.labe
 <div><b>Activity index</b><span>The share of the horse moving, from the colour camera: 0 = still, 1 = very active. Levels: no activity below 0.05, low 0.05–0.2, moderate 0.2–0.6, high 0.6 and above.</span></div>
 <div><b>Rest</b><span>Minutes in which the horse stood still; lying down is reported when the horse's whole body is in view.</span></div>
 <div><b>Stable vices</b><span>Weaving, box walking and head tossing are identified from sustained rhythmic movement; a flagged moment can be checked on the recording.</span></div>
-<div><b>Monitoring coverage</b><span>${anyMin.size} of ${minutes} minutes with camera data; ${nReadings} readings${clipCount ? ` and ${plural(clipCount, "video clip")}` : ""} recorded for this session.</span></div>
+<div><b>Monitoring coverage</b><span>${anyMin.size} of ${liveMin} minutes with camera data${pausedMin ? ` (paused ${pauseText}, not counted)` : ""}; ${nReadings} readings${clipCount ? ` and ${plural(clipCount, "video clip")}` : ""} recorded for this session.</span></div>
 <div><b>Screening</b><span>Measurements support daily care and early attention; clinical decisions should be confirmed by a veterinarian.</span></div>
 </div></section>
 ${foot(5)}</div>
