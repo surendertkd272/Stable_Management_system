@@ -28,7 +28,7 @@ export function boxMean(frame, box) {
 }
 
 /** A local TCP relay, because ffmpeg cannot use an IPv6 zone (fe80::…%en8). */
-function relayTo(host, port) {
+export function relayTo(host, port) {
   const srv = net.createServer((sock) => {
     const up = net.connect({ host, port });
     sock.pipe(up).pipe(sock);

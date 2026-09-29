@@ -22,6 +22,7 @@ import { checkHost, rtspOptions } from "./camera.mjs";
 import { withCamera, forget, protocolOf, IdentityMismatch } from "./camera-pool.mjs";
 import { readRegisters, readSensor, TYPES, WORD_ORDERS } from "./modbus.mjs";
 import { startBreathingCheck, breathingJob, jobView } from "./thermal-video.mjs";
+import { liveResponse } from "./live-video.mjs";
 import { startCoolingTest, coolingJob, coolingView, splitFromCalib } from "./cooling.mjs";
 
 export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device", "wearable_hub"];
@@ -828,7 +829,7 @@ export function deviceApi({ store, json, CORS }) {
       return json(405, { error: "method not allowed" });
     }
 
-    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|rois|temps|token|events|verification|breathing|cooling))?$/);
+    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|live|rois|temps|token|events|verification|breathing|cooling))?$/);
     if (!m) return null;
     const dev = byId(decodeURIComponent(m[1]));
     if (!dev) return json(404, { error: "unknown device" });
@@ -909,6 +910,20 @@ export function deviceApi({ store, json, CORS }) {
       } catch (e) {
         return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message, code: e.code });
       }
+    }
+
+    // Live video for the Live page (server/live-video.mjs); the page falls
+    // back to snapshots when this is not available.
+    if (action === "live" && method === "GET") {
+      const bad = cameraOnly(); if (bad) return bad;
+      if (dev.enabled === false) return json(409, { error: "this camera is switched off on the Hardware page" });
+      if (await protocolOf(dev) !== "mtrpc") return json(501, { error: "live video is available for the JSON-RPC cameras only" });
+      const host = await checkHost(dev.host);
+      if (!host.ok) return json(400, { error: host.error });
+      const cred = cameraPassword(dev);
+      if (cred.error) return json(500, { error: cred.error });
+      const which = url.searchParams.get("stream") === "colour" ? "colour" : "thermal";
+      return liveResponse(dev, cred.password, which, req.signal, CORS);
     }
 
     if (action === "temps" && method === "GET") {

@@ -4,9 +4,11 @@
 // reading from them right now, with a practice-session timer that opens the
 // session report for exactly that window.
 //
-// Pictures are snapshots (browsers cannot play RTSP), one picture every ~2 s,
-// alternating thermal and colour — the edge agent reads the full video
-// streams; this is only for people to watch.
+// Pictures are live video: browsers cannot play RTSP, so the site server turns
+// the camera's streams into JPEG frames (server/live-video.mjs), well under a
+// second behind. Where that is not available the page shows a snapshot every
+// couple of seconds instead. Only for people to watch: the edge agent reads
+// the video itself.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Play, Square, FileText, Loader2, CircleDot, Thermometer, Wind, Activity, Moon } from "lucide-react";
 import Link from "next/link";
@@ -14,7 +16,7 @@ import * as api from "../data/api";
 import { useStable } from "../store";
 import { ZoomImage, WHOLE, type ZoomView } from "../components/Zoom";
 
-type Snap = { url?: string; error?: string; at?: number };
+type Snap = { url?: string; error?: string; at?: number; live?: boolean };
 const SESSION_KEY = (cam: string) => `bsv-session-start:${cam}`;
 const SESSION_STALE_MS = 24 * 3600 * 1000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -57,9 +59,63 @@ export default function Live() {
   );
 }
 
+/** One of the camera's two pictures: live video while the server can give it,
+ *  otherwise a snapshot every couple of seconds (and live video tried again
+ *  now and then). Its own component, so 25 frames a second redraw only it. */
+function LivePicture({ camId, name, paused, view, onView }: {
+  camId: string; name: "Thermal" | "Colour"; paused: boolean; view: ZoomView; onView: (v: ZoomView) => void;
+}) {
+  const [snap, setSnap] = useState<Snap>({});
+  useEffect(() => {
+    if (paused) return;
+    const ctl = new AbortController();
+    const which = name === "Thermal" ? "thermal" : "colour";
+    let shown: string | undefined;
+    const show = (url: string, live: boolean) => {
+      setSnap({ url, at: Date.now(), live });
+      if (shown) URL.revokeObjectURL(shown);
+      shown = url;
+    };
+    (async () => {
+      let liveAgainAt = 0;
+      while (!ctl.signal.aborted) {
+        if (document.visibilityState !== "visible") { await sleep(1000); continue; }
+        if (Date.now() >= liveAgainAt) {
+          const n = await api.readLive(camId, which, ctl.signal, (jpeg) => show(URL.createObjectURL(jpeg), true));
+          if (ctl.signal.aborted) break;
+          // The stream ended after showing video: reconnect. No video at all:
+          // snapshots for a while before trying again.
+          if (n > 0) { await sleep(500); continue; }
+          liveAgainAt = Date.now() + 15000;
+        }
+        const s = await api.fetchSnapshot(camId, which === "thermal" ? 0 : 1);
+        if (ctl.signal.aborted) { if (s.url) URL.revokeObjectURL(s.url); break; }
+        if (s.url) show(s.url, false);
+        else setSnap((prev) => ({ ...prev, error: s.error }));
+        await sleep(2000);
+      }
+    })();
+    return () => ctl.abort();
+  }, [camId, name, paused]);
+
+  const age = snap.at ? Math.round((Date.now() - snap.at) / 1000) : null;
+  return (
+    <div className="card" style={{ padding: 12 }}>
+      <div className="flex between center" style={{ marginBottom: 6 }}>
+        <b style={{ fontSize: 13 }}><Camera size={13} /> {name}</b>
+        <span className="muted" style={{ fontSize: 11.5 }}>
+          {snap.live && age !== null && age < 3 ? <><CircleDot size={11} style={{ color: "var(--danger, #d33)" }} /> live</> : age !== null ? `${age} s ago` : ""}
+          {snap.error ? ` · ${snap.error}` : ""}
+        </span>
+      </div>
+      {snap.url
+        ? <ZoomImage src={snap.url} alt={`${name} camera`} view={view} onView={onView} />
+        : <div className="hw-stage-empty">{snap.error ? `No picture: ${snap.error}` : <Loader2 className="spin" size={20} />}</div>}
+    </div>
+  );
+}
+
 function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: string; name: string } | null }) {
-  const [thermal, setThermal] = useState<Snap>({});
-  const [colour, setColour] = useState<Snap>({});
   const [paused, setPaused] = useState(false);
   // Zoom: one view for both pictures (they show about the same area), unless unlinked.
   const [linked, setLinked] = useState(true);
@@ -84,28 +140,6 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
     } catch { /* not remembered */ }
   }, [cam.id]);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 1000); return () => clearInterval(t); }, []);
-
-  // Pictures: alternate thermal and colour, one every ~2 s; stop when hidden.
-  useEffect(() => {
-    let stop = false;
-    (async () => {
-      let which: 0 | 1 = 0;
-      while (!stop && alive.current) {
-        if (!paused && document.visibilityState === "visible") {
-          const s = await api.fetchSnapshot(cam.id, which);
-          if (stop) { if (s.url) URL.revokeObjectURL(s.url); break; }
-          const set = which === 0 ? setThermal : setColour;
-          set((prev) => {
-            if (s.url && prev.url) URL.revokeObjectURL(prev.url);
-            return s.url ? { url: s.url, at: Date.now() } : { ...prev, error: s.error };
-          });
-          which = which === 0 ? 1 : 0;
-        }
-        await sleep(1000);
-      }
-    })();
-    return () => { stop = true; };
-  }, [cam.id, paused]);
 
   // What the system is reading: the horse's latest vitals and behaviour.
   const load = useCallback(async () => {
@@ -158,16 +192,9 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
       </div>
 
       <div className="grid cols-2" style={{ gap: 14, alignItems: "start" }}>
-        {([["Thermal", thermal], ["Colour", colour]] as const).map(([name, s]) => (
-          <div key={name} className="card" style={{ padding: 12 }}>
-            <div className="flex between center" style={{ marginBottom: 6 }}>
-              <b style={{ fontSize: 13 }}><Camera size={13} /> {name}</b>
-              <span className="muted" style={{ fontSize: 11.5 }}>{s.at ? `${Math.round((Date.now() - s.at) / 1000)} s ago` : ""}{s.error ? ` · ${s.error}` : ""}</span>
-            </div>
-            {s.url
-              ? <ZoomImage src={s.url} alt={`${name} camera`} view={views[name]} onView={name === "Thermal" ? onThermal : onColour} />
-              : <div className="hw-stage-empty">{s.error ? `No picture: ${s.error}` : <Loader2 className="spin" size={20} />}</div>}
-          </div>
+        {(["Thermal", "Colour"] as const).map((name) => (
+          <LivePicture key={name} camId={cam.id} name={name} paused={paused}
+            view={views[name]} onView={name === "Thermal" ? onThermal : onColour} />
         ))}
       </div>
       <div className="flex" style={{ flexWrap: "wrap", gap: "4px 18px", marginTop: 8 }}>

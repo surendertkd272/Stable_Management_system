@@ -499,6 +499,46 @@ export const saveVerification = (id: string, v: {
 
 /** Snapshot as an object URL. An <img src> cannot carry the Authorization
  *  header, so the image is fetched and handed to the page as a blob. */
+/**
+ * A camera's live video (server/live-video.mjs): per frame a 4-byte length and
+ * a JPEG. Calls onFrame with the newest frame of each read, until the stream
+ * ends, the signal aborts or the tab is hidden (which frees the camera's
+ * stream). Resolves to the number of frames shown; 0 means no live video, so
+ * the caller shows snapshots instead.
+ */
+export async function readLive(id: string, stream: "thermal" | "colour", signal: AbortSignal,
+  onFrame: (jpeg: Blob) => void): Promise<number> {
+  if (!apiConfigured) return 0;
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${dpath(id, "live")}?stream=${stream}`, { headers: authHeaders(), signal, cache: "no-store" });
+  } catch { return 0; }
+  if (!res.ok || !res.body) return 0;
+  const reader = res.body.getReader();
+  let buf: Uint8Array<ArrayBuffer> = new Uint8Array(0);
+  let shown = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const joined = new Uint8Array(buf.length + value.length);
+      joined.set(buf);
+      joined.set(value, buf.length);
+      buf = joined;
+      let newest: Uint8Array<ArrayBuffer> | null = null;
+      while (buf.length >= 4) {
+        const n = ((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]) >>> 0;
+        if (buf.length < 4 + n) break;
+        newest = buf.slice(4, 4 + n);
+        buf = buf.slice(4 + n);
+      }
+      if (newest) { onFrame(new Blob([newest], { type: "image/jpeg" })); shown++; }
+      if (document.visibilityState !== "visible") { await reader.cancel(); break; }
+    }
+  } catch { /* stopped, or the connection dropped */ }
+  return shown;
+}
+
 export async function fetchSnapshot(id: string, dev: 0 | 1): Promise<{ url?: string; error?: string; status?: number }> {
   if (!apiConfigured) return { error: "demo mode — no server" };
   try {
