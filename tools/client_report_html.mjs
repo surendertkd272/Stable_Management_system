@@ -5,6 +5,10 @@
 //   node tools/client_report_html.mjs --horse badal --from 2026-09-27T11:05:56Z [--minutes 60 | --to <ISO>]
 //        [--notes "text" | --notes-file notes.txt] [--tz Asia/Kolkata] [--out <dir>] [--pdf]
 //        [--paused "13:21:13-13:41:13"]   (stretches the session was paused: not counted)
+//        [--colour-crop "0.46,0.09,0.87,0.91"]   (colour photos zoomed on the horse's stall, 0..1 of the picture)
+//        [--no-thermal]                         (colour photos only; by default each photo pairs colour and thermal)
+//        [--compare-from <ISO> --compare-minutes 60 | --compare-to <ISO>] [--compare-away …] [--compare-paused …]
+//        [--changes-file changes.txt]           (a comparison page with an earlier session; one change per line)
 //        [--away "16:40-16:59,…"]   (sessions recorded before the eye-shape check,
 //                                    28 Sep 2026: periods the horse faced away)
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, mkdtempSync, statSync } from "node:fs";
@@ -13,6 +17,7 @@ import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { clientReport, safeTimeZone } from "../server/client_report.mjs";
 import { frameGrabber, listClips } from "../server/footage.mjs";
+import { thermalFootprint } from "../server/hardware-spec.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
 const flag = (k) => process.argv.includes(`--${k}`);
@@ -32,8 +37,20 @@ const readings = state.readings.filter((r) => r.horseId === horseId);
 const inWin = readings.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; });
 const camIds = new Set(inWin.map((r) => r.meta?.deviceId).filter(Boolean));
 const devices = state.entities.devices || [];
-const cams = devices.filter((d) => camIds.has(d.id));
-const cam = cams[0] || devices.find((d) => d.kind === "thermal_camera" && d.stall === horse.stall) || null;
+// The camera(s) whose readings fall in a window.
+const camsFor = (a, b) => {
+  const ids = new Set(readings.filter((r) => { const t = Date.parse(r.ts); return t >= a && t <= b; }).map((r) => r.meta?.deviceId).filter(Boolean));
+  const cs = devices.filter((d) => ids.has(d.id));
+  return { cs, cam: cs[0] || devices.find((d) => d.kind === "thermal_camera" && d.stall === horse.stall) || null };
+};
+const floorOf = (cs, c) => (cs.length ? cs.some((d) => d.rois?.floor || d.rois?.colourFloor) : c ? Boolean(c.rois?.floor || c.rois?.colourFloor) : null);
+// The camera in words, from its record.
+const setupOf = (d) => {
+  if (!d) return "";
+  const fp = thermalFootprint(d.variant, d.thermalLens, d.distanceM);
+  return `${d.identity?.model || "Thermal camera"}, ${d.thermalLens} mm thermal lens${fp ? ` (view about ${fp.widthM.toFixed(1)} × ${fp.heightM.toFixed(1)} m at ${d.distanceM} m)` : ""}`;
+};
+const { cs: cams, cam } = camsFor(from, to);
 const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
 
 // "HH:MM" on the session's day, in its time zone.
@@ -42,20 +59,36 @@ const offsetAt = (ms) => {
     .formatToParts(ms).map((x) => [x.type, x.value]));
   return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(ms / 1000) * 1000;
 };
-const localMs = (hm) => {
+const localMs = (hm, on = from) => {
   const [h, m, sec = 0] = hm.trim().split(":").map(Number);
-  const off = offsetAt(from), day = new Date(from + off);
+  const off = offsetAt(on), day = new Date(on + off);
   return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), h, m, sec) - off;
 };
-const away = (arg("away", "") || "").split(",").filter(Boolean).map((w) => { const [a, b] = w.split("-"); return [localMs(a), localMs(b) + 59999]; });
+const windows = (list, on, endPad = 0) => (list || "").split(",").filter(Boolean)
+  .map((w) => { const [a, b] = w.split("-"); return [localMs(a, on), localMs(b, on) + endPad]; });
+const away = windows(arg("away"), from, 59999);
 // --paused "13:21:13-13:41:13,…": stretches the session was paused (not counted).
-const paused = (arg("paused", "") || "").split(",").filter(Boolean).map((w) => { const [a, b] = w.split("-"); return [localMs(a), localMs(b)]; });
+const paused = windows(arg("paused"), from);
+
+// An earlier session to compare with: its numbers, worked out the same way.
+let previous = null;
+if (arg("compare-from")) {
+  const pFrom = Date.parse(arg("compare-from"));
+  const pTo = arg("compare-to") ? Date.parse(arg("compare-to")) : pFrom + Number(arg("compare-minutes", 60)) * 60000;
+  const { cs: pCams, cam: pCam } = camsFor(pFrom, pTo);
+  const prev = await clientReport({ horse, readings, from: pFrom, to: pTo, tz, away: windows(arg("compare-away"), pFrom, 59999),
+    paused: windows(arg("compare-paused"), pFrom), floorWatched: floorOf(pCams, pCam), setup: setupOf(pCam) });
+  previous = { summary: prev.summary };
+}
+const changes = arg("changes-file") ? readFileSync(arg("changes-file"), "utf8").split("\n").map((l) => l.trim()).filter(Boolean) : [];
+const crop = arg("colour-crop") ? arg("colour-crop").split(",").map(Number) : null;
 const notes = arg("notes-file") ? readFileSync(arg("notes-file"), "utf8") : arg("notes", "");
 
 const { html, ref, photos } = await clientReport({
-  horse, readings, from, to, tz, notes, away, paused,
-  floorWatched: cams.length ? cams.some((d) => d.rois?.floor || d.rois?.colourFloor) : cam ? Boolean(cam.rois?.floor || cam.rois?.colourFloor) : null,
-  grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
+  horse, readings, from, to, tz, notes, away, paused, previous, changes, setup: setupOf(cam),
+  floorWatched: floorOf(cams, cam),
+  grab: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
+  grabThermal: cam && clips.length && !flag("no-thermal") ? frameGrabber(cam.id, "thermal", undefined, { lift: true }) : null,
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
 });
 const outDir = arg("out", join(HOME, "research", "reports"));

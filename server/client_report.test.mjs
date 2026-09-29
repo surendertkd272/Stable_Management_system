@@ -106,3 +106,21 @@ test("a paused stretch is left out: its readings, its minutes in coverage, and t
   assert.match(html, /class="paused"/, "the timeline marks the pause");
   assert.ok(clean(html));
 });
+
+test("photos pair colour with thermal, and a comparison page is built from an earlier session's numbers", async () => {
+  const before = await clientReport({ horse, readings: hourOf(), from, to: from + hour, floorWatched: false, tz: "Asia/Kolkata", setup: "25 mm thermal lens" });
+  assert.equal(before.summary.eye.n, 20);
+  assert.deepEqual(before.summary.points.includes(7), false, "no floor in view: urination not captured");
+  const quiet = hourOf({ eyeEvery: 1000 }).filter((r) => r.metric !== "body_temp_c");
+  const { html, summary } = await clientReport({ horse, readings: quiet, from, to: from + hour, floorWatched: true, tz: "Asia/Kolkata", grab,
+    grabThermal: grab, setup: "13 mm thermal lens", previous: { summary: before.summary }, changes: ["A 13 mm lens replaced the 25 mm one."] });
+  assert.equal(summary.eye.n, 0);
+  assert.equal((html.match(/Page \d of 6/g) || []).length, 6, "six pages with the comparison");
+  assert.match(html, /class="pair"/, "colour and thermal side by side");
+  assert.match(html, /Comparison with the previous session/);
+  assert.match(html, /25 mm thermal lens<\/td><td>13 mm thermal lens/);
+  assert.match(html, /<b>Urination<\/b> is now captured/);
+  assert.match(html, /<b>Body temperature<\/b> was captured last time but not in this session/);
+  assert.match(html, /A 13 mm lens replaced the 25 mm one\./);
+  assert.ok(clean(html));
+});

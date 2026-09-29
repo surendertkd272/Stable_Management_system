@@ -189,7 +189,14 @@ export async function h264Copy(src, root = recordingsDir()) {
  * camera sees — its 704x576 sub-stream is that picture squeezed — with the
  * camera's own text (clock, channel name) trimmed off the top and bottom.
  */
-export function frameGrabber(camera, stream = "visible", root = recordingsDir()) {
+// crop (colour only): [x0, y0, x1, y1], 0..1 of the 16:9 picture — e.g. the
+// horse's own stall when the view takes in more than one. Without it the
+// camera's burned-in text (top and bottom strips) is cut off, as it is from
+// thermal frames.
+// lift (thermal): brighten the dark tones for viewing — in a sunny stall a
+// few glints take the top of the white-hot range and the horse comes out
+// nearly black. For people to look at only; nothing is measured from it.
+export function frameGrabber(camera, stream = "visible", root = recordingsDir(), { crop = null, lift = false } = {}) {
   const clips = listClips(root).filter((c) => c.camera === camera && c[stream])
     .map((c) => ({ at: Date.parse(c[stream].at), end: Date.parse(c.end), path: clipPath(camera, stream, c[stream].start, root) }))
     .filter((c) => c.path);
@@ -197,7 +204,10 @@ export function frameGrabber(camera, stream = "visible", root = recordingsDir())
     const c = clips.find((x) => x.at <= atMs && atMs < x.end);
     if (!c) return Promise.resolve(null);
     const w = Math.max(64, Math.min(1920, Math.round(width / 2) * 2));
-    const vf = stream === "visible" ? `scale=${w}:${Math.round((w * 9) / 32) * 2},crop=iw:ih*0.82:0:ih*0.09` : `scale=${w}:-2`;
+    const [x0, y0, x1, y1] = crop || [];
+    const vf = stream !== "visible" ? `crop=iw:ih*0.80:0:ih*0.12,scale=${w}:-2${lift ? ",curves=all='0/0 0.12/0.45 0.35/0.8 1/1'" : ""}`
+      : crop ? `scale=1024:576,crop=iw*${(x1 - x0).toFixed(4)}:ih*${(y1 - y0).toFixed(4)}:iw*${x0.toFixed(4)}:ih*${y0.toFixed(4)},scale=${w}:-2`
+      : `scale=${w}:${Math.round((w * 9) / 32) * 2},crop=iw:ih*0.82:0:ih*0.09`;
     return new Promise((resolve) => {
       const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-ss", ((atMs - c.at) / 1000).toFixed(2), "-i", c.path,
         "-frames:v", "1", "-vf", vf, "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", "pipe:1"]);

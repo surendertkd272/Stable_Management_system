@@ -19,6 +19,17 @@ const LEVELS = [["none", "No activity", 0, 0.05], ["low", "Low", 0.05, 0.2], ["m
 const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480];
 const MAX_NOTES = 1400;
 
+/** width / height of a JPEG, from its frame header (null if not found). */
+function jpegAspect(buf) {
+  for (let i = 2; i + 9 < buf.length;) {
+    if (buf[i] !== 0xff) { i++; continue; }
+    const mk = buf[i + 1];
+    if (mk >= 0xc0 && mk <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(mk)) return buf.readUInt16BE(i + 7) / buf.readUInt16BE(i + 5);
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  return null;
+}
+
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; };
 const q = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))] : null; };
@@ -42,7 +53,13 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // paused: [[fromMs, toMs], …] — stretches of the session that were paused
 // (e.g. to adjust the camera). Their readings are left out, and coverage and
 // duration count only the monitored minutes; the timeline marks them.
-export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null, clipCount = 0, now = Date.now() }) {
+// grabThermal: like grab, for the thermal picture at the same second — each
+// photo then shows colour and thermal side by side.
+// setup: this session's camera in words; previous: { summary, setup } of an
+// earlier session (its report's `summary`), for a comparison page; changes:
+// what was changed between the two sessions, one line each.
+export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
+  grabThermal = null, setup = "", previous = null, changes = [], clipCount = 0, now = Date.now() }) {
   tz = safeTimeZone(tz);
   const minutes = Math.max(1, Math.round((to - from) / 60000));
   const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
@@ -171,7 +188,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const coverMin = [];
   for (const m of ranked) { if (coverMin.every((c) => Math.abs(c - m) >= Math.max(5, minutes / 8))) coverMin.push(m); if (coverMin.length === 3) break; }
   coverMin.sort((a, b) => a - b);
-  const nGal = Math.min(12, ranked.length);
+  const nGal = Math.min(grabThermal ? 6 : 12, ranked.length);   // colour + thermal pairs take twice the room
   const galMin = [];
   for (let s = 0; s < nGal; s++) {
     const lo = Math.floor((s * minutes) / nGal), hi = Math.floor(((s + 1) * minutes) / nGal);
@@ -179,10 +196,20 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     if (best !== undefined) galMin.push(best);
   }
   const toUri = (jpg) => `data:image/jpeg;base64,${jpg.toString("base64")}`;
-  const covers = (await Promise.all(coverMin.map(async (m) => { const f = await sharpest(m, 1100); return f && { m, at: f.at, img: toUri(f.jpg) }; }))).filter(Boolean);
+  const withThermal = async (f, width) => {
+    const t = grabThermal ? await grabThermal(f.at, width) : null;
+    return t ? { thermal: toUri(t), tAspect: jpegAspect(t) } : {};
+  };
+  const covers = (await Promise.all(coverMin.map(async (m) => {
+    const f = await sharpest(m, 1100);
+    return f && { m, at: f.at, img: toUri(f.jpg), aspect: jpegAspect(f.jpg), ...(await withThermal(f, 700)) };
+  }))).filter(Boolean);
   const gallery = [];
   for (let i = 0; i < galMin.length; i += 4) {                          // a few ffmpeg at a time
-    const got = await Promise.all(galMin.slice(i, i + 4).map(async (m) => { const f = await sharpest(m, 520); return f && { m, at: f.at, img: toUri(f.jpg) }; }));
+    const got = await Promise.all(galMin.slice(i, i + 4).map(async (m) => {
+      const f = await sharpest(m, 520);
+      return f && { m, at: f.at, img: toUri(f.jpg), aspect: jpegAspect(f.jpg), ...(await withThermal(f, 420)) };
+    }));
     gallery.push(...got.filter(Boolean));
   }
 
@@ -389,8 +416,79 @@ ${grid}${bandsSvg}${tk}${bars}${line}
   const ymd = T({ year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(from)
     .reduce((a, p) => ({ ...a, [p.type]: p.value }), {});
   const ref = `EQ-${String(horse.id).toUpperCase().replace(/[^A-Z0-9]/g, "")}-${ymd.year}${ymd.month}${ymd.day}${ymd.hour}${ymd.minute}`;
-  const foot = (n) => `<div class="pfoot"><span>EquiCare · ${esc(name)} · Ref. ${ref}</span><span>Page ${n} of 5</span></div>`;
+  const foot = (n) => `<div class="pfoot"><span>EquiCare · ${esc(name)} · Ref. ${ref}</span><span>Page ${n} of ${pages}</span></div>`;
   const rangeEnd = to > now ? now : to;
+  // ---- this session in numbers (for a later session's comparison) ------------- //
+  const eyeChecks = of("eye_check");
+  const boxHottest = eyeChecks.map((r) => /hottest ([\d.]+) °C, an eye reads/.exec(r.meta?.detail || "")).filter(Boolean).map((x) => Number(x[1]));
+  const summary = {
+    date: T({ day: "numeric", month: "short", year: "numeric" }).format(from), times: `${clock(from)}–${clock(to)}`,
+    minutes: liveMin, pausedMin, pauseText, coverage: anyMin.size,
+    eye: { n: eye.length, median: eye.length ? eyeMed : null, lo: eyeLo, hi: eyeHi, minutes: eyeMinutes },
+    resp: { n: resp.length, median: respV.length ? med(respV) : null },
+    activity: actV.length ? { median: med(actV), ...bands } : null, still: stillMin, spells: spells.length,
+    vices: viceNames, floor: floorOk && floorWatched === true ? { urination: floorEv.urination.length, excretion: floorEv.excretion.length } : null,
+    points: points.slice(0, 8).filter((x) => x[2] !== S.no).map((x) => x[0]),
+    pointNames: Object.fromEntries(points.slice(0, 8).map((x) => [x[0], x[1]])),
+    eyeTooHot: eyeChecks.length ? { checks: eyeChecks.length, hot: boxHottest.filter((v) => v > 41).length, max: boxHottest.length ? Math.max(...boxHottest) : null } : null,
+    topBreathWhy: topWhy, setup,
+  };
+  const pages = previous ? 6 : 5;
+  const pic = (x, alt) => (x.thermal
+    ? `<div class="pair"><img src="${x.img}" alt="${alt}, colour" style="flex:${(x.aspect || 1.33).toFixed(3)} 1 0"><img src="${x.thermal}" alt="${alt}, thermal" style="flex:${(x.tAspect || 1.25).toFixed(3)} 1 0"></div>`
+    : `<img src="${x.img}" alt="${alt}">`);
+  const paired = covers.some((c) => c.thermal) || gallery.some((g) => g.thermal);
+
+  // ---- comparison with the previous session ------------------------------------ //
+  function comparison() {
+    const a = previous.summary, b = summary;
+    const durOf = (x) => `${plural(x.minutes, "minute")}${x.pausedMin ? ` (paused ${x.pauseText})` : ""}`;
+    const pct = (x) => Math.round((x.coverage / Math.max(1, x.minutes)) * 100);
+    const eyeT = (x) => (x.eye.n ? `${f1(x.eye.median)} °C median (${f1(x.eye.lo)}–${f1(x.eye.hi)} °C), ${plural(x.eye.n, "reading")}` : "Not captured");
+    const respT = (x) => (x.resp.n ? `${f1(x.resp.median)} /min` : "Not captured");
+    const mixT = (x) => (x.activity ? `${x.activity.high} high · ${x.activity.moderate} moderate · ${x.activity.low} low · ${x.activity.none} none` : "—");
+    const viceT = (x) => (x.activity ? (x.vices.length ? x.vices.join(", ") : "None") : "—");
+    const floorT = (x) => (x.floor ? `Watched: ${x.floor.urination} urination, ${x.floor.excretion} manure seen` : "Not measured (floor not in view)");
+    const rows = [
+      ["Session", `${a.date} · ${a.times}`, `${b.date} · ${b.times}`],
+      ["Monitored", durOf(a), durOf(b)],
+      ["Camera", a.setup || previous.setup || "—", b.setup || "—"],
+      ["Monitoring coverage", `${pct(a)}% (${a.coverage} of ${a.minutes} min)`, `${pct(b)}% (${b.coverage} of ${b.minutes} min)`],
+      ["Eye temperature", eyeT(a), eyeT(b)],
+      ["Eye in view", `${a.eye.minutes} min`, `${b.eye.minutes} min`],
+      ["Respiratory rate", respT(a), respT(b)],
+      ["Activity (median, 0–1)", a.activity ? f2(a.activity.median) : "—", b.activity ? f2(b.activity.median) : "—"],
+      ["Activity mix (minutes)", mixT(a), mixT(b)],
+      ["Standing rest", `${a.still} min in ${plural(a.spells, "spell")}`, `${b.still} min in ${plural(b.spells, "spell")}`],
+      ["Stable vices", viceT(a), viceT(b)],
+      ["Urination / excretion", floorT(a), floorT(b)],
+      ["Camera points captured (1–8)", `${a.points.length} of 8`, `${b.points.length} of 8`],
+    ];
+    const better = [], watch = [];
+    for (const n of b.points) if (!a.points.includes(n))
+      better.push(`<b>${esc(b.pointNames[n])}</b> is now captured${n === 7 || n === 8 ? ": the wider view includes the bedding" : ""}.`);
+    if (pct(b) >= pct(a) + 5) better.push(`<b>Monitoring coverage</b> rose from ${pct(a)}% to ${pct(b)}% of the monitored minutes.`);
+    if (pct(b) <= pct(a) - 5) watch.push(`<b>Monitoring coverage</b> fell from ${pct(a)}% to ${pct(b)}% of the monitored minutes.`);
+    for (const n of a.points) if (!b.points.includes(n)) watch.push(`<b>${esc(a.pointNames[n])}</b> was captured last time but not in this session.`);
+    const hot = b.eyeTooHot;
+    if (!b.eye.n && hot && hot.hot >= Math.max(1, 0.6 * hot.checks))
+      watch.push(`<b>Keep the camera out of direct sun.</b> In ${hot.hot} of ${hot.checks} checks the thermal view read above 41 °C${hot.max ? ` (up to ${Math.round(hot.max)} °C)` : ""}, hotter than a living eye, so no eye temperature could be taken.`);
+    if (!b.resp.n && ["head_off_boxes", "head_out_of_view"].includes(b.topBreathWhy))
+      watch.push(`<b>Aim the thermal view where ${esc(name)}'s head rests</b> (door or hay): in most minutes the head was away from it, so breathing could not be read.`);
+    if (a.activity && b.activity && Math.abs(a.activity.median - b.activity.median) >= 0.05)
+      watch.push(`<b>Activity</b> was ${b.activity.median < a.activity.median ? "lower" : "higher"} than last time (median ${f2(a.activity.median)} → ${f2(b.activity.median)}); the sessions were at different times of day, and activity varies through the day.`);
+    const list = (xs, none) => (xs.length ? `<ul class="clist">${xs.map((x) => `<li>${x}</li>`).join("")}</ul>` : `<p class="sub">${none}</p>`);
+    return `<div class="page">
+<section class="card"><div class="sh"><span class="n">11</span><h2>Comparison with the previous session</h2></div><p class="sub">This session against ${esc(a.date)}, ${esc(a.times)}, each from its own measurements.</p>
+<table class="cmp" style="margin-top:10px"><thead><tr><th>Measure</th><th>Previous · ${esc(a.date)}</th><th>This session · ${esc(b.date)}</th></tr></thead><tbody>
+${rows.map(([k, x, y]) => `<tr><td><b>${esc(k)}</b></td><td>${esc(x)}</td><td>${esc(y)}</td></tr>`).join("")}
+</tbody></table></section>
+<section class="card"><div class="sh"><span class="n">12</span><h2>What changed, and what it did</h2></div>
+<div class="obs"><div><h3>Changes between the sessions</h3>${list(changes.map(esc), "No changes recorded.")}</div>
+<div><h3>Improved</h3>${list(better, "Nothing measured better than last time.")}<h3 style="margin-top:14px">Needs attention</h3>${list(watch, "Nothing measured worse than last time.")}</div></div></section>
+${foot(6)}</div>`;
+  }
+
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(name)} — Monitoring Session Report</title>
 <style>
@@ -418,7 +516,11 @@ section.card{background:var(--surface);border:1px solid var(--ring);border-radiu
 .ico{width:22px;height:22px;flex:none;stroke:var(--accent);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;margin-top:2px}
 .find b{display:block}.find span{color:var(--ink2);font-size:14px}
 .gal{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:14px}.gal figure{margin:0}.gal img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:10px;display:block}
-.gal figcaption{font-size:12px;color:var(--ink2);margin-top:6px;line-height:1.35}.gal figcaption b{display:block;color:var(--ink);font-variant-numeric:tabular-nums}
+.gal figcaption{font-size:12px;color:var(--ink2);margin-top:6px;line-height:1.35}
+.pair{display:flex;gap:4px;align-items:flex-start}.pair img{min-width:0;width:100%;height:auto;aspect-ratio:auto!important;object-fit:contain!important;border-radius:10px}
+.gal.pairs,.page .gal.pairs{grid-template-columns:repeat(2,1fr)}
+table.cmp td{vertical-align:top}table.cmp td:first-child{white-space:nowrap}
+.clist{margin:6px 0 0;padding-left:18px;font-size:12px;line-height:1.45;color:var(--ink2)}.clist li{margin:5px 0}.clist b{color:var(--ink)}.gal figcaption b{display:block;color:var(--ink);font-variant-numeric:tabular-nums}
 .obs{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:10px}.obs h3{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:6px 0 4px}
 .note{margin-top:14px;background:var(--lanebg);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--ink2)}.note b{display:block;color:var(--ink);margin-bottom:2px}
 .photo{margin:0;border-radius:14px;overflow:hidden;position:relative;display:flex;flex-direction:column}.photo img{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
@@ -502,7 +604,7 @@ ${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}<
 <dt>Readings</dt><dd>${nReadings}</dd><dt>Video recorded</dt><dd>${clipCount ? plural(clipCount, "clip") : "none"}</dd>
 </dl></div>
 </div>
-<div class="photos">${covers.length ? covers.map((c) => `<figure class="photo"><img src="${c.img}" alt="${esc(name)} at ${clock(c.at)}"><figcaption>${clock(c.at)} · ${esc(caption(c.m))}</figcaption></figure>`).join("")
+<div class="photos">${covers.length ? covers.map((c) => `<figure class="photo">${pic(c, `${esc(name)} at ${clock(c.at)}`)}<figcaption>${clock(c.at)} · ${esc(caption(c.m))}</figcaption></figure>`).join("")
   : `<div class="nophoto">No video was recorded in this session.</div>`}</div>
 </div></section>
 ${foot(1)}</div>
@@ -515,8 +617,8 @@ ${foot(1)}</div>
 ${notSeen.length ? `<div class="note"><b>Not captured this session</b>${esc(notSeen.join(", ").replace(/^./, (c) => c.toUpperCase()))} — see the monitoring points and recommendations.</div>` : ""}</div>
 </div></section>
 
-<section class="card"><div class="sh"><span class="n">03</span><h2>Session gallery</h2></div><p class="sub">${gallery.length ? `${plural(gallery.length, "moment")} from the recording, in time order — chosen where the eye was in view and the picture was sharpest.` : "No video was recorded in this session."}</p>
-<div class="gal">${gallery.map((g) => `<figure><img src="${g.img}" alt="${esc(name)} at ${clock(g.at)}"><figcaption><b>${clock(g.at)}</b>${esc(caption(g.m).replace(/^./, (c) => c.toUpperCase()))}</figcaption></figure>`).join("")}</div></section>
+<section class="card"><div class="sh"><span class="n">03</span><h2>Session gallery</h2></div><p class="sub">${gallery.length ? `${plural(gallery.length, "moment")} from the recording, in time order — chosen where the eye was in view and the picture was sharpest.${paired ? " Each shows the colour picture, zoomed on the stall, beside the thermal picture at the same second (brightened for viewing)." : ""}` : "No video was recorded in this session."}</p>
+<div class="gal${paired ? " pairs" : ""}">${gallery.map((g) => `<figure>${pic(g, `${esc(name)} at ${clock(g.at)}`)}<figcaption><b>${clock(g.at)}</b>${esc(caption(g.m).replace(/^./, (c) => c.toUpperCase()))}</figcaption></figure>`).join("")}</div></section>
 ${foot(2)}</div>
 <div class="page">
 <section class="card"><div class="sh"><span class="n">04</span><h2>Monitoring points</h2></div><p class="sub">Results for the twelve monitoring points: 1–8 from the camera, 9–12 from horse and stall sensors.</p>
@@ -563,8 +665,9 @@ ${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.labe
 <div><b>Screening</b><span>Measurements support daily care and early attention; clinical decisions should be confirmed by a veterinarian.</span></div>
 </div></section>
 ${foot(5)}</div>
+${previous ? comparison() : ""}
 </main><div id="tip"></div>
 <script>const tip=document.getElementById("tip");document.addEventListener("pointermove",(e)=>{const t=e.target.closest&&e.target.closest("[data-tip]");if(!t){tip.style.display="none";return;}tip.textContent=t.getAttribute("data-tip");tip.style.display="block";const r=tip.getBoundingClientRect();let x=e.clientX+14,y=e.clientY+14;if(x+r.width>innerWidth-8)x=e.clientX-r.width-14;if(y+r.height>innerHeight-8)y=e.clientY-r.height-14;tip.style.left=x+"px";tip.style.top=y+"px";});</script>
 </body></html>`;
-  return { html, ref, photos: covers.length + gallery.length };
+  return { html, ref, photos: covers.length + gallery.length + covers.filter((c) => c.thermal).length + gallery.filter((g) => g.thermal).length, summary };
 }
