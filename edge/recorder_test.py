@@ -48,6 +48,10 @@ hevc, h264 = record_cmd("rtsp://x", "/tmp/o", 600, "hevc"), record_cmd("rtsp://x
 check("HEVC is tagged hvc1 (Safari plays it)", "hvc1" in hevc, hevc)
 check("H.264 is not tagged hvc1 (ffmpeg would refuse)", "hvc1" not in h264 and "copy" in h264, h264)
 check("codec unknown: tagged as the demo unit's HEVC", "hvc1" in record_cmd("rtsp://x", "/tmp/o", 600, None))
+with_sound = record_cmd("rtsp://x", "/tmp/o", 600, "hevc", audio=True)
+check("colour: the microphone is kept, as AAC (MP4 cannot hold G.711), and optional",
+      "0:a:0?" in with_sound and "aac" in with_sound and "-an" not in with_sound, with_sound)
+check("thermal: no sound track", "-an" in hevc and "0:a:0?" not in hevc, hevc)
 
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

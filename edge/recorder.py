@@ -39,13 +39,16 @@ def stream_path(dev, stream):
     return COLOUR_MAIN if stream == "visible" and dev.get("colourStream") == "main" else STREAMS[stream]
 
 
-def record_cmd(url, out_dir, clip_seconds, codec):
+def record_cmd(url, out_dir, clip_seconds, codec, audio=False):
     """ffmpeg: copy the stream into clock-aligned clips. HEVC is tagged hvc1 so
     Safari plays it; an H.264 stream must not be (ffmpeg refuses the tag).
-    codec None (could not ask): hvc1, which the demo unit's streams are."""
+    codec None (could not ask): hvc1, which the demo unit's streams are.
+    audio: keep the camera's microphone too, when the stream has it (the
+    demo unit sends G.711 at 8 kHz, which MP4 cannot hold: stored as AAC)."""
     tag = ["-tag:v", "hvc1"] if codec in (None, "hevc") else []
+    sound = ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "32k"] if audio else ["-an"]
     return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "8000000",
-            "-i", url, "-map", "0:v:0", "-c", "copy", *tag, "-an",
+            "-i", url, "-map", "0:v:0", "-c:v", "copy", *tag, *sound,
             "-f", "segment", "-segment_time", str(clip_seconds), "-segment_atclocktime", "1",
             "-reset_timestamps", "1", "-strftime", "1", "-segment_format", "mp4",
             "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof",
@@ -129,6 +132,8 @@ class StreamRecorder(threading.Thread):
             port = local_relay(d["host"], d.get("rtspPort") or 554, self.stop_evt)
             cred = f"{urllib.parse.quote(d.get('username', 'admin'))}:{urllib.parse.quote(d.get('password') or '')}"
             url = f"rtsp://{cred}@127.0.0.1:{port}{stream_path(d, self.stream)}"
+            # Video only. record_cmd(..., audio=True) keeps the camera's microphone
+            # (tested), for when sound is wanted — not switched on yet.
             cmd = record_cmd(url, self.out, self.clip_seconds, video_codec(url))
             try:
                 self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
