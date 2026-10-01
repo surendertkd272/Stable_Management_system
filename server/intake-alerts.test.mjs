@@ -213,7 +213,7 @@ test("client report: watering and feeding rows from the sensors, still five page
     ...meal(inWin(5), 2400, 2100, "morning", "m1"),
   ];
   const { html } = await clientReport({ horse: { id: "tara", name: "Tara", stall: "07" }, readings: rd, from, to, tz: "UTC" });
-  assert.deepEqual(cell(html, "Watering").slice(1), ["3.2 L", "ok", "1 drink, water meter."]);
+  assert.deepEqual(cell(html, "Watering").slice(1), ["3.2 L", "ok", "1 drink."]);
   assert.deepEqual(cell(html, "Feeding").slice(1), ["2.1 kg", "ok", "1 meal: offered 2.4 kg, left 0.3 kg."]);
   assert.equal((html.match(/Page \d of 5/g) || []).length, 5);
   assert.match(html, /twelve monitoring points/);
@@ -222,6 +222,6 @@ test("client report: watering and feeding rows from the sensors, still five page
 
 test("client report: no water or feed sensor -> Not captured, with what it needs", async () => {
   const { html } = await clientReport({ horse: { id: "tara", name: "Tara", stall: "07" }, readings: [], from, to, tz: "UTC" });
-  assert.deepEqual(cell(html, "Watering").slice(1), ["—", "cam", "Requires a water meter or weighed bucket."]);
-  assert.deepEqual(cell(html, "Feeding").slice(1), ["—", "cam", "Requires a weigh-back feeder or hay scale."]);
+  assert.deepEqual(cell(html, "Watering").slice(1), ["—", "cam", "Not monitored in this session."]);
+  assert.deepEqual(cell(html, "Feeding").slice(1), ["—", "cam", "Not monitored in this session."]);
 });

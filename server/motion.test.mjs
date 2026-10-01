@@ -201,16 +201,16 @@ test("client report: steps and trot rows from the wearable; camera coverage excl
   for (let m = 0; m < 60; m += 10) rd.push(steps(140, inWin(m), { periodMin: 10 }), status("leg", 80, inWin(m)));
   rd.push(trot(18.4, inWin(28)));
   const { html } = await clientReport({ horse, readings: rd, from, to, tz: "UTC" });
-  assert.deepEqual(cell(html, "Steps / locomotion").slice(1), ["840", "ok", "Leg sensor: one leg's hoof strikes × 4."]);
+  assert.deepEqual(cell(html, "Steps / locomotion").slice(1), ["840", "ok", "One leg's hoof strikes × 4."]);
   const [, val, st, note] = cell(html, "Lameness (trot)");
   assert.deepEqual([val, st], ["18.4 mm", "ok"]);
   assert.match(note, /^Left fore favoured \(1 trot\)\. A screening measure being validated; a vet should confirm\.$/);
-  assert.match(html, /camera data in 0% of the session/, "the wearable is not the camera");
+  assert.match(html, /with data in 0% of the session/, "the wearable is not the camera");
   assert.equal((html.match(/Page \d of 5/g) || []).length, 5);
 });
 
 test("client report: no wearable -> Not captured, with what it needs", async () => {
   const { html } = await clientReport({ horse, readings: [], from, to, tz: "UTC" });
-  assert.deepEqual(cell(html, "Steps / locomotion").slice(1), ["—", "cam", "Requires the leg sensor on the horse."]);
-  assert.deepEqual(cell(html, "Lameness (trot)").slice(1), ["—", "cam", "Requires the leg and head or pelvis sensors, at a straight trot."]);
+  assert.deepEqual(cell(html, "Steps / locomotion").slice(1), ["—", "cam", "Not monitored in this session."]);
+  assert.deepEqual(cell(html, "Lameness (trot)").slice(1), ["—", "cam", "Not monitored in this session."]);
 });

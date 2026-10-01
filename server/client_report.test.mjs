@@ -54,6 +54,22 @@ test("nothing measured: says what was not captured, never zero, and builds witho
   assert.ok(clean(html));
 });
 
+test("a night analysed from recorded footage: no temperatures, said as such — not 'the eye was not in view'", async () => {
+  const rec = hourOf().filter((r) => r.metric !== "body_temp_c").map((r) => ({ ...r, meta: { ...r.meta, fromRecording: true } }));
+  rec.push(R("eye_check", 0, 5, { detail: "not measured — recorded video holds no temperatures", fromRecording: true }, "thermal_camera"));
+  const { html } = await clientReport({ horse, readings: rec, from, to: from + hour, tz: "Asia/Kolkata", grab, clipCount: 12 });
+  assert.match(html, /Temperature not measured/);
+  assert.match(html, /analysed from recorded footage, which carries no temperature readings/);
+  assert.match(html, /Analysed from footage/);
+  assert.match(html, /not in recorded footage/);
+  assert.doesNotMatch(html, /eye not in view|the eye was not in view|Eye in view<\/text>/i);
+  assert.match(html, /20 min high, 20 min moderate/, "the rest of the report is as live");
+  assert.ok(clean(html));
+  // Live sessions keep the live wording.
+  const live = await clientReport({ horse, readings: [], from, to: from + hour, tz: "Asia/Kolkata" });
+  assert.doesNotMatch(live.html, /recorded footage/);
+});
+
 test("a rising temperature is said, with the size of the rise", async () => {
   const { html } = await clientReport({ horse, readings: hourOf({ eyeEvery: 2, rise: 1.2 }), from, to: from + hour, tz: "UTC" });
   assert.match(html, /Temperature rising/);
