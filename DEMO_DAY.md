@@ -209,6 +209,28 @@ from the recording where the eye was in view, plain statements of what was and
 was not captured, and your notes shown as the stable's own. The same report
 from a terminal: `node tools/client_report_html.mjs --horse <id> --from <time> --minutes 60 --pdf`.
 
+## A night recorded on a Windows laptop (no Mac at the stable)
+
+When the stall has no network to the Mac, a Windows laptop can stay with the
+camera and only record (`tools/windows-recorder/`: copy the folder with
+`ffmpeg.exe` in it, double-click **START-RECORDING.bat**, type the camera
+password once; clips go to `C:\EquiCare-recordings`). Calibrate on the Mac
+first, then move the cable — the boxes stay on the Mac and the analysis uses
+them, so don't move the camera after.
+
+Afterwards, with both on the same Wi-Fi (a phone hotspot will do) and Tailscale
+on both:
+
+1. Laptop: stop the recorder (Ctrl+C), then double-click **SHARE-RECORDINGS.bat**.
+2. Mac: `python3 tools/fetch_recordings.py --laptop <laptop 100.x> --to ~/EquiCare-demo/recordings/<camera id>`
+   (~25 Mbit/s over a hotspot: about 25 min for 12 h of footage; `--hd` adds the large full-HD colour).
+3. Mac, demo stopped: `~/EquiCare-demo/edge-venv/bin/python edge/replay.py --recordings ~/EquiCare-demo/recordings/<camera id> --device <camera id> --from <local start> --to <local end> --out night.jsonl`
+   (about 20–25 min for 12 h), then
+   `EQUICARE_DATA_DIR=~/EquiCare-demo/data node tools/ingest_readings.mjs --token-file ~/EquiCare-demo/edge-token night.jsonl`.
+4. The client report as usual. It says the session was analysed from recorded
+   footage: footage holds no temperatures, so there is no eye temperature —
+   breathing, activity, rest, vices, lying and the floor come from the pictures.
+
 ## What the behaviour models can and cannot do (tested 26 Sep)
 
 - **Activity (movement) is sound.** Checked against zoologists' labels on

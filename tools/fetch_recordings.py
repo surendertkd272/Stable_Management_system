@@ -1,0 +1,75 @@
+"""Copy the Windows laptop's recordings to this Mac, over Tailscale.
+
+On the laptop: stop the recorder, then double-click SHARE-RECORDINGS.bat
+(tools/windows-recorder). It shares C:\\EquiCare-recordings read-only with
+this Mac only. Here:
+
+  python3 tools/fetch_recordings.py --laptop 100.105.13.127 \\
+      --to ~/EquiCare-demo/recordings/devices-1790666091722-307
+
+The thermal and colour clips edge/replay.py analyses come first; the full-HD
+colour (colour-hd/) only with --hd — it is several times larger and only makes
+nicer photos. A clip already here at the same size is skipped, so a copy that
+stopped (Wi-Fi dropped) carries on where it was when run again.
+"""
+import argparse
+import json
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--laptop", required=True, help="the laptop's Tailscale address")
+    ap.add_argument("--to", required=True, help="folder to copy into (thermal/, visible/ … are made in it)")
+    ap.add_argument("--hd", action="store_true", help="also copy colour-hd/ (large)")
+    ap.add_argument("--port", type=int, default=8765)
+    a = ap.parse_args()
+
+    base = f"http://{a.laptop}:{a.port}"
+    with urllib.request.urlopen(f"{base}/list", timeout=20) as r:
+        items = json.loads(r.read() or b"[]")
+    if isinstance(items, dict):                              # one clip: PowerShell sends the object alone
+        items = [items]
+    streams = ("thermal", "visible") + (("colour-hd",) if a.hd else ())
+    items = sorted((i for i in items if i["path"].split("/")[0] in streams),
+                   key=lambda i: (streams.index(i["path"].split("/")[0]), i["path"]))
+    dest = Path(a.to).expanduser()
+    todo = [i for i in items if not ((dest / i["path"]).exists() and (dest / i["path"]).stat().st_size == i["size"])]
+    total = sum(i["size"] for i in todo)
+    print(f"{len(items)} clips on the laptop, {len(items) - len(todo)} already here; copying {len(todo)} "
+          f"({total / 1e9:.1f} GB)", flush=True)
+    done, t0 = 0, time.time()
+    for k, i in enumerate(todo, 1):
+        out = dest / i["path"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        part = out.with_suffix(".part")
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(f"{base}/{i['path']}", timeout=60) as r, open(part, "wb") as f:
+                    while True:
+                        b = r.read(1 << 20)
+                        if not b:
+                            break
+                        f.write(b)
+                if part.stat().st_size != i["size"]:
+                    raise IOError(f"got {part.stat().st_size} of {i['size']} bytes")
+                part.replace(out)
+                break
+            except Exception as e:                           # noqa: BLE001
+                print(f"  {i['path']}: {e} — " + ("trying again" if attempt < 2 else "skipped; run again later"), flush=True)
+                time.sleep(3)
+        done += i["size"]
+        rate = done / max(1, time.time() - t0)
+        left = (total - done) / rate if rate else 0
+        print(f"  {k}/{len(todo)} {i['path']}  {done / 1e9:.2f}/{total / 1e9:.2f} GB, "
+              f"{rate * 8 / 1e6:.0f} Mbit/s, ~{left / 60:.0f} min left", flush=True)
+    missing = [i["path"] for i in items if not ((dest / i["path"]).exists() and (dest / i["path"]).stat().st_size == i["size"])]
+    print("all copied" if not missing else f"{len(missing)} not copied — run again: {missing[:5]}")
+    sys.exit(1 if missing else 0)
+
+
+if __name__ == "__main__":
+    main()
