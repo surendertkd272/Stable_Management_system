@@ -54,20 +54,39 @@ test("nothing measured: says what was not captured, never zero, and builds witho
   assert.ok(clean(html));
 });
 
-test("a night analysed from recorded footage: no temperatures, said as such — not 'the eye was not in view'", async () => {
+test("a session reviewed from recorded footage: eye temperature is live-only, said plainly — never 'the eye was not in view'", async () => {
   const rec = hourOf().filter((r) => r.metric !== "body_temp_c").map((r) => ({ ...r, meta: { ...r.meta, fromRecording: true } }));
   rec.push(R("eye_check", 0, 5, { detail: "not measured — recorded video holds no temperatures", fromRecording: true }, "thermal_camera"));
   const { html } = await clientReport({ horse, readings: rec, from, to: from + hour, tz: "Asia/Kolkata", grab, clipCount: 12 });
-  assert.match(html, /Temperature not measured/);
-  assert.match(html, /analysed from recorded footage, which carries no temperature readings/);
-  assert.match(html, /Analysed from footage/);
-  assert.match(html, /not in recorded footage/);
-  assert.doesNotMatch(html, /eye not in view|the eye was not in view|Eye in view<\/text>/i);
+  assert.match(html, /Eye temperature: live monitoring only/);
+  assert.match(html, /This session was recorded at the stable and reviewed minute by minute afterwards\. Eye temperature is taken during live monitoring, so it is not part of this review\./);
+  assert.match(html, /Review after recording/, "an hour is not 'overnight'");
+  assert.match(html, /<small>live monitoring only<\/small>/);
+  assert.doesNotMatch(html, /eye not in view|the eye was not in view|Eye in view<\/text>|recorded footage|camera|sensor/i);
   assert.match(html, /20 min high, 20 min moderate/, "the rest of the report is as live");
   assert.ok(clean(html));
-  // Live sessions keep the live wording.
   const live = await clientReport({ horse, readings: [], from, to: from + hour, tz: "Asia/Kolkata" });
-  assert.doesNotMatch(live.html, /recorded footage/);
+  assert.doesNotMatch(live.html, /reviewed minute by minute|live monitoring only/);
+});
+
+test("an overnight review plus a live morning check: temperature from the check, each part named with its times", async () => {
+  const night = Date.parse("2026-09-20T15:00:00Z");                    // 20:30 IST, 10 h to 06:30
+  const atN = (min) => new Date(night + min * 60000 + 55000).toISOString();
+  const rd = [];
+  for (let m = 0; m < 600; m++) {
+    const recorded = m < 540;                                          // 20:30–05:30 reviewed, 05:30–06:30 live
+    const meta = recorded ? { fromRecording: true } : {};
+    rd.push({ metric: "activity_index", value: m % 50 < 5 ? 0.7 : 0.1, ts: atN(m), source: "visible_video", confidence: 0.6, meta, horseId: "tara" });
+    if (!recorded && m % 3 === 0) rd.push({ metric: "body_temp_c", value: 37.1, ts: atN(m), source: "thermal_camera", confidence: 0.95,
+      meta: { method: "eye box, eye-shaped hot spot", readAt: (night + m * 60000 + 50000) / 1000 }, horseId: "tara" });
+  }
+  const { html } = await clientReport({ horse, readings: rd, from: night, to: night + 600 * 60000, tz: "Asia/Kolkata", grab, clipCount: 60 });
+  assert.match(html, /Temperature stable/);
+  assert.match(html, /Eye temperature was taken during the live check \(05:30–06:30\); the overnight part \(20:30–05:30\) was recorded at the stable and reviewed minute by minute afterwards\./);
+  assert.match(html, /Overnight review/);
+  assert.match(html, /eye in view for 20 of 60 live minutes/);
+  assert.match(html, /Reviewed afterwards/, "the timeline shows which part was the review");
+  assert.ok(clean(html));
 });
 
 test("a rising temperature is said, with the size of the rise", async () => {

@@ -80,10 +80,24 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const inAway = (ms) => away.some(([a, b]) => ms >= a && ms <= b);
   const eye = of("body_temp_c").filter((r) => r.value >= EYE_MIN && !inAway(Date.parse(r.ts)));
   const eyeV = eye.map((r) => r.value);
-  // Analysed afterwards from recorded footage (edge/replay.py): the footage
-  // holds no temperatures, so the eye was not "out of view" — it was not
-  // measurable. Said so wherever the eye is mentioned.
-  const fromRec = !eye.length && rd.some((r) => r.meta?.fromRecording);
+  // Minutes reviewed afterwards from recorded footage (edge/replay.py) hold no
+  // temperatures: the eye there was not "out of view", it was not measurable.
+  // A session may be all review (a night recorded at the stable) or a review
+  // plus a live check (the morning, with the eye read) — each minute says
+  // which it was.
+  const recMin = new Array(minutes).fill(false);
+  for (const r of rd) if (r.meta?.fromRecording) recMin[minuteOf(r)] = true;
+  const anyRec = recMin.some(Boolean);
+  const fromRec = anyRec && !eye.length;                           // all review: no eye at all
+  const dayOf = (ms) => T({ year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
+  const overnight = minutes >= 240 && dayOf(from) !== dayOf(to);
+  // "21:40–06:10": from the first to the last minute with data of one kind.
+  const span = (pred) => {
+    const ms = Array.from({ length: minutes }, (_, m) => m).filter((m) => anyMin.has(m) && pred(m));
+    return ms.length ? `${clock(from + ms[0] * 60000)}–${clock(from + (ms.at(-1) + 1) * 60000)}` : "";
+  };
+  const reviewed = (m) => recMin[m], checkedLive = (m) => !recMin[m];
+  const REVIEW = `This ${overnight ? "overnight " : ""}session was recorded at the stable and reviewed minute by minute afterwards. Eye temperature is taken during live monitoring, so it is not part of this review.`;
   const act = new Array(minutes).fill(null), still = new Array(minutes).fill(null), eyeMin = new Array(minutes).fill(null);
   for (const r of of("activity_index")) if (!offCamera(r)) act[minuteOf(r)] = r.value;   // camera activity only
   for (const r of of("inactive_minutes")) still[minuteOf(r)] = Math.min(1, r.value / (r.meta?.windowMin || 1));
@@ -136,6 +150,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const actB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); const v = act.slice(a, b).filter((x) => x !== null); return v.length ? avg(v) : null; });
   const stillB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); const v = still.slice(a, b).filter((x) => x !== null); return v.length ? avg(v) : null; });
   const eyeB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); return eyeMin.slice(a, b).some((x) => x !== null); });
+  const recB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); return recMin.slice(a, b).some(Boolean); });
   const anyB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); for (let m = a; m < b; m++) if (anyMin.has(m)) return true; return false; });
   const rollSpan = 2;
   const roll = actB.map((_, i) => { const w = actB.slice(Math.max(0, i - rollSpan), i + rollSpan + 1).filter((v) => v !== null); return w.length ? avg(w) : null; });
@@ -188,7 +203,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   }
   const caption = (m) => {
     const a = act[m] === null ? "no reading" : LEVEL_WORD[levelOf(act[m])];
-    if (fromRec) return a[0].toUpperCase() + a.slice(1);           // footage: no eye to speak of
+    if (recMin[m] && eyeMin[m] === null) return a[0].toUpperCase() + a.slice(1);   // reviewed: no eye to speak of
     return `${eyeMin[m] === null ? "eye not in view" : eyeSure[m] ? `eye in view, ${f1(eyeMin[m])} °C` : `temperature ${f1(eyeMin[m])} °C`} · ${a}`;
   };
   const ranked = Array.from({ length: minutes }, (_, m) => m).filter((m) => act[m] !== null).sort((a, b) => score(b) - score(a));
@@ -225,18 +240,21 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     ? (trend !== null && trend >= 0.5 ? `Eye-surface temperature rose by ${f1(trend)} °C during the session (median ${f1(eyeMed)} °C) — worth rechecking.`
       : `Eye-surface temperature was stable at around ${f1(eyeMed)} °C.`)
     : eye.length ? `Only ${plural(eye.length, "eye-temperature reading")} ${eye.length === 1 ? "was" : "were"} taken — the eye was mostly out of view.`
-      : fromRec ? "Eye temperature was not measured — this session was analysed from recorded footage, which carries no temperature readings."
+      : fromRec ? REVIEW
         : "Eye temperature was not captured — the eye was not in view.";
+  const tempLead = eye.length && anyRec
+    ? `${tempShort} Eye temperature was taken during the live check (${span(checkedLive)}); the ${overnight ? "overnight " : ""}part (${span(reviewed)}) was recorded at the stable and reviewed minute by minute afterwards.`
+    : tempShort;
   const actShort = actV.length ? `Activity was mostly ${dominant === "none" ? "absent (standing still)" : LEVEL_WORD[dominant].replace(" activity", "")} (median index ${f2(med(actV))}).` : "Activity was not captured.";
   const viceNames = Object.keys(viceKinds);
   const viceShort = !actV.length ? "" : viceNames.length ? `${viceNames.map((k) => k[0].toUpperCase() + k.slice(1)).join(" and ")} ${viceNames.length > 1 ? "were" : "was"} flagged for review on the recording.`
     : "No stereotypic behaviour was detected.";
-  const lead = `${name} was monitored for ${dur}${pausedMin ? ` (the session was paused ${pauseText}; that time is not counted)` : ""}, with data in ${Math.round((anyMin.size / liveMin) * 100)}% of the session. ${tempShort} ${actShort} ${viceShort}`.trim();
+  const lead = `${name} was monitored for ${dur}${pausedMin ? ` (the session was paused ${pauseText}; that time is not counted)` : ""}, with data in ${Math.round((anyMin.size / liveMin) * 100)}% of the session. ${tempLead} ${actShort} ${viceShort}`.trim();
 
   const findings = [
-    ["thermo", eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : fromRec ? "Temperature not measured" : "Temperature not captured",
-      eye.length ? `Eye-surface temperature ${f1(eyeMed)} °C median (range ${f1(eyeLo)}–${f1(eyeHi)} °C) across ${plural(eye.length, "reading")}, eye in view for ${eyeMinutes} of ${minutes} minutes.`
-        : fromRec ? "Analysed from recorded footage, which carries no temperature readings." : "The eye was not in view long enough to read."],
+    ["thermo", eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : fromRec ? "Eye temperature: live monitoring only" : "Temperature not captured",
+      eye.length ? `Eye-surface temperature ${f1(eyeMed)} °C median (range ${f1(eyeLo)}–${f1(eyeHi)} °C) across ${plural(eye.length, "reading")}, eye in view for ${eyeMinutes} of ${anyRec ? `${[...anyMin].filter(checkedLive).length} live` : minutes} minutes.`
+        : fromRec ? "Taken during live monitoring; not part of this review." : "The eye was not in view long enough to read."],
     ["move", actV.length ? `${dominant === "high" ? "Active" : dominant === "none" ? "Mostly resting" : "Settled"} behaviour` : "Activity not captured",
       actV.length ? `${bands.high} min high, ${bands.moderate} min moderate and ${bands.low} min low activity; ${stillMin} min standing still.` : "No movement data in this session."],
     ["check", viceNames.length ? "Behaviour flagged for review" : "No stereotypic behaviour",
@@ -292,7 +310,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const S = { ok: ["ok", "✓", "Measured"], part: ["part", "◐", "Partly captured"], no: ["cam", "◌", "Not captured"] };
   const floorNote = floorWatched === false ? "The stall floor was not in view." : "Needs the stall floor in view.";
   const points = [
-    [1, "Body temperature", eye.length ? S.ok : S.no, eye.length ? `${f1(eyeMed)} °C` : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.` : fromRec ? "Recorded footage carries no temperature readings." : "Needs the eye in view."],
+    [1, "Body temperature", eye.length ? S.ok : S.no, eye.length ? `${f1(eyeMed)} °C` : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : "Needs the eye in view."],
     [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : respNote],
     [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
     [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${liveMin} minutes; ${bands.high} minutes of high activity.` : "No movement data in this session."],
@@ -334,6 +352,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     const lanes = [
       ["Monitored", (i) => anyB[i], "on"],
       ...(fromRec ? [] : [["Eye in view", (i) => eyeB[i], "on"]]),
+      ...(anyRec && !fromRec ? [["Reviewed afterwards", (i) => recB[i], "on"]] : []),
       ["Standing still", (i) => (stillB[i] ?? 0) >= 0.5, "on"],
       ["High activity", (i) => (actB[i] ?? 0) >= 0.6, "hot"],
     ];
@@ -393,7 +412,7 @@ ${grid}${bandsSvg}${tk}${bars}${line}
 
   function tempChart() {
     const H = 250;
-    if (!eye.length) return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="No eye temperature"><rect x="${L}" y="0" width="${W - L - R}" height="${H}" rx="8" class="away"/><text x="${W / 2}" y="${H / 2}" class="lbl" text-anchor="middle">${fromRec ? "No temperature readings — analysed from recorded footage" : "No eye-temperature readings in this session"}</text>${ticks(H)}</svg>`;
+    if (!eye.length) return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="No eye temperature"><rect x="${L}" y="0" width="${W - L - R}" height="${H}" rx="8" class="away"/><text x="${W / 2}" y="${H / 2}" class="lbl" text-anchor="middle">${fromRec ? "Eye temperature is taken during live monitoring — not part of this review" : "No eye-temperature readings in this session"}</text>${ticks(H)}</svg>`;
     const lo = Math.floor(eyeLo - 0.5), hi = Math.max(lo + 3, Math.ceil(eyeHi + 0.5));
     const y = (v) => H - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * H;
     const m = eyeMed, q1 = q(eyeV, 0.25), q3 = q(eyeV, 0.75);
@@ -595,7 +614,7 @@ tr.dim td{color:var(--muted)}
 <div class="meta"><span><b>Date</b> ${day}</span><span><b>Session</b> ${clock(from)}–${clock(rangeEnd)} ${esc(tzName)} (${dur})</span><span><b>Ref.</b> ${ref}</span></div>
 </header>
 <div class="kpis">
-<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>Eye temperature</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : fromRec ? "not in recorded footage" : "eye not in view"}</small></div>
+<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>Eye temperature</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
 <div class="kpi"><b>${f2(med(actV))}</b><span>Activity index</span><small>median · scale 0–1</small></div>
 <div class="kpi"><b>${lyingMeasured ? `${lyingMin} min` : `${stillMin} min`}</b><span>${lyingMeasured ? "Lying down" : "Standing rest"}</span><small>of ${dur}</small></div>
 <div class="kpi"><b>${Math.round((anyMin.size / liveMin) * 100)}%</b><span>Monitoring coverage</span><small>${anyMin.size} of ${liveMin} minutes</small></div>
@@ -670,7 +689,7 @@ ${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.labe
 <div><b>Rest</b><span>Minutes in which the horse stood still; lying down is reported when the horse's whole body is in view.</span></div>
 <div><b>Stable vices</b><span>Weaving, box walking and head tossing are identified from sustained rhythmic movement; a flagged moment can be checked on the recording.</span></div>
 <div><b>Monitoring coverage</b><span>${anyMin.size} of ${liveMin} minutes with data${pausedMin ? ` (paused ${pauseText}, not counted)` : ""}; ${nReadings} readings${clipCount ? ` and ${plural(clipCount, "video clip")}` : ""} recorded for this session.</span></div>
-${fromRec ? `<div><b>Analysed from footage</b><span>This session was recorded at the stable and analysed afterwards, minute by minute, with the same methods as live monitoring. Footage carries no temperature readings, so eye temperature is measured during live monitoring only.</span></div>
+${anyRec ? `<div><b>${overnight ? "Overnight review" : "Review after recording"}</b><span>${fromRec ? "This session was" : `The ${overnight ? "overnight " : ""}part (${span(reviewed)}) was`} recorded at the stable and reviewed afterwards, minute by minute, with the same methods as live monitoring. Eye temperature is taken during live monitoring only${fromRec ? "" : ` — in this session, during the live check (${span(checkedLive)})`}.</span></div>
 ` : ""}<div><b>Screening</b><span>Measurements support daily care and early attention; clinical decisions should be confirmed by a veterinarian.</span></div>
 </div></section>
 ${foot(5)}</div>
