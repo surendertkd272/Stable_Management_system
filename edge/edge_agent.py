@@ -1187,7 +1187,7 @@ class MtrpcCameraWorker(CameraWorker):
         from behaviour import flank_from_box  # noqa
         from colour_floor import ColourFloorWatcher  # noqa
         from video_analytics import box_px  # noqa
-        from detector import iou  # noqa
+        from detector import iou, pick_horse  # noqa
         vw, vh = self.VISIBLE_SIZE
         with self._lock:
             snap = self.last_visible
@@ -1201,7 +1201,7 @@ class MtrpcCameraWorker(CameraWorker):
             print(f"[edge] {self.name}: detector failed ({e}) — lying not measured")
             self.detector, self.detector_note = None, f"detector failed: {e}"
             return False
-        best = max(boxes, key=lambda b: (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) * b["score"]) if boxes else None
+        best = pick_horse(boxes, st.setdefault("scene", []))   # not the stall's opening (see pick_horse)
         if best:
             best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
             self.boxes_seen += 1

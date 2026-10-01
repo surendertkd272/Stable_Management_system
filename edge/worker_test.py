@@ -236,7 +236,7 @@ check("manure seen in the colour picture: an excretion event from visible_video"
 # 8. The flank region follows the horse's box.
 from behaviour import flank_from_box, pick_hotspot  # noqa: E402
 fb = flank_from_box({"x0": 0.2, "y0": 0.3, "x1": 0.8, "y1": 0.9}, 352, 288)
-check("flank region sits in the middle of the body", fb == (144, 146, 207, 198), fb)
+check("flank region sits on the barrel: upper middle of the box (its middle is under the belly)", fb == (144, 112, 207, 164), fb)
 w, _ = make_worker("visible")
 drawn = {"flank": {"x0": 1000, "y0": 1000, "x1": 2000, "y1": 2000}}
 w.auto_flank, w.flank_followed = None, False
@@ -264,6 +264,20 @@ got.clear()
 w.analyzer.breathing_recent = lambda f, seconds=35: {"nostril": {"bpm": None, "reason": "head moving"}, "flank": None}
 w._live_breathing(w.dev["rois"])
 check("no rate in the last 35 s: nothing sent (the minute's check says why)", not got, got)
+
+
+# The stall's round opening taken for a horse (1 Oct): a box over most of the
+# picture with the real horse inside it. The horse is the inner box; the
+# opening, once seen, is ignored even when the horse is missed.
+from detector import pick_horse  # noqa: E402
+opening = {"x0": 0.10, "y0": 0.05, "x1": 0.90, "y1": 1.0, "score": 0.78}
+horse = {"x0": 0.21, "y0": 0.12, "x1": 0.55, "y1": 0.50, "score": 0.69}
+scene = []
+check("the horse, not the opening round it", pick_horse([dict(opening), dict(horse)], scene) == horse)
+check("... and the opening alone, later, is not a horse", pick_horse([dict(opening, score=0.8)], scene) is None, scene)
+close = {"x0": 0.0, "y0": 0.1, "x1": 0.95, "y1": 1.0, "score": 0.9}
+check("a horse filling a close camera's view is still a horse", pick_horse([close], []) == close)
+check("no boxes: no horse", pick_horse([], []) is None)
 
 
 class JitterDetector:

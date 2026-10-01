@@ -315,15 +315,14 @@ def run_chunk(job):
 def posture_samples(job):
     """First pass: the horse box every 2 s, for learning this view's model."""
     vis, t0, t1, model = job
-    from detector import load  # noqa
+    from detector import load, pick_horse  # noqa
     vw, vh = 352, 288
     det, why = load(model)
     if det is None:
         return []
-    hist = []
+    hist, scene = [], []
     for t, _, fr in frames(vis, vw, vh, 0.5, t0, t1, "visible"):
-        boxes = det.detect(fr, vw, vh)
-        best = max(boxes, key=lambda b: (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) * b["score"]) if boxes else None
+        best = pick_horse(det.detect(fr, vw, vh), scene)
         if not best:
             continue
         edges = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)

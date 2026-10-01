@@ -559,9 +559,12 @@ def eye_spot(vals, cols, rows):
 
 
 def flank_from_box(box, w, h):
-    """The flank region inside a horse box (pixel bounds): the middle of the
-    body, behind the shoulder, where the ribs and belly rise and fall."""
+    """The flank region inside a horse box (pixel bounds): the barrel, behind
+    the shoulder, where the ribs rise and fall. The box runs from the back to
+    the hooves, so the barrel is its upper middle — the box's own middle is
+    the gap under the belly, between the legs (seen 2 Oct on the stall's
+    recording: the wall behind showed there, not the horse)."""
     bw, bh = box["x1"] - box["x0"], box["y1"] - box["y0"]
     x0, x1 = box["x0"] + 0.35 * bw, box["x0"] + 0.65 * bw
-    y0, y1 = box["y0"] + 0.35 * bh, box["y0"] + 0.65 * bh
+    y0, y1 = box["y0"] + 0.15 * bh, box["y0"] + 0.45 * bh
     return (max(0, int(x0 * w)), max(0, int(y0 * h)), min(w - 1, int(x1 * w)), min(h - 1, int(y1 * h)))

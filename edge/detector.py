@@ -92,6 +92,39 @@ def iou(a, b):
     return inter / ua if ua > 0 else 0.0
 
 
+def _area(b):
+    return (b["x1"] - b["x0"]) * (b["y1"] - b["y0"])
+
+
+def _inside(outer, inner):
+    """Share of `inner` that lies within `outer`."""
+    ix = max(0.0, min(outer["x1"], inner["x1"]) - max(outer["x0"], inner["x0"]))
+    iy = max(0.0, min(outer["y1"], inner["y1"]) - max(outer["y0"], inner["y0"]))
+    return ix * iy / max(1e-9, _area(inner))
+
+
+def pick_horse(boxes, scene=None):
+    """The horse among the detector's boxes: the largest-and-surest — except a
+    box drawn round the scene. On 1 Oct the detector took a stall's round
+    opening for a horse: the top box covered most of the picture in 106 of 281
+    sampled frames, and in 97 of them the real horse was a smaller box inside
+    it. So a box over half the frame with a sure horse box (a third its size or
+    less) inside it is the scene; `scene` (a list the caller keeps) remembers
+    it, and a box matching a remembered scene box is dropped even in frames
+    where the real horse was missed — the opening never moves, a horse does."""
+    if not boxes:
+        return None
+    if scene is not None:
+        for a in boxes:
+            if _area(a) > 0.5 and any(b is not a and b["score"] >= 0.4 and _area(b) <= _area(a) / 3 and _inside(a, b) >= 0.9
+                                      for b in boxes) and not any(iou(a, s) >= 0.85 for s in scene):
+                scene.append({k: a[k] for k in ("x0", "y0", "x1", "y1")})
+        boxes = [a for a in boxes if not any(iou(a, s) >= 0.85 for s in scene)]
+        if not boxes:
+            return None
+    return max(boxes, key=lambda b: _area(b) * b["score"])
+
+
 def nms(boxes, thr=0.45):
     kept = []
     for b in boxes:
