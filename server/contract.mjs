@@ -59,6 +59,10 @@ export const METRICS = {
   // The same for the eye temperature: value 1 an eye was read, 0 not;
   // meta.detail says how or why not, meta.where (0–10000) where it was found.
   eye_check:            { point: 2,  label: "Eye check",            unit: "0/1",   source: "thermal_camera", kind: "diagnostic" },
+  // The Live view's breathing: the last 35 s, every 10 s (meta.rolling). A
+  // diagnostic — the minute's respiratory_rate_bpm stays the record, so
+  // reports, trends and alerts count each minute once.
+  respiratory_rate_live_bpm: { point: 4, label: "Breathing (last 35 s)", unit: "bpm", source: "thermal_video", kind: "diagnostic" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },
 };

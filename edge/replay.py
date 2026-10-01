@@ -241,6 +241,7 @@ def make_worker(dev, posture_state, detector_model, clock, sink):
 
     class ReplayWorker(ea.MtrpcCameraWorker):
         box_px = staticmethod(_box_px)
+        LIVE_BREATH_EVERY_S = None                           # the Live view's 10 s rate: not for a past night
 
         def _start_video(self):                              # the feeder plays the footage
             pass

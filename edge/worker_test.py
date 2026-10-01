@@ -249,6 +249,23 @@ w.auto_flank = None
 check("nothing drawn, no horse seen: no flank", w.flank_bounds({}) is None)
 
 
+# The Live view's breathing: sent every 10 s when a rate is found, labelled
+# as the last 35 s, a diagnostic beside the minute's record.
+w, got = make_worker("visible")
+w._head_in_view = True
+w.analyzer.breathing_recent = lambda f, seconds=35: {"nostril": {"bpm": 11.6, "strength": 0.8, "seconds": 33.0, "regularity": 0.7}, "flank": None}
+w.vanalyzer.breathing_recent = lambda f, seconds=35: {"nostril": None, "flank": None}
+w._live_breathing(w.dev["rois"])
+lv = [r for r in got if r["metric"] == "respiratory_rate_live_bpm"]
+check("a rolling rate is sent at once, from the nostril, with its box",
+      len(lv) == 1 and lv[0]["value"] == 11.6 and lv[0]["meta"]["rolling"] and "last 35 s" in lv[0]["meta"]["method"]
+      and lv[0]["meta"]["box"] == w.dev["rois"]["nostril"], lv)
+got.clear()
+w.analyzer.breathing_recent = lambda f, seconds=35: {"nostril": {"bpm": None, "reason": "head moving"}, "flank": None}
+w._live_breathing(w.dev["rois"])
+check("no rate in the last 35 s: nothing sent (the minute's check says why)", not got, got)
+
+
 class JitterDetector:
     """A horse standing still; its box jitters by about a pixel, as a real detector's does."""
     def __init__(self):

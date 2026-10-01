@@ -170,7 +170,7 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
     const r = await api.listDevices();
     if (r.ok && alive.current) setStatus(r.data.find((d) => d.id === cam.id)?.status ?? null);
   }, [horse, cam.id]);
-  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
 
   const begin = () => {
     const now = new Date().toISOString();
@@ -186,7 +186,11 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
   // The moving boxes: where this minute's eye and breathing were found.
   const ageS = (ts?: string) => (ts ? (Date.now() - Date.parse(ts)) / 1000 : Infinity);
   const marks: LiveMark[] = [];
-  const ec = v.eye_check, rr = v.respiratory_rate_bpm;
+  // Breathing: the rolling rate of the last 35 s (every 10 s) when it is newer
+  // than the minute's, else the minute's.
+  const rLive = v.respiratory_rate_live_bpm, rMin = v.respiratory_rate_bpm;
+  const rr = rLive && (!rMin || rLive.ts > rMin.ts) && ageS(rLive.ts) < 60 ? rLive : rMin;
+  const ec = v.eye_check;
   if (ec?.value === 1 && ec.where && ageS(ec.ts) < MARK_MAX_S)
     marks.push({ kind: "eye", x: ec.where.x, y: ec.where.y, old: ageS(ec.ts) > 90,
       label: `eye${v.body_temp_c && v.body_temp_c.ts >= ec.ts ? ` ${v.body_temp_c.value.toFixed(1)} °C` : ""} · ${hm(ec.ts)}` });
@@ -259,8 +263,8 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
                 </span>
               )}
             </b></div>
-            <div><span><Wind size={13} /> Breathing</span><b>{v.respiratory_rate_bpm ? `${Math.round(v.respiratory_rate_bpm.value)} /min · ${ago(v.respiratory_rate_bpm.ts)}${b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : "no rate yet — needs 30 s with the head still"}
-              {v.breathing_check && v.breathing_check.value === 0 && v.breathing_check.detail && (!v.respiratory_rate_bpm || v.breathing_check.ts > v.respiratory_rate_bpm.ts) && (
+            <div><span><Wind size={13} /> Breathing</span><b>{rr ? `${Math.round(rr.value)} /min · ${ago(rr.ts)}${rr === rLive ? " · last 35 s" : b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : "no rate yet — needs 30 s with the head still"}
+              {v.breathing_check && v.breathing_check.value === 0 && v.breathing_check.detail && (!rr || v.breathing_check.ts > rr.ts) && (
                 <span className="muted" style={{ display: "block", fontWeight: 400, fontSize: 12 }}>last minute: no rate — {v.breathing_check.detail} ({ago(v.breathing_check.ts)})</span>
               )}</b></div>
             <div><span><Activity size={13} /> Activity</span><b>{v.activity_index ? `${v.activity_index.value.toFixed(2)} · ${ago(v.activity_index.ts)}` : "no reading yet"}</b></div>
@@ -270,7 +274,7 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
           </div>
         )}
         <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
-          Readings arrive once a minute from the edge agent; this panel refreshes every 15 s
+          Readings arrive once a minute from the edge agent (breathing every 10 s, over the last 35 s); this panel refreshes every 5 s
           {updatedAt ? ` · updated ${hms(updatedAt)}` : ""}.
           {marks.length > 0 && " On the thermal picture: red = where the eye was read, green = where the breathing was read (the last minutes)."}
         </p>

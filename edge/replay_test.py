@@ -65,6 +65,7 @@ check("the stop in the recording is skipped, not filled",
 metrics = {r["metric"] for r in out}
 check("activity and the breathing check, as live", {"activity_index", "inactive_minutes", "breathing_check"} <= metrics, metrics)
 check("no temperature is claimed", not ({"body_temp_c", "nostril_temp_c"} & metrics), metrics)
+check("no Live-view 10 s breathing rates for a past night", "respiratory_rate_live_bpm" not in metrics, metrics)
 eye = [r for r in out if r["metric"] == "eye_check"]
 check("each minute's eye check says why", eye and all(r["value"] == 0 and "no temperatures" in r["meta"]["detail"] for r in eye),
       eye[:1])

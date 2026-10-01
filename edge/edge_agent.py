@@ -985,6 +985,22 @@ BREATHING_WHY = {
 }
 
 
+def pick_breathing(br, fl, followed=False):
+    """(result, method) from the thermal nostril (br) and the colour flank
+    (fl) breathing results: the stronger when both found a rate (and whether
+    they agreed), else whichever did; (None, None) when neither."""
+    if br.get("bpm") and fl.get("bpm"):
+        agree = abs(br["bpm"] - fl["bpm"]) <= max(2.0, 0.15 * br["bpm"])
+        pick = br if br["strength"] >= fl["strength"] else fl
+        return pick, ("thermal nostril + colour flank agree" if agree
+                      else "thermal nostril (colour flank disagreed)" if pick is br else "colour flank (thermal nostril disagreed)")
+    if br.get("bpm"):
+        return br, "thermal video, nostril box"
+    if fl.get("bpm"):
+        return fl, "colour video, flank movement" + (" (followed the horse)" if followed else "")
+    return None, None
+
+
 def _iou_px(a, b):
     """Overlap of two pixel regions (x0, y0, x1, y1), 0..1."""
     ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
@@ -1045,6 +1061,7 @@ class MtrpcCameraWorker(CameraWorker):
     sampling (too slow on this firmware to find a rhythm reliably)."""
 
     FLOOR_EVERY_S = 2.0
+    LIVE_BREATH_EVERY_S = 10.0         # the Live view's breathing: the last 35 s, every 10 s (None: off)
     VISIBLE_SIZE = (352, 288)          # finer than thermal: flank movement is ~1 cm
     FILLS_VIEW = 0.5                   # horse box at least half the frame wide: laps cannot be seen
     DETECT_EVERY_S = 1.0
@@ -1225,6 +1242,27 @@ class MtrpcCameraWorker(CameraWorker):
                 self.cfloor_events += evs
         return True
 
+    def _live_breathing(self, rois):
+        """The breathing rate of the last 35 s, for the Live view, sent at once
+        (respiratory_rate_live_bpm, a diagnostic: the minute's
+        respiratory_rate_bpm stays the record). Nothing is sent when no rate
+        is found — the minute's breathing_check says why."""
+        with self._lock:
+            rec = self.analyzer.breathing_recent(compute_resp_rate) if self.analyzer else {}
+            vrec = self.vanalyzer.breathing_recent(compute_resp_rate) if self.vanalyzer else {}
+        br = (rec.get("nostril") or {}) if getattr(self, "_head_in_view", True) else {}
+        pick, method = pick_breathing(br, vrec.get("flank") or {}, self.auto_flank is not None)
+        if not pick:
+            return
+        calibrated = bool(self.dev.get("calibrated"))
+        meta = {"method": method + " · last 35 s", "seconds": pick.get("seconds"), "rolling": True, "calibrated": calibrated,
+                "regularity": None if pick.get("regularity") is None else round(pick["regularity"], 2)}
+        if pick is br and rois.get("nostril"):
+            meta["box"] = rois["nostril"]
+        self.emit([dict(deviceId=self.dev["id"], metric="respiratory_rate_live_bpm", value=round(pick["bpm"], 1), unit="bpm",
+                        ts=now_iso(), source="thermal_video" if pick is br else "visible_video",
+                        confidence=round(min(0.95, pick["strength"]) if calibrated else 0.3, 2), meta=meta)])
+
     def flank_bounds(self, rois):
         """Where to watch the flank this frame: the horse's own flank when the
         detector sees it standing still, whole body in view — the boxes follow
@@ -1331,10 +1369,13 @@ class MtrpcCameraWorker(CameraWorker):
         self.flank_followed = False
         pixel_window, floor_events = [], []
         calib = self.dev.get("floorCalib") or {}
-        t0 = last_floor = time.time()
+        t0 = last_floor = last_live = time.time()
         while time.time() - t0 < self.window_s and not self.stop_evt.is_set():
             tick = time.time()
             rois = self.dev.get("rois") or rois               # re-aimed mid-window: follow it
+            if video_ok and self.LIVE_BREATH_EVERY_S and tick - last_live >= self.LIVE_BREATH_EVERY_S:
+                self._live_breathing(rois)
+                last_live = tick
             if not video_ok:                                  # fallback: pixel-sampled breathing
                 v = self.cam.box_avg(rois["nostril"])
                 if v is not None:
@@ -1396,6 +1437,7 @@ class MtrpcCameraWorker(CameraWorker):
             return
         self._absent_logged = False
         head_in_view = present is not False
+        self._head_in_view = head_in_view                   # for the 10 s breathing until the next window
 
         def add(metric, value, unit, source="thermal_camera", conf=0.95, at=None, **meta):
             out.append(dict(deviceId=dev_id, metric=metric, value=round(value, 3), unit=unit, ts=at or ts,
@@ -1415,16 +1457,7 @@ class MtrpcCameraWorker(CameraWorker):
             **({"where": eye_where} if eye is not None and eye_where else {}))
         br = summary.get("breathing") or {} if head_in_view else {}
         fl = vsummary.get("flank_breathing") or {}
-        pick, method = None, None
-        if br.get("bpm") and fl.get("bpm"):
-            agree = abs(br["bpm"] - fl["bpm"]) <= max(2.0, 0.15 * br["bpm"])
-            pick = br if br["strength"] >= fl["strength"] else fl
-            method = ("thermal nostril + colour flank agree" if agree
-                      else "thermal nostril (colour flank disagreed)" if pick is br else "colour flank (thermal nostril disagreed)")
-        elif br.get("bpm"):
-            pick, method = br, "thermal video, nostril box"
-        elif fl.get("bpm"):
-            pick, method = fl, "colour video, flank movement" + (" (followed the horse)" if self.flank_followed else "")
+        pick, method = pick_breathing(br, fl, self.flank_followed)
         bs = (summary.get("breathing_search") or {}) if head_in_view else {}
         if pick is br and br:
             pick = dict(br, box=rois.get("nostril"))
@@ -1761,7 +1794,7 @@ class EdgeRuntime:
         except Exception as e:                                  # noqa: BLE001
             print(f"[edge] heartbeat failed ({e})")
 
-    def run(self, refresh_s=60, flush_s=10, beat_s=30):
+    def run(self, refresh_s=60, flush_s=5, beat_s=30):
         cfg = self.fetch_config()
         if cfg is None:
             raise SystemExit("[edge] no configuration from the server and none cached — cannot start")

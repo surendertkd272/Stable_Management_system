@@ -30,6 +30,7 @@ Standard library only, so it runs on a bare Jetson image next to ffmpeg.
 """
 import math
 import socket
+from collections import deque
 import subprocess
 import threading
 import time
@@ -225,7 +226,13 @@ class WindowAnalyzer:
         self.flank_bounds = None
         self.posture = posture
         self.n_frames = 0
+        # The last ROLL_S seconds of the breathing signals, kept across
+        # windows (reset() leaves them): the Live view's breathing every 10 s.
+        self.roll = deque(maxlen=int(fs * self.ROLL_S))
+        self.roll_flank = deque(maxlen=int(fs * self.ROLL_S))
         self.reset()
+
+    ROLL_S = 40
 
     def reset(self):
         self.fracs, self.cx, self.mx, self.sx, self.sy, self.t0 = [], [], [], [], [], time.time()
@@ -253,17 +260,39 @@ class WindowAnalyzer:
             self.nostril.append(box_mean(frame, nostril_bounds, self.w))
             self.nref.append(ring_mean(frame, nostril_bounds, ring_bounds(nostril_bounds, self.w, self.h), self.w))
             self.glob.append(sum(frame[i] for i in self.motion.idx[::7]) / len(self.motion.idx[::7]))
+            self.roll.append((self.nostril[-1], self.nref[-1], self.glob[-1]))
+        else:
+            self.roll.append((None, None, None))
         if flank_bounds:
             if self.flank_sway is None or self.flank_bounds != flank_bounds:
                 # A new region (re-aimed, or the horse moved): start a fresh
                 # stretch — samples from two places must not be joined.
                 self.flank_sway = SwayMeter(self.w, self.h, self.fs, bounds=flank_bounds, mean_s=8, step=1)
                 self.flank_bounds, self.flank = flank_bounds, []
+                self.roll_flank.clear()
             self.flank.append(self.flank_sway.feed(frame)[1])
-        elif self.flank:
+            self.roll_flank.append(self.flank[-1])
+        elif self.flank or self.roll_flank:
             self.flank_bounds, self.flank = None, []
+            self.roll_flank.clear()
         if self.posture is not None and self.n_frames % self.POSTURE_EVERY == 0 and self.mode == "thermal":
             self.posture.feed(t, warm_blob_box(frame, self.w, self.h, self.mask), self.recent_motion())
+
+    def breathing_recent(self, compute_resp_rate, seconds=35):
+        """The breathing of the last `seconds`, across window boundaries — the
+        same analysis as a window's (a 30 s still stretch, the same band and
+        checks), for the Live view's update every 10 s. {"nostril": result or
+        None, "flank": result or None}; a result is breath_analysis's."""
+        n = int(self.fs * seconds)
+        out = {"nostril": None, "flank": None}
+        pairs = [(a, b, g) for a, b, g in list(self.roll)[-n:] if a is not None and b is not None]
+        if len(pairs) >= 0.9 * n:
+            bad = bad_samples([b for _, b, _ in pairs], [g for _, _, g in pairs], self.fs)
+            out["nostril"] = breath_analysis([a - b for a, b, _ in pairs], self.fs, compute_resp_rate, bad)
+        fl = list(self.roll_flank)[-n:]
+        if len(fl) >= 0.9 * n:
+            out["flank"] = breath_analysis(fl, self.fs, compute_resp_rate)
+        return out
 
     def _block_means(self, frame):
         """Mean brightness of each search block (every 2nd pixel and row)."""

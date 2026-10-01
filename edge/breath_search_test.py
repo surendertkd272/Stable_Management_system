@@ -65,5 +65,19 @@ check("plain noise: no breathing found", not (s.get("breathing_search") or {}).g
 s, _ = run(20, bpm=12)
 check("under 30 s of video: no search", s.get("breathing_search") is None, s.get("breathing_search"))
 
+# The Live view's breathing every 10 s: the last 35 s, across the minute's
+# reset (the window's own summary then has too little to go on).
+a = WindowAnalyzer(mode="thermal")
+nb = (114, 64, 126, 76)                                       # the breathing patch at (120, 70)
+for k, fr in enumerate(frames(40, bpm=12, at=(120, 70), seed=3)):
+    if k == 20 * FPS:
+        a.reset()                                             # a new minute starts
+    a.feed(fr, nb, t=k / FPS)
+rec = a.breathing_recent(compute_resp_rate)
+check("rolling breathing found across the minute boundary", (rec["nostril"] or {}).get("bpm") is not None, rec)
+check("... at the right rate (12/min)", abs(((rec["nostril"] or {}).get("bpm") or 0) - 12) <= 1.5, rec["nostril"])
+check("... though the new minute alone has too little", not (a.summary(compute_resp_rate).get("breathing") or {}).get("bpm"))
+check("no flank watched: no flank rate", rec["flank"] is None, rec["flank"])
+
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)
