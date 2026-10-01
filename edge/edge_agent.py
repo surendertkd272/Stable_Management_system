@@ -1146,54 +1146,63 @@ class MtrpcCameraWorker(CameraWorker):
         posture tracker (standing / lying from the box's shape over time), the
         colour floor watcher (urination / manure on the bedding) and, while
         the horse stands still, the flank region for breathing."""
+        st = {"last": None, "history": []}
+        while not self.stop_evt.is_set():
+            self.stop_evt.wait(self.DETECT_EVERY_S)
+            if not self._detect_step(st):
+                return
+
+    def _detect_step(self, st):
+        """One look for the horse in the latest colour frame (see _detect_loop).
+        st carries the last frame's time and the 30 s of boxes between calls.
+        False when the detector failed and should not be asked again. Also
+        called directly by edge/replay.py, once per second of recorded video."""
         from behaviour import flank_from_box  # noqa
         from colour_floor import ColourFloorWatcher  # noqa
         from video_analytics import box_px  # noqa
         from detector import iou  # noqa
         vw, vh = self.VISIBLE_SIZE
-        last = None
-        history = []                      # (t, box) for "standing still"
-        while not self.stop_evt.is_set():
-            self.stop_evt.wait(self.DETECT_EVERY_S)
+        with self._lock:
+            snap = self.last_visible
+            motion = self.vanalyzer.recent_motion() if self.vanalyzer else 0.0
+        if not snap or snap[1] == st["last"]:
+            return True
+        st["last"] = snap[1]
+        try:
+            boxes = self.detector.detect(snap[0], vw, vh)
+        except Exception as e:                              # noqa: BLE001
+            print(f"[edge] {self.name}: detector failed ({e}) — lying not measured")
+            self.detector, self.detector_note = None, f"detector failed: {e}"
+            return False
+        best = max(boxes, key=lambda b: (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) * b["score"]) if boxes else None
+        if best:
+            best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
+            self.boxes_seen += 1
+            self.box_widths.append(best["x1"] - best["x0"])
+        t = snap[1]
+        history = [(ht, hb) for ht, hb in st["history"] if t - ht <= 30] + ([(t, best)] if best else [])
+        st["history"] = history
+        still = bool(best) and motion < 0.1 and len(history) >= 20 and all(iou(hb, best) >= 0.85 for _, hb in history)
+        # Breathing from the flank wherever the horse stands still — unless a
+        # flank box was drawn by hand. The region only moves when the horse does.
+        self.auto_flank = flank_from_box(best, vw, vh) if still else None
+        rois = self.dev.get("rois") or {}
+        # The floor is only watched where someone drew it: a guessed area
+        # may be the horse's body or a wall (camera close to the horse).
+        bounds = box_px(rois["colourFloor"], vw, vh) if rois.get("colourFloor") else None
+        if bounds is None:
+            self.cfloor = None
+        elif self.cfloor is None or self.cfloor.bounds != bounds:
+            self.cfloor = ColourFloorWatcher(vw, vh, bounds)
+        with self._lock:
+            self.posture.feed(t, best, motion)
+            moving = self.vanalyzer.motion.moving_cells(self.cfloor.bounds, self.cfloor.COLS, self.cfloor.ROWS, 30) \
+                if (self.vanalyzer and self.cfloor) else set()
+        evs = self.cfloor.feed(snap[0], t, best, still, moving) if self.cfloor else []
+        if evs:
             with self._lock:
-                snap = self.last_visible
-                motion = self.vanalyzer.recent_motion() if self.vanalyzer else 0.0
-            if not snap or snap[1] == last:
-                continue
-            last = snap[1]
-            try:
-                boxes = self.detector.detect(snap[0], vw, vh)
-            except Exception as e:                          # noqa: BLE001
-                print(f"[edge] {self.name}: detector failed ({e}) — lying not measured")
-                self.detector, self.detector_note = None, f"detector failed: {e}"
-                return
-            best = max(boxes, key=lambda b: (b["x1"] - b["x0"]) * (b["y1"] - b["y0"]) * b["score"]) if boxes else None
-            if best:
-                best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
-                self.boxes_seen += 1
-                self.box_widths.append(best["x1"] - best["x0"])
-            t = snap[1]
-            history = [(ht, hb) for ht, hb in history if t - ht <= 30] + ([(t, best)] if best else [])
-            still = bool(best) and motion < 0.1 and len(history) >= 20 and all(iou(hb, best) >= 0.85 for _, hb in history)
-            # Breathing from the flank wherever the horse stands still — unless a
-            # flank box was drawn by hand. The region only moves when the horse does.
-            self.auto_flank = flank_from_box(best, vw, vh) if still else None
-            rois = self.dev.get("rois") or {}
-            # The floor is only watched where someone drew it: a guessed area
-            # may be the horse's body or a wall (camera close to the horse).
-            bounds = box_px(rois["colourFloor"], vw, vh) if rois.get("colourFloor") else None
-            if bounds is None:
-                self.cfloor = None
-            elif self.cfloor is None or self.cfloor.bounds != bounds:
-                self.cfloor = ColourFloorWatcher(vw, vh, bounds)
-            with self._lock:
-                self.posture.feed(t, best, motion)
-                moving = self.vanalyzer.motion.moving_cells(self.cfloor.bounds, self.cfloor.COLS, self.cfloor.ROWS, 30) \
-                    if (self.vanalyzer and self.cfloor) else set()
-            evs = self.cfloor.feed(snap[0], t, best, still, moving) if self.cfloor else []
-            if evs:
-                with self._lock:
-                    self.cfloor_events += evs
+                self.cfloor_events += evs
+        return True
 
     def _auto_eye(self):
         """An eye anywhere in the thermal view: a coarse 16×12 scan of pixel

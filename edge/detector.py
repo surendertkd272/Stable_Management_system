@@ -13,6 +13,7 @@ and says lying is not measured. Not trained on our stalls. On 60 open photos
 13/14, lying flat on the side 0/4 — the tracker treats "lost while lying" as
 possibly flat on the side. Untested on night infrared video.
 """
+import os
 from pathlib import Path
 
 COCO_HORSE = 17
@@ -25,7 +26,14 @@ class HorseDetector:
         import onnxruntime as ort
         self.np = np
         path = str(model_path or DEFAULT_MODEL)
-        self.sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+        opts = ort.SessionOptions()
+        # Several detectors side by side (edge/replay.py's parallel parts):
+        # one thread each, or they fight over the cores.
+        threads = int(os.environ.get("EQUICARE_DETECTOR_THREADS") or 0)
+        if threads > 0:
+            opts.intra_op_num_threads = threads
+            opts.inter_op_num_threads = 1
+        self.sess = ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
         inp = self.sess.get_inputs()[0]
         self.name = inp.name
         self.size = (inp.shape[2], inp.shape[3])            # (h, w), e.g. 416x416 for nano
