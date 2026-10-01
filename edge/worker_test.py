@@ -237,6 +237,43 @@ check("manure seen in the colour picture: an excretion event from visible_video"
 from behaviour import flank_from_box, pick_hotspot  # noqa: E402
 fb = flank_from_box({"x0": 0.2, "y0": 0.3, "x1": 0.8, "y1": 0.9}, 352, 288)
 check("flank region sits in the middle of the body", fb == (144, 146, 207, 198), fb)
+w, _ = make_worker("visible")
+drawn = {"flank": {"x0": 1000, "y0": 1000, "x1": 2000, "y1": 2000}}
+w.auto_flank, w.flank_followed = None, False
+check("no horse seen standing still: the flank box drawn at calibration",
+      w.flank_bounds(drawn) == (35, 29, 70, 58) and not w.flank_followed, w.flank_bounds(drawn))
+w.auto_flank = fb
+check("horse standing still elsewhere in the stall: its own flank, not the drawn box",
+      w.flank_bounds(drawn) == fb and w.flank_followed)
+w.auto_flank = None
+check("nothing drawn, no horse seen: no flank", w.flank_bounds({}) is None)
+
+
+class JitterDetector:
+    """A horse standing still; its box jitters by about a pixel, as a real detector's does."""
+    def __init__(self):
+        self.k, self.at = 0, (0.30, 0.20, 0.70, 0.80)
+
+    def detect(self, frame, w, h):
+        self.k += 1
+        j = 0.003 * ((self.k * 7) % 3 - 1)
+        x0, y0, x1, y1 = self.at
+        return [{"x0": x0 + j, "y0": y0 - j, "x1": x1 + j, "y1": y1, "score": 0.9}]
+
+
+w, _ = make_worker("visible")
+w.detector, st, regions = JitterDetector(), {"last": None, "history": []}, []
+for k in range(40):
+    w.last_visible = (bytes(W * H), 1000.0 + k)
+    w._detect_step(st)
+    regions.append(w.auto_flank)
+held = [r for r in regions if r is not None]
+check("a horse standing still: its flank found once it has stood 20 s", regions[18] is None and held, regions[15:25])
+check("... and held steady while the box jitters (any change restarts the breathing count)", len(set(held)) == 1, set(held))
+w.detector.at = (0.05, 0.20, 0.35, 0.80)                    # walks to the other side of the stall
+w.last_visible = (bytes(W * H), 2000.0)
+w._detect_step(st)
+check("the horse moves away: the old flank is dropped, not watched on an empty floor", w.auto_flank is None, w.auto_flank)
 edge = [26.0] * 192
 edge[0] = 36.0
 check("a hot point on the frame edge is not an eye (partly out of view)", pick_hotspot(edge, 16, 12) is None)

@@ -215,9 +215,8 @@ class Feeder:
                 nb = w.box_px(rois["nostril"]) if rois.get("nostril") else None
                 w.analyzer.feed(fr, nb, t=t)
             else:
-                vw, vh = w.VISIBLE_SIZE
                 r = w.dev.get("rois") or {}
-                fb = w.box_px(r["flank"], vw, vh) if r.get("flank") else w.auto_flank
+                fb = w.flank_bounds(r)
                 w.vanalyzer.feed(fr, flank_bounds=fb, t=t)
                 w.last_visible = (fr, t)
                 if w.detector is not None and t - self.last_detect >= w.DETECT_EVERY_S:

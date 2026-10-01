@@ -985,6 +985,15 @@ BREATHING_WHY = {
 }
 
 
+def _iou_px(a, b):
+    """Overlap of two pixel regions (x0, y0, x1, y1), 0..1."""
+    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
 def _warmest(vals, pts):
     """The point (0–10000, rounded) of the warmest read, or None."""
     best = max(((v, i) for i, v in enumerate(vals) if v is not None), default=None)
@@ -1052,6 +1061,7 @@ class MtrpcCameraWorker(CameraWorker):
         self._walk_prev = None             # box walking seen last window: its minutes, or True mid-bout
         self.posture = None
         self.auto_flank = None             # flank bounds from the detector box while the horse stands still
+        self.flank_followed = False        # this window's flank breathing used auto_flank (followed the horse)
         self.cfloor, self.cfloor_events = None, []
         self._lock = threading.Lock()
 
@@ -1122,7 +1132,7 @@ class MtrpcCameraWorker(CameraWorker):
 
             def on_visible(frame, t):
                 r = self.dev.get("rois") or {}
-                fb = box_px(r["flank"], vw, vh) if r.get("flank") else self.auto_flank
+                fb = self.flank_bounds(r)
                 with self._lock:
                     self.vanalyzer.feed(frame, flank_bounds=fb, t=t)
                     self.last_visible = (frame, t)
@@ -1183,9 +1193,20 @@ class MtrpcCameraWorker(CameraWorker):
         history = [(ht, hb) for ht, hb in st["history"] if t - ht <= 30] + ([(t, best)] if best else [])
         st["history"] = history
         still = bool(best) and motion < 0.1 and len(history) >= 20 and all(iou(hb, best) >= 0.85 for _, hb in history)
-        # Breathing from the flank wherever the horse stands still — unless a
-        # flank box was drawn by hand. The region only moves when the horse does.
-        self.auto_flank = flank_from_box(best, vw, vh) if still else None
+        # Breathing from the flank wherever the horse stands still, its whole
+        # body in view (a box touching 2+ edges is a horse filling the view:
+        # its middle need not be the flank — the drawn box is used then).
+        # The region only moves when the horse does: the detector's box
+        # jitters by a pixel or two every second, and any change of region
+        # restarts the breathing count, so a flank still overlapping the
+        # horse's current one is kept as it is.
+        here = flank_from_box(best, vw, vh) if best and best.get("edges", 0) <= 1 else None
+        if here is not None and self.auto_flank is not None and _iou_px(here, self.auto_flank) >= 0.6:
+            pass                                             # same horse, same place: keep the region steady
+        elif here is not None and still:
+            self.auto_flank = here
+        else:
+            self.auto_flank = None
         rois = self.dev.get("rois") or {}
         # The floor is only watched where someone drew it: a guessed area
         # may be the horse's body or a wall (camera close to the horse).
@@ -1203,6 +1224,17 @@ class MtrpcCameraWorker(CameraWorker):
             with self._lock:
                 self.cfloor_events += evs
         return True
+
+    def flank_bounds(self, rois):
+        """Where to watch the flank this frame: the horse's own flank when the
+        detector sees it standing still, whole body in view — the boxes follow
+        the horse round the stall — else the flank box drawn at calibration."""
+        from video_analytics import box_px  # noqa
+        if self.auto_flank is not None:
+            self.flank_followed = True
+            return self.auto_flank
+        vw, vh = self.VISIBLE_SIZE
+        return box_px(rois["flank"], vw, vh) if rois.get("flank") else None
 
     def _auto_eye(self):
         """An eye anywhere in the thermal view: a coarse 16×12 scan of pixel
@@ -1296,6 +1328,7 @@ class MtrpcCameraWorker(CameraWorker):
             if self.vanalyzer:
                 self.vanalyzer.reset()
         self.boxes_seen, self.box_widths = 0, []
+        self.flank_followed = False
         pixel_window, floor_events = [], []
         calib = self.dev.get("floorCalib") or {}
         t0 = last_floor = time.time()
@@ -1391,7 +1424,7 @@ class MtrpcCameraWorker(CameraWorker):
         elif br.get("bpm"):
             pick, method = br, "thermal video, nostril box"
         elif fl.get("bpm"):
-            pick, method = fl, "colour video, flank movement"
+            pick, method = fl, "colour video, flank movement" + (" (followed the horse)" if self.flank_followed else "")
         bs = (summary.get("breathing_search") or {}) if head_in_view else {}
         if pick is br and br:
             pick = dict(br, box=rois.get("nostril"))
