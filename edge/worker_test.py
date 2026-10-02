@@ -232,6 +232,14 @@ run_window(w, lambda: feed(w.vanalyzer, [bytes(150 for _ in range(W * H))] * 300
 ex = [r for r in got if r["metric"] == "excretion_event"]
 check("manure seen in the colour picture: an excretion event from visible_video",
       ex and ex[0]["source"] == "visible_video" and ex[0]["meta"]["tier"] == "colour only", ex)
+w, got = make_worker("visible")
+t0 = time.time() - 120
+w.cfloor_events = [dict(kind=k, start=t0 + dt_, confidence=0.5, tier="colour only", area=0.01, darkening=20.0, texture=2.0,
+                        horseStoodThere=True) for k, dt_ in (("excretion", 0), ("urination", 4), ("excretion", 4))]
+run_window(w, lambda: feed(w.vanalyzer, [bytes(150 for _ in range(W * H))] * 300))
+check("three patches within seconds: the bedding moved, no events",
+      not [r for r in got if r["metric"] in ("excretion_event", "urination_event")],
+      [r["metric"] for r in got if r["metric"].endswith("_event")])
 
 # 8. The flank region follows the horse's box.
 from behaviour import flank_from_box, pick_hotspot  # noqa: E402

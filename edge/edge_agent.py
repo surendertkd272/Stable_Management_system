@@ -1061,6 +1061,7 @@ class MtrpcCameraWorker(CameraWorker):
     sampling (too slow on this firmware to find a rhythm reliably)."""
 
     FLOOR_EVERY_S = 2.0
+    DISTURBED_S = 15.0                 # colour floor patches this close together: bedding moved, not events
     LIVE_BREATH_EVERY_S = 10.0         # the Live view's breathing: the last 35 s, every 10 s (None: off)
     VISIBLE_SIZE = (352, 288)          # finer than thermal: flank movement is ~1 cm
     FILLS_VIEW = 0.5                   # horse box at least half the frame wide: laps cannot be seen
@@ -1615,6 +1616,12 @@ class MtrpcCameraWorker(CameraWorker):
         # within 5 minutes is the same event, now confirmed by both.
         with self._lock:
             colour_events, self.cfloor_events = self.cfloor_events, []
+        # A real urination or manure leaves one new patch. Several appearing
+        # within seconds of each other is the bedding being moved — the horse
+        # walking through the hay, mucking out (2 Oct's night: three 'events'
+        # in 4 s as the horse stepped forward over the hay). Not events.
+        colour_events = [ce for ce in colour_events
+                         if not any(o is not ce and abs(o["start"] - ce["start"]) <= self.DISTURBED_S for o in colour_events)]
         thermal = [e for e in floor_events if e.get("kind")]
         for ce in colour_events:
             twin = next((e for e in thermal if e["kind"] == ce["kind"] and abs(e["start"] - ce["start"]) <= 300), None)
