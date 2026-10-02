@@ -150,7 +150,7 @@ test("patterns through the night: phases in words, rest and eating bouts, breath
   assert.match(html, /23:00–01:00<\/b><span>Mostly at rest \(87% at rest\)/);
   assert.match(html, /Quietest from 23:00 \(average activity 0\.04\); most active from 2[12]:00 \(0\.30\)/);
   assert.match(html, /1 spell of 10 minutes or more standing at rest; the longest 23:00–01:00 \(2 h 0 min\)/);
-  assert.match(html, /1 reading, 7\.4–7\.4 breaths per minute \(00:20 standing at rest\)/);
+  assert.match(html, /1 reading at 00:20, 7\.4 breaths per minute\./);
   assert.match(html, /<h2>Hour by hour<\/h2>/);
   assert.ok(clean(html));
 });

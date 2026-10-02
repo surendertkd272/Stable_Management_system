@@ -10,6 +10,9 @@
 //        [--client "Remount Veterinary Corps"]  (on the cover: who the report is prepared for)
 //        [--review "03:00-04:20|lying|with short spells flat on the side"]   (seen on the recording by a person:
 //                                               lying down where the view cannot tell it; said as reviewed)
+//        [--boxes night-boxes.json --trough "0.33,0.26,0.71,0.50"]   (the horse's box every few seconds: moving about,
+//                                               time at a trough area of the picture, 0..1)
+//        [--review "04:23:05-04:23:15|getup|…" / "03:43-03:48|lateral"]   (getting up; flat-on-the-side spells, seen on the recording)
 //        [--no-auto-visits]                     (people seen by the detector are not used; --review "23:24-23:29|visit" instead)
 //        [--mark "03:30|Lying down" --mark …]   (a photo of that moment among the colour views, said as seen on the recording)
 //        [--compare-from <ISO> --compare-minutes 60 | --compare-to <ISO>] [--compare-away …] [--compare-paused …]
@@ -108,6 +111,8 @@ const { html, ref, photos } = await clientReport({
   mapCrop: crop || [0, 0.09, 1, 0.91],
   client: arg("client", ""),
   review, marks, lastLive, autoVisits: !flag("no-auto-visits"),
+  boxes: arg("boxes") ? JSON.parse(readFileSync(arg("boxes"), "utf8")) : null,
+  trough: arg("trough") ? arg("trough").split(",").map(Number) : null,
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
 });
 const outDir = arg("out", join(HOME, "research", "reports"));
