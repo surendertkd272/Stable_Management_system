@@ -31,6 +31,10 @@ Standard library only, so it runs on a bare Jetson image next to ffmpeg.
 import math
 import socket
 from collections import deque
+try:                              # fast path for the per-pixel sums; the same results without it
+    import numpy as np
+except ImportError:               # a bare edge image: plain Python, as before
+    np = None
 import subprocess
 import threading
 import time
@@ -75,6 +79,10 @@ def box_px(box, w=W, h=H):
 
 def box_mean(frame, bounds, w=W):
     x0, y0, x1, y1 = bounds
+    if np is not None:            # whole numbers summed: exactly the loop's result
+        a = np.frombuffer(frame, dtype=np.uint8).reshape(-1, w)
+        n = (y1 - y0 + 1) * (x1 - x0 + 1)
+        return int(a[y0:y1 + 1, x0:x1 + 1].sum(dtype=np.int64)) / n if n > 0 else None
     s = n = 0
     for y in range(y0, y1 + 1):
         row = y * w
@@ -96,6 +104,15 @@ def ring_mean(frame, inner, outer, w=W):
     palette re-ranging moves exactly as it moves the nostril."""
     ox0, oy0, ox1, oy1 = outer
     ix0, iy0, ix1, iy1 = inner
+    if np is not None:
+        a = np.frombuffer(frame, dtype=np.uint8).reshape(-1, w)
+        s = int(a[oy0:oy1 + 1, ox0:ox1 + 1].sum(dtype=np.int64))
+        n = (oy1 - oy0 + 1) * (ox1 - ox0 + 1)
+        cx0, cy0, cx1, cy1 = max(ix0, ox0), max(iy0, oy0), min(ix1, ox1), min(iy1, oy1)
+        if cx1 >= cx0 and cy1 >= cy0:                      # the inner box, where it lies in the outer
+            s -= int(a[cy0:cy1 + 1, cx0:cx1 + 1].sum(dtype=np.int64))
+            n -= (cy1 - cy0 + 1) * (cx1 - cx0 + 1)
+        return s / n if n else None
     s = n = 0
     for y in range(oy0, oy1 + 1):
         row = y * w
@@ -132,6 +149,8 @@ class MotionMeter:
         self.xs = [i % w for i in self.idx]
         self.ys = [i // w for i in self.idx]
         self.last_moved = [-10 ** 9] * len(self.idx)   # frame number each sample point last changed
+        if np is not None:
+            self._idx, self._xs = np.array(self.idx, dtype=np.int64), np.array(self.xs, dtype=np.int64)
         self.frame_no = 0
         self.envelope = len(self.idx) / 20
         self.scene_changes = 0
@@ -147,6 +166,8 @@ class MotionMeter:
                 return b[0] <= x <= b[2] and b[1] <= y <= b[3]
             self._sel = [(focus is None or inside(focus, x, y)) and not any(inside(b, x, y) for b in ignore)
                          for x, y in zip(self.xs, self.ys)]
+            if np is not None:
+                self._sel = np.array(self._sel, dtype=bool)
             self._sel_key = key
         return self._sel
 
@@ -157,6 +178,8 @@ class MotionMeter:
         camera is not the horse being active. A scene change is still judged
         on the whole picture."""
         self.frame_no += 1
+        if np is not None:
+            return self._feed_np(frame, focus, ignore)
         vals = [frame[i] for i in self.idx]
         n = len(vals)
         mean = sum(vals) / n
@@ -197,6 +220,45 @@ class MotionMeter:
             # and one filling the frame read alike. The warm body is the pixels
             # well above the frame's average; with no body, use the frame.
             body = max(len(wx), n // 20)
+        else:
+            self.envelope = max(moved, self.envelope * 0.99995, n / 50)
+            body = self.envelope
+        return min(1.0, moved / body), body_x
+
+    def _feed_np(self, frame, focus, ignore):
+        """feed() with numpy: the same steps, on arrays."""
+        vals = np.frombuffer(frame, dtype=np.uint8)[self._idx]
+        n = len(vals)
+        mean = int(vals.sum(dtype=np.int64)) / n
+        v = vals.astype(np.float64)
+        sd = math.sqrt(float(((v - mean) ** 2).sum()) / n) or 1.0
+        sd = max(sd, self.MIN_LEVELS / self.threshold)
+        z = (v - mean) / sd
+        body_x, nwx = None, 0
+        if self.mode == "thermal":
+            wx = self._xs[z > 1.0]
+            nwx = len(wx)
+            body_x = (int(wx.sum()) / nwx / self.w) if nwx >= 8 else None
+        self.ring.append(z)
+        if len(self.ring) <= self.lag:
+            return 0.0, body_x
+        old = self.ring.pop(0)
+        mid = self.ring[len(self.ring) // 2 - 1] if len(self.ring) >= 2 else old
+        thr = self.threshold
+        moved_k = np.flatnonzero((np.abs(z - old) > thr) | (np.abs(z - mid) > thr))
+        moved = len(moved_k)
+        if moved > self.SCENE_CHANGE * n:
+            self.scene_changes += 1
+            self.ring = [z]
+            return None, body_x
+        for k in moved_k.tolist():
+            self.last_moved[k] = self.frame_no
+        if focus is not None or ignore:
+            moved_k = moved_k[self._selection(focus, ignore)[moved_k]]
+            moved = len(moved_k)
+        self.move_x = (int(self._xs[moved_k].sum()) / moved / self.w) if moved >= 8 else None
+        if self.mode == "thermal":
+            body = max(nwx, n // 20)
         else:
             self.envelope = max(moved, self.envelope * 0.99995, n / 50)
             body = self.envelope
@@ -319,6 +381,11 @@ class WindowAnalyzer:
         """Mean brightness of each search block (every 2nd pixel and row)."""
         C, R, w = self.SEARCH_COLS, self.SEARCH_ROWS, self.w
         bw, bh = w // C, self.h // R
+        if np is not None:
+            a = np.frombuffer(frame, dtype=np.uint8).reshape(-1, w)
+            per = len(range(0, bh, 2)) * len(range(0, bw, 2))
+            return [int(a[r * bh:(r + 1) * bh:2, c * bw:(c + 1) * bw:2].sum(dtype=np.int64)) / per
+                    for r in range(R) for c in range(C)]
         out = []
         for r in range(R):
             rows = range(r * bh, (r + 1) * bh, 2)

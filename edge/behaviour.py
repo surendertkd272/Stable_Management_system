@@ -130,19 +130,34 @@ class SwayMeter:
         self.keep = int(max(2, fs * mean_s))
         self.ring, self.sum_c, self.sum_r = [], None, None
         self.pair = [0.0, 0.0]
+        self._np = None
+        try:                                          # the per-pixel sums with numpy: the same whole numbers
+            import numpy as np
+            m = None if mask is None else np.array([[1 if mask[y * w + x] else 0 for x in self.xs] for y in self.ys], dtype=np.int64)
+            self._np = (np, np.array(self.ys), np.array(self.xs), m)
+        except ImportError:
+            pass
 
     def feed(self, frame):
         w, mask = self.w, self.mask
-        cols = [0.0] * len(self.xs)
-        rows = [0.0] * len(self.ys)
-        for j, y in enumerate(self.ys):
-            base = y * w
-            acc = 0.0
-            for i, x in enumerate(self.xs):
-                v = frame[base + x] if (mask is None or mask[base + x]) else 0
-                cols[i] += v
-                acc += v
-            rows[j] = acc
+        if self._np is not None:
+            np, ys, xs, m = self._np
+            sub = np.frombuffer(frame, dtype=np.uint8).reshape(-1, w)[np.ix_(ys, xs)].astype(np.int64)
+            if m is not None:
+                sub = sub * m
+            cols = [float(v) for v in sub.sum(axis=0).tolist()]
+            rows = [float(v) for v in sub.sum(axis=1).tolist()]
+        else:
+            cols = [0.0] * len(self.xs)
+            rows = [0.0] * len(self.ys)
+            for j, y in enumerate(self.ys):
+                base = y * w
+                acc = 0.0
+                for i, x in enumerate(self.xs):
+                    v = frame[base + x] if (mask is None or mask[base + x]) else 0
+                    cols[i] += v
+                    acc += v
+                rows[j] = acc
         if self.sum_c is None:
             self.sum_c, self.sum_r = [0.0] * len(cols), [0.0] * len(rows)
         self.ring.append((cols, rows))

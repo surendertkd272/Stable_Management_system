@@ -34,7 +34,14 @@ class HorseDetector:
         if threads > 0:
             opts.intra_op_num_threads = threads
             opts.inter_op_num_threads = 1
-        self.sess = ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
+        # EQUICARE_DETECTOR_PROVIDER=coreml: the Mac's neural engine/GPU where
+        # it is there (edge/replay.py on the Mac: 6 ms a look against 76 ms on
+        # one CPU thread, boxes within 0.1% of the picture); else the CPU.
+        providers = ["CPUExecutionProvider"]
+        if os.environ.get("EQUICARE_DETECTOR_PROVIDER") == "coreml" and "CoreMLExecutionProvider" in ort.get_available_providers():
+            providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        ort.set_default_logger_severity(3)                   # its notes on which layers it runs where are not news
+        self.sess = ort.InferenceSession(path, sess_options=opts, providers=providers)
         inp = self.sess.get_inputs()[0]
         self.name = inp.name
         self.size = (inp.shape[2], inp.shape[3])            # (h, w), e.g. 416x416 for nano

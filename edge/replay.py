@@ -45,6 +45,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("EQUICARE_DETECTOR_THREADS", "1")       # parts run side by side
+os.environ.setdefault("EQUICARE_DETECTOR_PROVIDER", "coreml")  # the Mac's neural engine when there (detector.py)
 
 NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})\.mp4$")
 NO_TEMPS = "not measured — recorded video holds no temperatures (the camera's temperature readings were not recorded)"
