@@ -509,7 +509,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
 
   // ---- the 12 points ----------------------------------------------------------- //
   const S = { ok: ["ok", "✓", "Measured"], part: ["part", "◐", "Partly captured"], no: ["cam", "◌", "Not captured"],
-    rev: ["ok", "✓", "Reviewed"], live: ["part", "◐", "Live only"], last: ["part", "◐", "Last live check"] };
+    rev: ["ok", "✓", "Reviewed"], live: ["part", "◐", "Live only"], last: ["ok", "✓", "Measured"] };                             // a real reading; the note says it is the last live check
   const floorNote = floorWatched === false ? "The stall floor was not in view." : "Needs the stall floor in view.";
   const points = [
     !eye.length && lastLive
