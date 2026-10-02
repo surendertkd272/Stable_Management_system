@@ -666,8 +666,16 @@ ${grid}${bandsSvg}${tk}${bars}${line}
   }
 
   function stallMap() {
-    const max = Math.max(1, ...cells);
-    const rects = cells.map((v, c) => (v > 0
+    // Only squares mostly inside the photo are drawn: a square at the very
+    // edge shows as a thin bright sliver that reads as a lamp (2 Oct: the
+    // front row, where he lay down, is mostly below the photo's edge).
+    const [vx0, vy0, vx1, vy1] = mapCrop.map((v, i) => v * (i % 2 ? GY : GX));
+    const inPhoto = (c) => {
+      const x = c % GX, y = Math.floor(c / GX);
+      return Math.max(0, Math.min(x + 1, vx1) - Math.max(x, vx0)) * Math.max(0, Math.min(y + 1, vy1) - Math.max(y, vy0)) >= 0.5;
+    };
+    const max = Math.max(1, ...cells.filter((v, c) => inPhoto(c)));
+    const rects = cells.map((v, c) => (v > 0 && inPhoto(c)
       ? `<rect x="${c % GX}" y="${Math.floor(c / GX)}" width="1" height="1" class="heatcell" fill-opacity="${(0.12 + 0.6 * (v / max)).toFixed(2)}" data-tip="${Math.round((v / Math.max(1, cellsTot)) * 100)}% of the time"/>` : "")).join("");
     const img = mapShot ? `<img src="${toUri(mapShot.jpg)}" alt="${esc(name)}'s stall">` : `<div class="nophoto">No photo of the stall in this session.</div>`;
     const [cx0, cy0, cx1, cy1] = mapCrop;                          // the photo is this part of the picture
@@ -944,7 +952,7 @@ ${budgetBar()}
 <div class="stats">${tbShown.filter(([kk]) => kk !== "unseen").slice(0, 4).map(([kk, l]) => `<div class="stat"><b>${hmText(tbTot[kk])}</b><span>${esc(l.toLowerCase())}</span></div>`).join("")}</div>
 <h3 style="margin:18px 0 0;font-size:14px">${minutes >= 180 ? "Hour by hour" : "Every 10 minutes"}</h3>${budgetHours()}
 <div class="legend">${tbShown.map(([, l, c]) => `<span><i class="sw ${c}"></i>${esc(l)}</span>`).join("")}</div></section>
-<section class="card"><div class="sh">${sn()}<h2>Where ${esc(name)} spent the time</h2></div><p class="sub">${esc(whereText)} Darker shading: where ${esc(name)} stood longer (the hooves), seen from the stall door.</p>
+<section class="card"><div class="sh">${sn()}<h2>Where ${esc(name)} spent the time</h2></div><p class="sub">${esc(whereText)} Stronger shading: where ${esc(name)} stood longer (the hooves), seen from the stall door.</p>
 ${stallMap()}</section>
 ${pg()}</div>` : ""}
 ${patternsOk ? `<div class="page">
