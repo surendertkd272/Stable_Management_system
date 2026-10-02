@@ -74,7 +74,12 @@ class HorseDetector:
         at the stall are context (a visit, a check) and must not be counted
         as the horse moving."""
         np = self.np
-        img = np.frombuffer(gray, dtype=np.uint8).reshape(h, w)
+        # Colour (BGR, w*h*3 bytes) where it is given: the network learned on
+        # colour, and a brown horse on brown straw is far easier to see in it
+        # (2 Oct's night: a horse lying down, and one close to the camera,
+        # were found in colour and missed in grey). Grey otherwise.
+        colour = len(gray) == w * h * 3
+        img = np.frombuffer(gray, dtype=np.uint8).reshape(h, w, 3) if colour else np.frombuffer(gray, dtype=np.uint8).reshape(h, w)
         th, tw = self.size
         r = min(th / h, tw / w)
         nh, nw = int(h * r), int(w * r)
@@ -82,9 +87,14 @@ class HorseDetector:
         ys = (np.arange(nh) / r).astype(int).clip(0, h - 1)
         xs = (np.arange(nw) / r).astype(int).clip(0, w - 1)
         small = img[ys][:, xs]
-        canvas = np.full((th, tw), 114, dtype=np.float32)
-        canvas[:nh, :nw] = small
-        blob = np.repeat(canvas[None, None], 3, axis=1)      # grey -> 3 equal channels, BGR order irrelevant
+        if colour:
+            canvas = np.full((th, tw, 3), 114, dtype=np.float32)
+            canvas[:nh, :nw] = small
+            blob = canvas.transpose(2, 0, 1)[None]
+        else:
+            canvas = np.full((th, tw), 114, dtype=np.float32)
+            canvas[:nh, :nw] = small
+            blob = np.repeat(canvas[None, None], 3, axis=1)  # grey -> 3 equal channels, BGR order irrelevant
         out = self.sess.run(None, {self.name: blob})[0][0]
         out = self._decode(out)
 

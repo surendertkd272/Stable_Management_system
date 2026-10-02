@@ -28,6 +28,7 @@ def main():
     ap.add_argument("--to", required=True, help="folder to copy into (thermal/, visible/ … are made in it)")
     ap.add_argument("--hd", action="store_true", help="also copy colour-hd/ (large)")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--only", choices=("thermal", "visible", "colour-hd"), help="copy just this stream")
     ap.add_argument("--first", choices=("thermal", "visible"),
                     help="copy all of this stream before the other (a slow link: the colour carries most of the analysis)")
     ap.add_argument("--ports", help="several sharing windows (SHARE-MORE.bat: 8765,8766,8767,8768): "
@@ -41,6 +42,8 @@ def main():
     if isinstance(items, dict):                              # one clip: PowerShell sends the object alone
         items = [items]
     streams = ("thermal", "visible") + (("colour-hd",) if a.hd else ())
+    if a.only:
+        streams = (a.only,)
     # In time order, each period's streams together: the night can be analysed
     # from the start while the rest is still coming.
     items = sorted((i for i in items if i["path"].split("/")[0] in streams),

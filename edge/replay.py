@@ -109,16 +109,17 @@ def chunks(clips, n):
     return out
 
 
-def frames(clips, w, h, fps, t0, t1, kind):
+def frames(clips, w, h, fps, t0, t1, kind, pix="gray"):
     """(t, kind, frame) for the part of these clips between t0 and t1: gray,
-    w×h, fps per second — decoded exactly as the live VideoStream decodes."""
-    n = w * h
+    w×h, fps per second — decoded exactly as the live VideoStream decodes;
+    pix "bgr24": colour, for the detector."""
+    n = w * h * (3 if pix == "bgr24" else 1)
     for s, e, path in clips:
         a, b = max(s, t0), min(e, t1)
         if b - a < 1:
             continue
         cmd = ["ffmpeg", "-v", "error", "-nostdin", "-threads", "1", "-ss", f"{a - s:.3f}", "-i", str(path), "-t", f"{b - a:.3f}",
-               "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale={w}:{h},format=gray", "-f", "rawvideo", "pipe:1"]
+               "-map", "0:v:0", "-an", "-vf", f"fps={fps},scale={w}:{h},format={pix}", "-f", "rawvideo", "pipe:1"]
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         k = 0
         try:
@@ -211,7 +212,9 @@ class Feeder:
         w = self.w
         while self.head is not None and self.head[0] < target:
             t, kind, fr = self.head
-            if kind == "thermal":
+            if kind == "colour":                         # the detector's picture, once a second
+                w.last_colour = (fr, t)
+            elif kind == "thermal":
                 rois = w.dev.get("rois") or {}
                 nb = w.box_px(rois["nostril"]) if rois.get("nostril") else None
                 w.analyzer.feed(fr, nb, t=t)
@@ -296,6 +299,7 @@ def run_chunk(job):
     vw, vh = w.VISIBLE_SIZE
     src = heapq.merge(frames(therm, W, H, FPS, t0, t1, "thermal"),
                       frames(vis, vw, vh, FPS, t0, t1, "visible") if vis else iter(()),
+                      frames(vis, vw, vh, 1, t0, t1, "colour", "bgr24") if (vis and model) else iter(()),
                       key=lambda x: (x[0], x[1]))
     if not vis:
         w.vvideo, w.vanalyzer = None, None
@@ -323,7 +327,7 @@ def posture_samples(job):
     if det is None:
         return []
     hist, scene = [], []
-    for t, _, fr in frames(vis, vw, vh, 0.5, t0, t1, "visible"):
+    for t, _, fr in frames(vis, vw, vh, 0.5, t0, t1, "visible", "bgr24"):     # colour: see detector.py
         best = pick_horse(det.detect(fr, vw, vh), scene)
         if not best:
             continue

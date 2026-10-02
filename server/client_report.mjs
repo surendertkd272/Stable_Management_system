@@ -151,7 +151,13 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const vices = of("vice_event").filter(countsAsVice);
   const viceKinds = {};
   for (const r of vices) { const k = (r.meta?.kind || "weaving").replace("_", " "); (viceKinds[k] ||= []).push(Date.parse(r.ts)); }
-  const floorEv = { urination: of("urination_event"), excretion: of("excretion_event") };
+  // A urination or a dropping leaves one patch on the bedding. Patches that
+  // come within 10 minutes of another are the bedding being moved — the horse
+  // lying down, getting up or turning in the straw (2 Oct's night: four
+  // 'droppings' in two minutes as he lay down). Left out, not counted.
+  const patches = [...of("urination_event"), ...of("excretion_event")].map((r) => Date.parse(r.ts));
+  const alone = (r) => patches.filter((t) => Math.abs(t - Date.parse(r.ts)) <= 600000).length === 1;
+  const floorEv = { urination: of("urination_event").filter(alone), excretion: of("excretion_event").filter(alone) };
   const floorOk = floorWatched !== false && actV.length > 0;
 
   // Buckets: one bar per minute for an hour, wider for a night.

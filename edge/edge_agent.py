@@ -1200,15 +1200,19 @@ class MtrpcCameraWorker(CameraWorker):
         vw, vh = self.VISIBLE_SIZE
         with self._lock:
             snap = self.last_visible
+            colour = getattr(self, "last_colour", None)
             motion = self.vanalyzer.recent_motion() if self.vanalyzer else 0.0
         if not snap or snap[1] == st["last"]:
             return True
         st["last"] = snap[1]
+        # The detector sees the colour picture of this second when there is
+        # one (edge/replay.py decodes it), else the grey analysis frame.
+        look = colour[0] if colour and abs(colour[1] - snap[1]) <= 1.5 else snap[0]
         try:
             if hasattr(self.detector, "detect_all"):
-                boxes, persons = self.detector.detect_all(snap[0], vw, vh)
+                boxes, persons = self.detector.detect_all(look, vw, vh)
             else:
-                boxes, persons = self.detector.detect(snap[0], vw, vh), []
+                boxes, persons = self.detector.detect(look, vw, vh), []
         except Exception as e:                              # noqa: BLE001
             print(f"[edge] {self.name}: detector failed ({e}) — lying not measured")
             self.detector, self.detector_note = None, f"detector failed: {e}"

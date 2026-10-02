@@ -124,6 +124,14 @@ test("how the time was spent: budget, hour by hour, where he stood; feeding from
   assert.ok(clean(html));
 });
 
+test("urination and droppings: patches close together are moved bedding, not counted", async () => {
+  const rd = hourOf().concat([R("excretion_event", 1, 5), R("excretion_event", 1, 30), R("excretion_event", 1, 31), R("urination_event", 1, 33),
+    R("urination_event", 1, 55)]);
+  const { html } = await clientReport({ horse, readings: rd, from, to: from + hour, floorWatched: true, tz: "Asia/Kolkata" });
+  assert.match(html, /Urination<small>Point 7<\/small><\/td><td class="pt-val">1 seen</);
+  assert.match(html, /Excretion<small>Point 8<\/small><\/td><td class="pt-val">1 seen</);
+});
+
 test("a rising temperature is said, with the size of the rise", async () => {
   const { html } = await clientReport({ horse, readings: hourOf({ eyeEvery: 2, rise: 1.2 }), from, to: from + hour, tz: "UTC" });
   assert.match(html, /Temperature rising/);
