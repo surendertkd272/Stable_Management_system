@@ -72,6 +72,9 @@ check("each minute's eye check says why", eye and all(r["value"] == 0 and "no te
 check("readings say they came from a recording", all(r["meta"].get("fromRecording") for r in out))
 act = {r["ts"]: r["value"] for r in out if r["metric"] == "activity_index"}
 check("a moving picture is more active than a still one", act.get(utc(21, 1), 0) > act.get(utc(21, 11), 1), act)
+colour_only = replay.run_chunk((dev, [], vis, vis[0][0], vis[-1][1], None, None, "colour only"))
+check("colour clips without thermal: activity and rest still analysed",
+      {"activity_index", "inactive_minutes"} <= {r["metric"] for r in colour_only}, {r["metric"] for r in colour_only})
 again = replay.run_chunk(job)
 check("the same timestamps on a second run (stored once)", sorted({r["ts"] for r in again}) == ts)
 

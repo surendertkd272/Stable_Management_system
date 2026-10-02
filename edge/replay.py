@@ -394,10 +394,14 @@ def main():
     root = Path(a.recordings).expanduser()
     therm = list_clips(root / "thermal", tz, t_from, t_to)
     vis = list_clips(root / "visible", tz, t_from, t_to)
-    if not therm:
-        raise SystemExit(f"no thermal clips in {root / 'thermal'}")
-    lo = max(therm[0][0], t_from or therm[0][0])
-    hi = min(therm[-1][1], t_to or therm[-1][1])
+    # The night is walked along the colour clips (most of the analysis), with
+    # the thermal ones wherever they are there — a slow copy may bring the
+    # colour first. Thermal alone works too.
+    primary = vis or therm
+    if not primary:
+        raise SystemExit(f"no clips in {root / 'visible'} or {root / 'thermal'}")
+    lo = max(primary[0][0], t_from or primary[0][0])
+    hi = min(primary[-1][1], t_to or primary[-1][1])
     print(f"[replay] {len(therm)} thermal + {len(vis)} colour clips, {local(lo)} → {local(hi)} "
           f"({(hi - lo) / 3600:.1f} h), {a.jobs} at a time", flush=True)
     dev = device_from_state(a.state_file, a.device)
@@ -424,9 +428,9 @@ def main():
 
     print("[replay] pass 2: the full analysis, minute by minute…", flush=True)
     jobs = []
-    for i, part in enumerate(chunks(therm, a.jobs)):
+    for i, part in enumerate(chunks(primary, a.jobs)):
         c0, c1 = max(part[0][0], lo), min(part[-1][1], hi)
-        jobs.append((dev, part, [v for v in vis if v[1] > c0 and v[0] < c1], c0, c1, posture_state, model,
+        jobs.append((dev, [c for c in therm if c[1] > c0 and c[0] < c1], [v for v in vis if v[1] > c0 and v[0] < c1], c0, c1, posture_state, model,
                      f"part {i + 1} ({local(c0)}–{local(c1)})"))
     with ctx.Pool(len(jobs)) as pool:
         got = pool.map(run_chunk, jobs)

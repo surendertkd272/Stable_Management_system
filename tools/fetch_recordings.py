@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--to", required=True, help="folder to copy into (thermal/, visible/ … are made in it)")
     ap.add_argument("--hd", action="store_true", help="also copy colour-hd/ (large)")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--first", choices=("thermal", "visible"),
+                    help="copy all of this stream before the other (a slow link: the colour carries most of the analysis)")
     ap.add_argument("--ports", help="several sharing windows (SHARE-MORE.bat: 8765,8766,8767,8768): "
                                     "one clip each at a time — on a slow Wi-Fi four streams carry far more than one")
     a = ap.parse_args()
@@ -42,7 +44,8 @@ def main():
     # In time order, each period's streams together: the night can be analysed
     # from the start while the rest is still coming.
     items = sorted((i for i in items if i["path"].split("/")[0] in streams),
-                   key=lambda i: (i["path"].split("/")[1], streams.index(i["path"].split("/")[0])))
+                   key=lambda i: (0 if not a.first or i["path"].startswith(a.first + "/") else 1,
+                                  i["path"].split("/")[1], streams.index(i["path"].split("/")[0])))
     dest = Path(a.to).expanduser()
     todo = [i for i in items if not ((dest / i["path"]).exists() and (dest / i["path"]).stat().st_size == i["size"])]
     total = sum(i["size"] for i in todo)
@@ -66,7 +69,7 @@ def main():
             part = out.with_suffix(f".{port}.part")
             for attempt in range(3):
                 try:
-                    with urllib.request.urlopen(f"{base_p}/{i['path']}", timeout=60) as r, open(part, "wb") as f:
+                    with urllib.request.urlopen(f"{base_p}/{i['path']}", timeout=180) as r, open(part, "wb") as f:
                         while True:
                             b = r.read(1 << 20)
                             if not b:
