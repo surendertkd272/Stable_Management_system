@@ -7,6 +7,7 @@
 //        [--paused "13:21:13-13:41:13"]   (stretches the session was paused: not counted)
 //        [--colour-crop "0.46,0.09,0.87,0.91"]   (colour photos zoomed on the horse's stall, 0..1 of the picture)
 //        [--no-thermal]                         (colour photos only; by default each photo pairs colour and thermal)
+//        [--client "Remount Veterinary Corps"]  (on the cover: who the report is prepared for)
 //        [--compare-from <ISO> --compare-minutes 60 | --compare-to <ISO>] [--compare-away …] [--compare-paused …]
 //                                               (a page comparing the horse with an earlier session)
 //        [--away "16:40-16:59,…"]   (sessions recorded before the eye-shape check,
@@ -81,6 +82,8 @@ const { html, ref, photos } = await clientReport({
   floorWatched: floorOf(cams, cam),
   grab: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
   grabThermal: cam && clips.length && !flag("no-thermal") ? frameGrabber(cam.id, "thermal", undefined, { lift: true }) : null,
+  grabFull: cam && clips.length ? frameGrabber(cam.id, "visible") : null,   // the stall map: the whole picture
+  client: arg("client", ""),
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
 });
 const outDir = arg("out", join(HOME, "research", "reports"));

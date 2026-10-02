@@ -58,7 +58,7 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // an earlier session (its report's `summary`), for a page comparing the horse
 // across the two sessions.
 export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
-  grabThermal = null, previous = null, clipCount = 0, now = Date.now() }) {
+  grabThermal = null, grabFull = null, previous = null, clipCount = 0, client = "", now = Date.now() }) {
   tz = safeTimeZone(tz);
   const minutes = Math.max(1, Math.round((to - from) / 60000));
   const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
@@ -203,6 +203,29 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const busiest = blocks.filter((b) => b.act !== null).sort((a, b) => b.act - a.act)[0];
   const dominant = actV.length ? LEVELS.map(([k]) => k).sort((a, b) => bands[b] - bands[a])[0] : null;
 
+  // ---- how the time was spent: each second of the colour picture -------------- //
+  const TB = [["lying", "Lying down", "tb-lie"], ["eating", "Eating at the hay", "tb-eat"], ["resting", "Standing at rest", "tb-rest"],
+    ["moving", "Moving about", "tb-move"], ["unseen", "Out of view", "tb-out"]];
+  const tbR = of("time_budget");
+  const hayKnown = tbR.some((r) => r.meta?.hay);
+  // Lying is only told apart once the stall's posture model has learned it;
+  // eating only where the hay was marked. Otherwise those seconds stay in
+  // the states they were counted in, and the category is not shown.
+  const tbShown = TB.filter(([k]) => (k !== "lying" || lyingMeasured) && (k !== "eating" || hayKnown));
+  const tbTot = Object.fromEntries(TB.map(([k]) => [k, tbR.reduce((x, r) => x + (r.meta?.[`${k}S`] || 0), 0)]));
+  const tbAll = TB.reduce((x, [k]) => x + tbTot[k], 0);
+  const budgetOk = tbAll >= 600;                                   // ten minutes or more
+  const stateOf = new Array(minutes).fill(null);
+  for (const r of tbR) {
+    const best = TB.map(([k]) => [k, r.meta?.[`${k}S`] || 0]).filter(([k]) => k !== "unseen").sort((x, y) => y[1] - x[1])[0];
+    if (best && best[1] > 0) stateOf[minuteOf(r)] = best[0];
+  }
+  const [GX, GY] = (tbR.find((r) => r.meta?.grid)?.meta.grid || "12x8").split("x").map(Number);
+  const cells = new Array(GX * GY).fill(0);
+  for (const r of tbR) for (const [c, v] of r.meta?.where || []) if (c >= 0 && c < cells.length) cells[c] += v;
+  const hmText = (sec) => (sec >= 3600 ? `${Math.floor(sec / 3600)} h ${Math.round((sec % 3600) / 60)} min` : `${Math.round(sec / 60)} min`);
+  const STATE_WORD = { lying: "Lying down", eating: "Eating at the hay", resting: "Standing at rest", moving: "Moving about" };
+
   // ---- photos: eye in view and calm, spread through the session -------------- //
   const score = (m) => (act[m] === null ? -1 : (eyeMin[m] !== null ? 2 : 0) + (1 - Math.min(1, act[m])) - (inAway(from + m * 60000 + 30000) ? 3 : 0));
   // A photo for an eye reading comes from the second the eye was read.
@@ -222,13 +245,6 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const coverMin = [];
   for (const m of ranked) { if (coverMin.every((c) => Math.abs(c - m) >= Math.max(5, minutes / 8))) coverMin.push(m); if (coverMin.length === 3) break; }
   coverMin.sort((a, b) => a - b);
-  const nGal = Math.min(grabThermal ? 6 : 12, ranked.length);   // colour + thermal pairs take twice the room
-  const galMin = [];
-  for (let s = 0; s < nGal; s++) {
-    const lo = Math.floor((s * minutes) / nGal), hi = Math.floor(((s + 1) * minutes) / nGal);
-    const best = ranked.find((m) => m >= lo && m < hi);
-    if (best !== undefined) galMin.push(best);
-  }
   const toUri = (jpg) => `data:image/jpeg;base64,${jpg.toString("base64")}`;
   const withThermal = async (f, width) => {
     const t = grabThermal ? await grabThermal(f.at, width) : null;
@@ -238,14 +254,76 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     const f = await sharpest(m, 1100);
     return f && { m, at: f.at, img: toUri(f.jpg), aspect: jpegAspect(f.jpg), ...(await withThermal(f, 700)) };
   }))).filter(Boolean);
-  const gallery = [];
-  for (let i = 0; i < galMin.length; i += 4) {                          // a few ffmpeg at a time
-    const got = await Promise.all(galMin.slice(i, i + 4).map(async (m) => {
-      const f = await sharpest(m, 520);
-      return f && { m, at: f.at, img: toUri(f.jpg), aspect: jpegAspect(f.jpg), ...(await withThermal(f, 420)) };
-    }));
-    gallery.push(...got.filter(Boolean));
+
+  // Two photo sections, each chosen for what it shows. Colour: one moment of
+  // each thing he did (the middle of its longest run), a visit, then calm
+  // moments through the session. Heat: minutes whose breathing was read, then
+  // minutes at rest, then calm moments — spread in time.
+  const runsOf = (pred) => {
+    const out = [];
+    for (let m = 0; m < minutes; m++) if (pred(m)) { const l = out.at(-1); if (l && l.end === m - 1) l.end = m; else out.push({ start: m, end: m }); }
+    return out.sort((x, y) => (y.end - y.start) - (x.end - x.start));
+  };
+  const spread = minutes / 12;
+  const pickInto = (list, m, n) => { if (m !== undefined && list.length < n && act[m] !== null && list.every((x) => Math.abs(x - m) >= spread)) list.push(m); };
+  const colourMin = [];
+  for (const k of ["lying", "eating", "resting", "moving"]) { const r = runsOf((m) => stateOf[m] === k)[0]; if (r) pickInto(colourMin, Math.floor((r.start + r.end) / 2), 6); }
+  const visitRun = runsOf((m) => peopleSec[m] >= 10)[0];
+  if (visitRun) pickInto(colourMin, Math.floor((visitRun.start + visitRun.end) / 2), 6);
+  for (const m of ranked) pickInto(colourMin, m, 6);
+  colourMin.sort((x, y) => x - y);
+  const respMin = new Map(resp.map((r) => [minuteOf(r), r]));
+  const heatMin = [];
+  const thermalBreath = [...respMin.entries()].filter(([, r]) => /thermal/.test(r.meta?.method || "") || r.source === "thermal_video").map(([m]) => m);
+  for (const m of [...thermalBreath, ...respMin.keys()]) pickInto(heatMin, m, 6);
+  for (const m of ranked.filter((m) => stateOf[m] === "resting" || stateOf[m] === "lying")) pickInto(heatMin, m, 6);
+  for (const m of ranked) pickInto(heatMin, m, 6);
+  heatMin.sort((x, y) => x - y);
+  async function shot(g, m, width) {
+    if (!g) return null;
+    const at0 = eyeTs[m] !== null ? [-1, 0, 1].map((x) => eyeTs[m] + x * 1000) : [15, 30, 45].map((x) => from + m * 60000 + x * 1000);
+    const tries = (await Promise.all(at0.map(async (at) => ({ at, jpg: await g(at, width) })))).filter((t) => t.jpg);
+    return tries.length ? tries.sort((x, y) => y.jpg.length - x.jpg.length)[0] : null;
   }
+  const shots = async (g, mins, width) => {
+    const out = [];
+    for (let i = 0; i < mins.length; i += 4) {                          // a few ffmpeg at a time
+      out.push(...(await Promise.all(mins.slice(i, i + 4).map(async (m) => {
+        const f = await shot(g, m, width);
+        return f && { m, at: f.at, img: toUri(f.jpg), aspect: jpegAspect(f.jpg) };
+      }))).filter(Boolean));
+    }
+    return out;
+  };
+  const colourViews = await shots(grab, colourMin, 560);
+  const heatViews = await shots(grabThermal, heatMin, 640);
+  const gallery = colourViews;                                     // (photo count, comparison)
+  // The stall map's photo: the whole picture (its grid is the whole picture),
+  // from a moment in the middle of the session.
+  const mapMin = colourMin[Math.floor(colourMin.length / 2)] ?? Math.floor(minutes / 2);
+  const mapShot = budgetOk && grabFull ? await shot(grabFull, mapMin, 900) : null;
+  // Where he spent most time, in words: the stall in thirds, as seen from the door.
+  const cellsTot = cells.reduce((x, v) => x + v, 0);
+  const thirds = {};
+  cells.forEach((v, c) => {
+    const row = Math.floor(c / GX), col = c % GX;
+    const k = `${row < GY / 3 ? "back" : row < (2 * GY) / 3 ? "middle" : "front"} ${col < GX / 3 ? "left" : col < (2 * GX) / 3 ? "centre" : "right"}`;
+    thirds[k] = (thirds[k] || 0) + v;
+  });
+  const topThird = Object.entries(thirds).sort((x, y) => y[1] - x[1])[0];
+  const whereText = topThird && cellsTot
+    ? `${name} spent most of the time at the ${topThird[0].replace("middle centre", "centre")} of the stall (${Math.round((topThird[1] / cellsTot) * 100)}% of the time seen).`
+    : "";
+  const colourCaption = (m) => {
+    const what = stateOf[m] ? STATE_WORD[stateOf[m]] : caption(m).replace(/^./, (c) => c.toUpperCase());
+    return `${what}${peopleSec[m] >= 10 ? " · people at the stall" : ""}${stateOf[m] && act[m] !== null ? ` · ${LEVEL_WORD[levelOf(act[m])]}` : ""}`;
+  };
+  const heatCaption = (m) => {
+    const r = respMin.get(m);
+    const parts = [r ? `breathing ${Math.round(r.value)} /min, read in this minute` : null,
+      eyeMin[m] !== null ? `eye ${f1(eyeMin[m])} °C` : null, stateOf[m] ? STATE_WORD[stateOf[m]].toLowerCase() : null].filter(Boolean);
+    return (parts.join(" · ") || (act[m] !== null ? LEVEL_WORD[levelOf(act[m])] : "")).replace(/^./, (c) => c.toUpperCase());
+  };
 
   // ---- words, from the numbers only ------------------------------------------ //
   const tempShort = eye.length >= 3
@@ -269,6 +347,8 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
         : fromRec ? "Taken during live monitoring; not part of this review." : "The eye was not in view long enough to read."],
     ["move", actV.length ? `${dominant === "high" ? "Active" : dominant === "none" ? "Mostly resting" : "Settled"} behaviour` : "Activity not captured",
       actV.length ? `${bands.high} min high, ${bands.moderate} min moderate and ${bands.low} min low activity; ${stillMin} min standing still.` : "No movement data in this session."],
+    ...(budgetOk ? [["check", "How the time was spent", tbShown.filter(([k]) => k !== "unseen" && tbTot[k] > 0)
+      .map(([k, l]) => `${l.toLowerCase()} ${hmText(tbTot[k])}`).join(", ").replace(/^./, (c) => c.toUpperCase()) + "."]] : []),
     ["check", viceNames.length ? "Behaviour flagged for review" : "No stereotypic behaviour",
       viceNames.length ? viceNames.map((k) => `${k} at ${viceKinds[k].map(clock).join(", ")}`).join("; ") + " — check these moments on the recording."
         : actV.length ? "No weaving, box walking or rhythmic head tossing identified." : "Not assessed without movement data."],
@@ -340,7 +420,9 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
         : gaitV.length ? "Gait asymmetry index; a vet should confirm." : "Not monitored in this session."],
     [11, "Watering", waterIn || waterSeen ? S.ok : S.no, waterIn ? `${f1(total(of("water_ml")) / 1000)} L` : waterSeen ? "None" : "—",
       waterIn ? `${drinks ? plural(drinks, "drink") : "Drinking measured"}${of("water_refill").length ? "; refills not counted" : ""}.` : waterSeen ? "No drinking during the session." : "Not monitored in this session."],
-    [12, "Feeding", meals.length || hayIn || feederSeen ? S.ok : S.no,
+    !(meals.length || hayIn || feederSeen) && budgetOk && hayKnown
+      ? [12, "Feeding", S.part, hmText(tbTot.eating), "Time spent eating at the hay through the session. The amount eaten is not measured."]
+      : [12, "Feeding", meals.length || hayIn || feederSeen ? S.ok : S.no,
       ateKnown ? `${kg(meals.reduce((a, m) => a + (m.eatenG ?? 0), 0) + hayG)}` : meals.length ? plural(meals.length, "meal") : feederSeen ? "None" : "—",
       meals.length ? `${plural(meals.length, "meal")}: offered ${kg(offered)}, left ${kg(left)}${hayIn ? `; hay ${kg(hayG)}` : ""}.`
         : hayIn ? `Hay ${kg(hayG)} eaten.` : feederSeen ? "No meal during the session." : "Not monitored in this session."],
@@ -439,6 +521,44 @@ ${grid}${bandsSvg}${tk}${bars}${line}
     return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="Eye temperature readings">${grid}${band}${ticks(H)}${dots}</svg>`;
   }
 
+  function budgetBar() {
+    const shown = tbShown.filter(([k]) => tbTot[k] > 0);
+    const segs = shown.map(([k, label, cls]) => `<div class="tbs ${cls}" style="width:${((tbTot[k] / tbAll) * 100).toFixed(2)}%" data-tip="${esc(label)} · ${hmText(tbTot[k])}"><span>${Math.round((tbTot[k] / tbAll) * 100) >= 7 ? `${Math.round((tbTot[k] / tbAll) * 100)}%` : ""}</span></div>`).join("");
+    return `<div class="tbbar">${segs}</div>`;
+  }
+
+  function budgetHours() {
+    const binMin = minutes >= 180 ? 60 : 10;
+    const nbins = Math.ceil(minutes / binMin);
+    const bins = Array.from({ length: nbins }, () => Object.fromEntries(TB.map(([k]) => [k, 0])));
+    for (const r of tbR) {
+      const b = Math.min(nbins - 1, Math.floor(minuteOf(r) / binMin));
+      for (const [k] of TB) bins[b][k] += r.meta?.[`${k}S`] || 0;
+    }
+    const H = 150, bw = (W - L - R) / nbins;
+    const bars = bins.map((b, i) => {
+      const tot = TB.reduce((x, [k]) => x + b[k], 0);
+      if (!tot) return `<rect x="${L + i * bw + 2}" y="${H - 6}" width="${Math.max(1, bw - 4)}" height="6" rx="2" class="nodata"/>`;
+      let y = H;
+      return TB.filter(([k]) => b[k] > 0).map(([k, label, cls]) => {
+        const h = (b[k] / tot) * H;
+        y -= h;
+        return `<rect x="${L + i * bw + 2}" y="${y.toFixed(1)}" width="${Math.max(1, bw - 4).toFixed(1)}" height="${h.toFixed(1)}" class="${cls}" data-tip="${clock(from + i * binMin * 60000)} · ${esc(label)} ${Math.round((b[k] / tot) * 100)}%"/>`;
+      }).join("");
+    }).join("");
+    const every = nbins > 14 ? 2 : 1;
+    const ticks = bins.map((_, i) => (i % every ? "" : `<text x="${L + i * bw + bw / 2}" y="${H + 16}" class="tick" text-anchor="middle">${clock(from + i * binMin * 60000)}</text>`)).join("");
+    return `<svg viewBox="0 -6 ${W} ${H + 26}" role="img" aria-label="How the time was spent, ${binMin === 60 ? "hour by hour" : "every 10 minutes"}">${bars}${ticks}</svg>`;
+  }
+
+  function stallMap() {
+    const max = Math.max(1, ...cells);
+    const rects = cells.map((v, c) => (v > 0
+      ? `<rect x="${c % GX}" y="${Math.floor(c / GX)}" width="1" height="1" class="heatcell" fill-opacity="${(0.12 + 0.6 * (v / max)).toFixed(2)}" data-tip="${Math.round((v / Math.max(1, cellsTot)) * 100)}% of the time"/>` : "")).join("");
+    const img = mapShot ? `<img src="${toUri(mapShot.jpg)}" alt="${esc(name)}'s stall">` : `<div class="nophoto">No photo of the stall in this session.</div>`;
+    return `<div class="map">${img}<svg viewBox="0 0 ${GX} ${GY}" preserveAspectRatio="none" aria-label="Where ${esc(name)} stood">${rects}</svg></div>`;
+  }
+
   function distribution() {
     const tot = actV.length || 1;
     const seg = [["High", bands.high, "lv-high"], ["Moderate", bands.moderate, "lv-moderate"], ["Low", bands.low, "lv-low"], ["No activity", bands.none, "lv-none"]];
@@ -472,7 +592,12 @@ ${grid}${bandsSvg}${tk}${bars}${line}
     points: points.slice(0, 8).filter((x) => x[2] !== S.no).map((x) => x[0]),
     pointNames: Object.fromEntries(points.slice(0, 8).map((x) => [x[0], x[1]])),
   };
-  const pages = previous ? 6 : 5;
+  const pages = 5 + (heatViews.length ? 1 : 0) + (budgetOk ? 1 : 0) + (previous ? 1 : 0);
+  // Sections and pages are numbered as they are laid out: some appear only
+  // when there is something to show.
+  let secN = 0, pgN = 0;
+  const sn = () => `<span class="n">${String(++secN).padStart(2, "0")}</span>`;
+  const pg = () => foot(++pgN);
   const pic = (x, alt) => (x.thermal
     ? `<div class="pair"><img src="${x.img}" alt="${alt}, colour" style="flex:${(x.aspect || 1.33).toFixed(3)} 1 0"><img src="${x.thermal}" alt="${alt}, thermal" style="flex:${(x.tAspect || 1.25).toFixed(3)} 1 0"></div>`
     : `<img src="${x.img}" alt="${alt}">`);
@@ -522,14 +647,14 @@ ${grid}${bandsSvg}${tk}${bars}${line}
     if (b.floor && !a.floor) seen.push(`<b>Urination and manure</b>: ${b.floor.urination || b.floor.excretion ? `${b.floor.urination} urination and ${b.floor.excretion} manure seen` : "none seen"} this session; not assessed on ${esc(a.date)}.`);
     const context = `The sessions were at different times of day (${esc(a.times.split("–")[0])} and ${esc(b.times.split("–")[0])}) and of different length (${a.minutes} and ${b.minutes} minutes). Horses' activity and rest change through the day, so a difference between two short sessions describes those sessions rather than a trend; a trend needs a few days of monitoring.`;
     return `<div class="page">
-<section class="card"><div class="sh"><span class="n">11</span><h2>${esc(name)} across sessions</h2></div><p class="sub">This session compared with ${esc(a.date)}, each from its own measurements. Shares are of the monitored time, as the sessions differ in length.</p>
+<section class="card"><div class="sh">${sn()}<h2>${esc(name)} across sessions</h2></div><p class="sub">This session compared with ${esc(a.date)}, each from its own measurements. Shares are of the monitored time, as the sessions differ in length.</p>
 <table class="cmp" style="margin-top:10px"><thead><tr><th>Measure</th><th>${esc(a.date)}</th><th>${esc(b.date)} · this session</th></tr></thead><tbody>
 ${rows.map(([k, x, y]) => `<tr><td><b>${esc(k)}</b></td><td>${esc(x)}</td><td>${esc(y)}</td></tr>`).join("")}
 </tbody></table></section>
-<section class="card"><div class="sh"><span class="n">12</span><h2>What the comparison shows</h2></div>
+<section class="card"><div class="sh">${sn()}<h2>What the comparison shows</h2></div>
 <ul class="clist">${seen.map((x) => `<li>${x}</li>`).join("")}</ul>
 <div class="note" style="margin-top:12px"><b>Context</b>${context}</div></section>
-${foot(6)}</div>`;
+${pg()}</div>`;
   }
 
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -621,13 +746,17 @@ tr.dim td{color:var(--muted)}
 .notes p{margin:0 0 6px;color:var(--ink2);font-size:14px;white-space:pre-line}.page .notes p{font-size:11px}
 .photo img,.gal img{aspect-ratio:auto;object-fit:contain}.gal,.page .gal{grid-template-columns:repeat(3,1fr)}.page .gal figcaption{font-size:10px}
 @media print{.no-print{display:none!important}}
+.tb-lie{fill:#7c5cff;background:#7c5cff}.tb-eat{fill:#2f9e44;background:#2f9e44}.tb-rest{fill:#4dabf7;background:#4dabf7}.tb-move{fill:#f08c00;background:#f08c00}.tb-out{fill:#ced4da;background:#ced4da}
+.tbbar{display:flex;height:34px;border-radius:9px;overflow:hidden;margin-top:12px}.tbs{display:flex;align-items:center;justify-content:center;color:#fff;font-size:11.5px;font-weight:600}.tbs.tb-out{color:var(--ink2)}
+.map{position:relative;margin-top:10px}.map img{width:100%;display:block;border-radius:10px}.map svg{position:absolute;inset:0;width:100%;height:100%}.heatcell{fill:#ff3d00}
+.gal.heat,.page .gal.heat{grid-template-columns:repeat(2,1fr);gap:12px}.gal.heat figcaption{font-size:10.5px}
 </style></head><body><main>
 <div class="toolbar no-print"><button type="button" onclick="window.print()">Save as PDF</button><span>In the print window choose “Save as PDF”.</span></div>
 <div class="page p1">
 <header class="cover">
 <div class="top"><span class="logo"><i>E</i>EquiCare</span><span>Monitoring session report</span></div>
 <h1>${esc(name)} <span>· Stall ${esc(horse.stall || "—")}</span></h1>
-<div class="meta"><span><b>Date</b> ${day}</span><span><b>Session</b> ${clock(from)}–${clock(rangeEnd)} ${esc(tzName)} (${dur})</span><span><b>Ref.</b> ${ref}</span></div>
+<div class="meta"><span><b>Date</b> ${day}</span><span><b>Session</b> ${clock(from)}–${clock(rangeEnd)} ${esc(tzName)} (${dur})</span><span><b>Ref.</b> ${ref}</span>${client ? `<span><b>Prepared for</b> ${esc(client)}</span>` : ""}</div>
 </header>
 <div class="kpis">
 <div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>Eye temperature</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
@@ -637,11 +766,11 @@ tr.dim td{color:var(--muted)}
 </div>
 
 <section class="card"><div class="exec"><div>
-<div class="sh"><span class="n">01</span><h2>Executive summary</h2></div>
+<div class="sh">${sn()}<h2>Executive summary</h2></div>
 <p class="lead">${esc(lead)}</p>
 ${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}
 <div class="details"><h3>Session details</h3><dl>
-<dt>Horse</dt><dd>${esc(name)}</dd><dt>Stall</dt><dd>${esc(horse.stall || "—")}</dd>
+${client ? `<dt>Prepared for</dt><dd>${esc(client)}</dd>` : ""}<dt>Horse</dt><dd>${esc(name)}</dd><dt>Stall</dt><dd>${esc(horse.stall || "—")}</dd>
 <dt>Date</dt><dd>${T({ day: "numeric", month: "short", year: "numeric" }).format(from)}</dd><dt>Session</dt><dd>${clock(from)}–${clock(rangeEnd)} ${esc(tzName)}</dd>
 <dt>Coverage</dt><dd>${anyMin.size} of ${liveMin} min${pausedMin ? ` (paused ${pauseText})` : ""}</dd>
 <dt>Readings</dt><dd>${nReadings}</dd><dt>Video recorded</dt><dd>${clipCount ? plural(clipCount, "clip") : "none"}</dd>
@@ -650,9 +779,9 @@ ${findings.map(([k, t, d]) => `<div class="find">${svgIcon(k)}<div><b>${esc(t)}<
 <div class="photos">${covers.length ? covers.map((c) => `<figure class="photo">${pic(c, `${esc(name)} at ${clock(c.at)}`)}<figcaption>${clock(c.at)} · ${esc(caption(c.m))}</figcaption></figure>`).join("")
   : `<div class="nophoto">No video was recorded in this session.</div>`}</div>
 </div></section>
-${foot(1)}</div>
+${pg()}</div>
 <div class="page">
-<section class="card"><div class="sh"><span class="n">02</span><h2>Behaviour and wellbeing observations</h2></div><p class="sub">What was measured during the session${notesText ? ", and notes from the stable" : ""}.</p>
+<section class="card"><div class="sh">${sn()}<h2>Behaviour and wellbeing observations</h2></div><p class="sub">What was measured during the session${notesText ? ", and notes from the stable" : ""}.</p>
 <div class="obs">
 <div><h3>Observed</h3>${observed.length ? observed.map(([t, d]) => `<div class="find">${svgIcon("check")}<div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("") : `<p class="sub">Nothing was measured in this window.</p>`}</div>
 <div>${notesText ? `<h3>Notes from the stable</h3><div class="find">${svgIcon("note")}<div class="notes">${notesText.split(/\n+/).map((p) => `<p>${esc(p)}</p>`).join("")}</div></div>` : ""}
@@ -660,22 +789,26 @@ ${foot(1)}</div>
 ${notSeen.length ? `<div class="note"><b>Not captured this session</b>${esc(notSeen.join(", ").replace(/^./, (c) => c.toUpperCase()))} — see the monitoring points and recommendations.</div>` : ""}</div>
 </div></section>
 
-<section class="card"><div class="sh"><span class="n">03</span><h2>Session gallery</h2></div><p class="sub">${gallery.length ? `${plural(gallery.length, "moment")} from the recording, in time order — chosen where ${fromRec ? "" : "the eye was in view and "}the picture was sharpest.${paired ? " Each shows the stall in colour beside the heat image of the same second (brightened for viewing)." : ""}` : "No video was recorded in this session."}</p>
-<div class="gal${paired ? " pairs" : ""}">${gallery.map((g) => `<figure>${pic(g, `${esc(name)} at ${clock(g.at)}`)}<figcaption><b>${clock(g.at)}</b>${esc(caption(g.m).replace(/^./, (c) => c.toUpperCase()))}</figcaption></figure>`).join("")}</div></section>
-${foot(2)}</div>
+<section class="card"><div class="sh">${sn()}<h2>Colour views</h2></div><p class="sub">${colourViews.length ? `${plural(colourViews.length, "moment")} from the session, chosen to show what ${esc(name)} was doing, in time order.` : "No video was recorded in this session."}</p>
+<div class="gal">${colourViews.map((g) => `<figure><img src="${g.img}" alt="${esc(name)} at ${clock(g.at)}"><figcaption><b>${clock(g.at)}</b>${esc(colourCaption(g.m))}</figcaption></figure>`).join("")}</div></section>
+${pg()}</div>
+${heatViews.length ? `<div class="page">
+<section class="card"><div class="sh">${sn()}<h2>Heat views</h2></div><p class="sub">Warmer areas show brighter: the heat image shows where ${esc(name)}'s warm body is${eye.length ? " and where the eye was read" : ""}. Breathing is read from the rise and fall of warmth at the nostril and from the movement of the flank. ${plural(heatViews.length, "moment")}, chosen for what they show.</p>
+<div class="gal heat">${heatViews.map((g) => `<figure><img src="${g.img}" alt="Heat image of ${esc(name)} at ${clock(g.at)}"><figcaption><b>${clock(g.at)}</b>${esc(heatCaption(g.m))}</figcaption></figure>`).join("")}</div></section>
+${pg()}</div>` : ""}
 <div class="page">
-<section class="card"><div class="sh"><span class="n">04</span><h2>Monitoring points</h2></div><p class="sub">Results for the twelve monitoring points.</p>
+<section class="card"><div class="sh">${sn()}<h2>Monitoring points</h2></div><p class="sub">Results for the twelve monitoring points.</p>
 <table class="pts" style="margin-top:10px"><thead><tr><th>Monitoring point</th><th>Result</th><th>Status</th><th>Notes</th></tr></thead><tbody>
 ${points.map(([n, pname, st, val, note]) => `<tr><td class="pt-name">${esc(pname)}<small>Point ${n}</small></td><td class="pt-val">${esc(val)}</td><td><span class="st ${st[0]}"><i>${st[1]}</i>${st[2]}</span></td><td class="pt-note">${esc(note)}</td></tr>`).join("")}
 </tbody></table></section>
 
-<section class="card"><div class="sh"><span class="n">05</span><h2>Session timeline</h2></div><p class="sub">${bucket === 1 ? "Minute-by-minute" : `${bucket}-minute`} view of monitoring, ${fromRec ? "" : "eye in view, "}rest and activity.${markTimes.length ? " ▼ marks an event to review on the recording." : ""}</p>
+<section class="card"><div class="sh">${sn()}<h2>Session timeline</h2></div><p class="sub">${bucket === 1 ? "Minute-by-minute" : `${bucket}-minute`} view of monitoring, ${fromRec ? "" : "eye in view, "}rest and activity.${markTimes.length ? " ▼ marks an event to review on the recording." : ""}</p>
 <div style="margin-top:14px">${timeline()}</div>
 <div class="legend"><span><i class="sw bar"></i>present</span><span><i class="sw hot"></i>high activity${markTimes.length ? " / event" : ""}</span></div>
 <p class="fig">Figure 1 · Session timeline</p></section>
-${foot(3)}</div>
+${pg()}</div>
 <div class="page">
-<section class="card"><div class="sh"><span class="n">06</span><h2>Activity</h2></div><p class="sub">Each bar is ${bucket === 1 ? "one minute" : `${bucket} minutes`}, coloured by activity level (activity index 0 = still, 1 = very active); the line is the ${avgLabel}.</p>
+<section class="card"><div class="sh">${sn()}<h2>Activity</h2></div><p class="sub">Each bar is ${bucket === 1 ? "one minute" : `${bucket} minutes`}, coloured by activity level (activity index 0 = still, 1 = very active); the line is the ${avgLabel}.</p>
 <div style="margin-top:14px">${activityChart()}</div>
 <div class="legend"><span><i class="sw lv-high"></i>High (0.6+)</span><span><i class="sw lv-moderate"></i>Moderate (0.2–0.6)</span><span><i class="sw lv-low"></i>Low (0.05–0.2)</span><span><i class="sw lv-none"></i>No activity</span><span><i class="sw avgkey"></i>${avgLabel.replace(/^./, (c) => c.toUpperCase())}</span></div>
 <p class="fig">Figure 2 · Activity${bucket === 1 ? " per minute" : ""}</p>
@@ -683,22 +816,31 @@ ${foot(3)}</div>
 <div class="stats"><div class="stat"><b>${bands.high} min</b><span>high activity</span></div><div class="stat"><b>${bands.moderate} min</b><span>moderate activity</span></div><div class="stat"><b>${bands.low + bands.none} min</b><span>low or no activity</span></div><div class="stat"><b>${lyingMeasured ? `${lyingMin} min` : `${stillMin} min`}</b><span>${lyingMeasured ? "lying down" : "standing still"}</span></div></div>
 <p class="sub" style="margin-top:14px">${esc((spells.length ? `Rest came in ${plural(spells.length, "spell")}${spells.length <= 6 ? `: ${spellText(spells)}` : ""}. ` : actV.length ? "No sustained rest spells. " : "") + (busiest ? `The most active period was ${busiest.label} (average ${f2(busiest.act)}).` : ""))}</p></section>
 
-<section class="card"><div class="sh"><span class="n">07</span><h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Eye-surface temperature reads about 2 °C below rectal temperature.</p>
+${fromRec ? "" : `<section class="card"><div class="sh">${sn()}<h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Eye-surface temperature reads about 2 °C below rectal temperature.</p>
 <div style="margin-top:14px">${tempChart()}</div>
 <div class="legend"><span><i class="sw dot"></i>reading</span><span><i class="sw iqr"></i>middle 50% of readings</span><span>— — median</span></div>
 <p class="fig">Figure 3 · Eye temperature</p>
-<div class="stats"><div class="stat"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>median</span></div><div class="stat"><b>${eye.length ? `${f1(eyeLo)}–${f1(eyeHi)} °C` : "—"}</b><span>range</span></div><div class="stat"><b>${eye.length}</b><span>readings</span></div><div class="stat"><b>${eyeMinutes} min</b><span>eye in view</span></div></div></section>
-${foot(4)}</div>
+<div class="stats"><div class="stat"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>median</span></div><div class="stat"><b>${eye.length ? `${f1(eyeLo)}–${f1(eyeHi)} °C` : "—"}</b><span>range</span></div><div class="stat"><b>${eye.length}</b><span>readings</span></div><div class="stat"><b>${eyeMinutes} min</b><span>eye in view</span></div></div></section>`}
+${pg()}</div>
+${budgetOk ? `<div class="page">
+<section class="card"><div class="sh">${sn()}<h2>How the time was spent</h2></div><p class="sub">Each second of the session, from the video: ${tbShown.filter(([kk]) => kk !== "unseen").map(([, l]) => l.toLowerCase()).join(", ")}.${lyingMeasured ? "" : ` Lying down is shown once ${esc(name)} has been seen both lying and standing in this stall; until then, time lying counts as rest.`}</p>
+${budgetBar()}
+<div class="stats">${tbShown.filter(([kk]) => kk !== "unseen").slice(0, 4).map(([kk, l]) => `<div class="stat"><b>${hmText(tbTot[kk])}</b><span>${esc(l.toLowerCase())}</span></div>`).join("")}</div>
+<h3 style="margin:18px 0 0;font-size:14px">${minutes >= 180 ? "Hour by hour" : "Every 10 minutes"}</h3>${budgetHours()}
+<div class="legend">${tbShown.map(([, l, c]) => `<span><i class="sw ${c}"></i>${esc(l)}</span>`).join("")}</div></section>
+<section class="card"><div class="sh">${sn()}<h2>Where ${esc(name)} spent the time</h2></div><p class="sub">${esc(whereText)} Darker shading: where ${esc(name)} stood longer (the hooves), seen from the stall door.</p>
+${stallMap()}</section>
+${pg()}</div>` : ""}
 <div class="page">
-<section class="card"><div class="sh"><span class="n">08</span><h2>${block < 60 ? `${block}-minute` : `${block / 60}-hour`} breakdown</h2></div>
+<section class="card"><div class="sh">${sn()}<h2>${block < 60 ? `${block}-minute` : `${block / 60}-hour`} breakdown</h2></div>
 <table style="margin-top:10px"><thead><tr><th>Period</th><th>Avg activity</th><th>Peak</th><th>Standing rest</th><th>Eye temp.</th><th>Eye in view</th><th>Flags</th></tr></thead><tbody>
 ${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.label}</td><td class="num">${f2(b.act)}</td><td class="num">${f2(b.peak)}</td><td class="num">${b.still} min</td><td class="num">${b.n ? `${f1(b.temp)} °C` : "—"}</td><td class="num">${Math.round(b.eyeShare * 100)}%</td><td class="num">${b.flags || "—"}</td></tr>`).join("")}
 </tbody></table></section>
 
-<section class="card"><div class="sh"><span class="n">09</span><h2>Recommendations</h2></div>
+<section class="card"><div class="sh">${sn()}<h2>Recommendations</h2></div>
 <ol class="rec">${recs.map((r) => `<li><div>${r}</div></li>`).join("")}</ol></section>
 
-<section class="card"><div class="sh"><span class="n">10</span><h2>About this report</h2></div>
+<section class="card"><div class="sh">${sn()}<h2>About this report</h2></div>
 <div class="about">
 <div><b>Eye temperature</b><span>Read at the eye whenever the eye is in view — only from a small hot spot with cooler skin around it, so a warm coat is not mistaken for the eye. Eye-surface temperature runs about 2 °C below rectal temperature and is tracked as a trend for each horse.</span></div>
 <div><b>Activity index</b><span>The share of the horse moving: 0 = still, 1 = very active. Levels: no activity below 0.05, low 0.05–0.2, moderate 0.2–0.6, high 0.6 and above.</span></div>
@@ -708,7 +850,7 @@ ${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.labe
 ${anyRec ? `<div><b>${overnight ? "Overnight review" : "Review after recording"}</b><span>${fromRec ? "This session was" : `The ${overnight ? "overnight " : ""}part (${span(reviewed)}) was`} recorded at the stable and reviewed afterwards, minute by minute, with the same methods as live monitoring. Eye temperature is taken during live monitoring only${fromRec ? "" : ` — in this session, during the live check (${span(checkedLive)})`}.</span></div>
 ` : ""}<div><b>Screening</b><span>Measurements support daily care and early attention; clinical decisions should be confirmed by a veterinarian.</span></div>
 </div></section>
-${foot(5)}</div>
+${pg()}</div>
 ${previous ? comparison() : ""}
 </main><div id="tip"></div>
 <script>const tip=document.getElementById("tip");document.addEventListener("pointermove",(e)=>{const t=e.target.closest&&e.target.closest("[data-tip]");if(!t){tip.style.display="none";return;}tip.textContent=t.getAttribute("data-tip");tip.style.display="block";const r=tip.getBoundingClientRect();let x=e.clientX+14,y=e.clientY+14;if(x+r.width>innerWidth-8)x=e.clientX-r.width-14;if(y+r.height>innerHeight-8)y=e.clientY-r.height-14;tip.style.left=x+"px";tip.style.top=y+"px";});</script>

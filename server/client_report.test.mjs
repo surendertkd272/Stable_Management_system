@@ -29,7 +29,7 @@ test("an hour: every section from the numbers, photos where the eye was read, no
   assert.equal(ref, "EQ-TARA-202609201430");
   assert.match(html, /Tara · Stall 07|Tara <span>· Stall 07/);
   assert.equal((html.match(/Page \d of 5/g) || []).length, 5);
-  assert.equal(photos, 15, "three cover photos and a gallery of twelve");
+  assert.equal(photos, 9, "three cover photos and six colour views");
   assert.match(html, /14:30–15:30 IST/);
   assert.match(html, /Temperature stable/);
   assert.match(html, /20 min high, 20 min moderate and 0 min low activity; 20 min standing still/);
@@ -101,6 +101,29 @@ test("visits: people at the stall are listed with their times, and the timeline 
   assert.doesNotMatch(old.html, /Visits|People at the stall/, "no people check ran: nothing said");
 });
 
+test("how the time was spent: budget, hour by hour, where he stood; feeding from time at the hay; prepared for the client", async () => {
+  const rd = hourOf().filter((r) => r.metric !== "body_temp_c");
+  for (let m = 0; m < 60; m++) {
+    const eating = m < 30 ? 40 : 10;
+    rd.push(R("time_budget", 60, m, { lyingS: 0, eatingS: eating, restingS: 60 - eating - 5, movingS: 5, unseenS: 0, hay: true, grid: "12x8",
+      where: [[3 * 12 + 2, 50], [5 * 12 + 8, 10]] }));
+  }
+  rd.push(R("respiratory_rate_bpm", 9.2, 12, { method: "thermal video, nostril box" }, "thermal_video"));
+  const { html } = await clientReport({ horse, readings: rd, from, to: from + hour, tz: "Asia/Kolkata", grab, grabThermal: grab, grabFull: grab,
+    client: "Remount Veterinary Corps" });
+  assert.match(html, /<b>Prepared for<\/b> Remount Veterinary Corps/);
+  assert.match(html, /<h2>How the time was spent<\/h2>/);
+  assert.match(html, /Eating at the hay 25 min/i, "the summary gives the time eating");
+  assert.match(html, /Feeding<small>Point 12<\/small><\/td><td class="pt-val">25 min<\/td><td><span class="st part">/, "feeding: time at the hay, partly captured");
+  assert.match(html, /The amount eaten is not measured/);
+  assert.match(html, /<h2>Where Tara spent the time<\/h2>/);
+  assert.match(html, /Tara spent most of the time at the (middle|back) left of the stall \(83% of the time seen\)/);
+  assert.match(html, /Breathing 9 \/min, read in this minute/, "a heat view says what it shows");
+  assert.match(html, /Every 10 minutes/);
+  assert.doesNotMatch(html, /camera|sensor|detector|thermal camera|RVC/i);
+  assert.ok(clean(html));
+});
+
 test("a rising temperature is said, with the size of the rise", async () => {
   const { html } = await clientReport({ horse, readings: hourOf({ eyeEvery: 2, rise: 1.2 }), from, to: from + hour, tz: "UTC" });
   assert.match(html, /Temperature rising/);
@@ -163,8 +186,10 @@ test("photos pair colour with thermal; the comparison page is about the horse, n
   const { html, summary } = await clientReport({ horse, readings: calm, from, to: from + hour, floorWatched: true, tz: "Asia/Kolkata", grab,
     grabThermal: grab, previous: { summary: before.summary } });
   assert.equal(summary.eye.n, 0);
-  assert.equal((html.match(/Page \d of 6/g) || []).length, 6, "six pages with the comparison");
-  assert.match(html, /class="pair"/, "colour and thermal side by side");
+  assert.equal((html.match(/Page \d of 7/g) || []).length, 7, "seven pages: the heat views and the comparison added");
+  assert.match(html, /class="pair"/, "cover photos: colour and thermal side by side");
+  assert.match(html, /<h2>Colour views<\/h2>/);
+  assert.match(html, /<h2>Heat views<\/h2>/, "the heat images in a section of their own");
   assert.match(html, /Tara across sessions/);
   assert.match(html, /<b>Tara was calmer<\/b> than on 20 Sept 2026: median activity 0\.04 against 0\.30/);
   assert.match(html, /read on 20 Sept 2026 \(33\.\d °C median\) but not on 20 Sept 2026|cannot be compared this time/);

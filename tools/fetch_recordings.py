@@ -34,8 +34,10 @@ def main():
     if isinstance(items, dict):                              # one clip: PowerShell sends the object alone
         items = [items]
     streams = ("thermal", "visible") + (("colour-hd",) if a.hd else ())
+    # In time order, each period's streams together: the night can be analysed
+    # from the start while the rest is still coming.
     items = sorted((i for i in items if i["path"].split("/")[0] in streams),
-                   key=lambda i: (streams.index(i["path"].split("/")[0]), i["path"]))
+                   key=lambda i: (i["path"].split("/")[1], streams.index(i["path"].split("/")[0])))
     dest = Path(a.to).expanduser()
     todo = [i for i in items if not ((dest / i["path"]).exists() and (dest / i["path"]).stat().st_size == i["size"])]
     total = sum(i["size"] for i in todo)
