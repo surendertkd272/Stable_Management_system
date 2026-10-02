@@ -14,7 +14,9 @@ stopped (Wi-Fi dropped) carries on where it was when run again.
 """
 import argparse
 import json
+import queue
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -26,9 +28,12 @@ def main():
     ap.add_argument("--to", required=True, help="folder to copy into (thermal/, visible/ … are made in it)")
     ap.add_argument("--hd", action="store_true", help="also copy colour-hd/ (large)")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--ports", help="several sharing windows (SHARE-MORE.bat: 8765,8766,8767,8768): "
+                                    "one clip each at a time — on a slow Wi-Fi four streams carry far more than one")
     a = ap.parse_args()
 
-    base = f"http://{a.laptop}:{a.port}"
+    ports = [int(x) for x in a.ports.split(",")] if a.ports else [a.port]
+    base = f"http://{a.laptop}:{ports[0]}"
     with urllib.request.urlopen(f"{base}/list", timeout=20) as r:
         items = json.loads(r.read() or b"[]")
     if isinstance(items, dict):                              # one clip: PowerShell sends the object alone
@@ -43,31 +48,50 @@ def main():
     total = sum(i["size"] for i in todo)
     print(f"{len(items)} clips on the laptop, {len(items) - len(todo)} already here; copying {len(todo)} "
           f"({total / 1e9:.1f} GB)", flush=True)
-    done, t0 = 0, time.time()
-    for k, i in enumerate(todo, 1):
-        out = dest / i["path"]
-        out.parent.mkdir(parents=True, exist_ok=True)
-        part = out.with_suffix(".part")
-        for attempt in range(3):
+    work = queue.Queue()
+    for i in todo:
+        work.put(i)
+    lock, state = threading.Lock(), {"done": 0, "k": 0}
+    t0 = time.time()
+
+    def worker(port):
+        base_p = f"http://{a.laptop}:{port}"
+        while True:
             try:
-                with urllib.request.urlopen(f"{base}/{i['path']}", timeout=60) as r, open(part, "wb") as f:
-                    while True:
-                        b = r.read(1 << 20)
-                        if not b:
-                            break
-                        f.write(b)
-                if part.stat().st_size != i["size"]:
-                    raise IOError(f"got {part.stat().st_size} of {i['size']} bytes")
-                part.replace(out)
-                break
-            except Exception as e:                           # noqa: BLE001
-                print(f"  {i['path']}: {e} — " + ("trying again" if attempt < 2 else "skipped; run again later"), flush=True)
-                time.sleep(3)
-        done += i["size"]
-        rate = done / max(1, time.time() - t0)
-        left = (total - done) / rate if rate else 0
-        print(f"  {k}/{len(todo)} {i['path']}  {done / 1e9:.2f}/{total / 1e9:.2f} GB, "
-              f"{rate * 8 / 1e6:.0f} Mbit/s, ~{left / 60:.0f} min left", flush=True)
+                i = work.get_nowait()
+            except queue.Empty:
+                return
+            out = dest / i["path"]
+            out.parent.mkdir(parents=True, exist_ok=True)
+            part = out.with_suffix(f".{port}.part")
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(f"{base_p}/{i['path']}", timeout=60) as r, open(part, "wb") as f:
+                        while True:
+                            b = r.read(1 << 20)
+                            if not b:
+                                break
+                            f.write(b)
+                    if part.stat().st_size != i["size"]:
+                        raise IOError(f"got {part.stat().st_size} of {i['size']} bytes")
+                    part.replace(out)
+                    break
+                except Exception as e:                       # noqa: BLE001
+                    print(f"  {i['path']}: {e} — " + ("trying again" if attempt < 2 else "skipped; run again later"), flush=True)
+                    time.sleep(3)
+            with lock:
+                state["done"] += i["size"]
+                state["k"] += 1
+                rate = state["done"] / max(1, time.time() - t0)
+                left = (total - state["done"]) / rate if rate else 0
+                print(f"  {state['k']}/{len(todo)} {i['path']}  {state['done'] / 1e9:.2f}/{total / 1e9:.2f} GB, "
+                      f"{rate * 8 / 1e6:.0f} Mbit/s, ~{left / 60:.0f} min left", flush=True)
+
+    threads = [threading.Thread(target=worker, args=(p,)) for p in ports]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
     missing = [i["path"] for i in items if not ((dest / i["path"]).exists() and (dest / i["path"]).stat().st_size == i["size"])]
     print("all copied" if not missing else f"{len(missing)} not copied — run again: {missing[:5]}")
     sys.exit(1 if missing else 0)

@@ -5,14 +5,14 @@
 # lives as long as this window. Ctrl+C or closing the window stops it.
 # ASCII only: Windows PowerShell 5.1 reads a file without a BOM as ANSI.
 
+param([int]$Port = 8765)
 $ErrorActionPreference = 'Continue'
 $Root = 'C:\EquiCare-recordings'
 $Mac = '100.109.6.122'
-$Port = 8765
-$Rule = 'EquiCare recordings share'
+$Rule = "EquiCare recordings share $Port"
 $Clip = '^(thermal|visible|colour-hd)/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.mp4$'
 
-$Host.UI.RawUI.WindowTitle = 'EquiCare - sharing recordings with the Mac'
+$Host.UI.RawUI.WindowTitle = "EquiCare - sharing recordings with the Mac (port $Port)"
 try {
   Add-Type -Name Con -Namespace EquiCare -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern System.IntPtr GetStdHandle(int h);
