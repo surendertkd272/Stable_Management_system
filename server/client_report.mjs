@@ -461,8 +461,22 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
 
   const gallery = colourViews;                                     // (photo count, comparison)
   // The stall map's photo: the whole picture (its grid is the whole picture),
-  // from a moment in the middle of the session.
-  const mapMin = colourMin[Math.floor(colourMin.length / 2)] ?? Math.floor(minutes / 2);
+  // from a moment he stood still away from the squares he used most, all of
+  // him in the photo — so the shading lies on the floor, not on him (2 Oct:
+  // a photo of him lying on the most-used square read as a red blotch on the
+  // horse). No such moment: the middle of the session.
+  const [vx0, vy0, vx1, vy1] = mapCrop.map((v, i) => v * (i % 2 ? GY : GX));
+  const inPhoto = (c) => {
+    const x = c % GX, y = Math.floor(c / GX);
+    return Math.max(0, Math.min(x + 1, vx1) - Math.max(x, vx0)) * Math.max(0, Math.min(y + 1, vy1) - Math.max(y, vy0)) >= 0.5;
+  };
+  const whereAt = new Array(minutes).fill(null);
+  for (const r of tbR) if (r.meta?.where?.length) whereAt[minuteOf(r)] = r.meta.where;
+  const cellsMax = Math.max(1, ...cells);
+  const heatUnder = (m) => { const w = whereAt[m], n = w.reduce((x, [, v]) => x + v, 0); return w.reduce((x, [c, v]) => x + v * (cells[c] || 0), 0) / Math.max(1, n) / cellsMax; };
+  const awayMins = Array.from({ length: minutes }, (_, m) => m).filter((m) => whereAt[m] && whereAt[m].every(([c]) => inPhoto(c))
+    && ["resting", "eating"].includes(stateOf[m]) && !inLyingRev(from + m * 60000 + 30000) && perMin.unseen[m] <= 5 && peopleSec[m] < 5);
+  const mapMin = awayMins.sort((x, y) => heatUnder(x) - heatUnder(y))[0] ?? colourMin[Math.floor(colourMin.length / 2)] ?? Math.floor(minutes / 2);
   const mapShot = budgetOk && grabFull ? await shot(grabFull, mapMin, 900) : null;
   // Where he spent most time, in words: the stall in thirds, as seen from the door.
   const cellsTot = cells.reduce((x, v) => x + v, 0);
@@ -732,21 +746,18 @@ ${grid}${bandsSvg}${tk}${bars}${line}
   }
 
   function stallMap() {
-    // Only squares mostly inside the photo are drawn: a square at the very
-    // edge shows as a thin bright sliver that reads as a lamp (2 Oct: the
-    // front row, where he lay down, is mostly below the photo's edge).
-    const [vx0, vy0, vx1, vy1] = mapCrop.map((v, i) => v * (i % 2 ? GY : GX));
-    const inPhoto = (c) => {
-      const x = c % GX, y = Math.floor(c / GX);
-      return Math.max(0, Math.min(x + 1, vx1) - Math.max(x, vx0)) * Math.max(0, Math.min(y + 1, vy1) - Math.max(y, vy0)) >= 0.5;
-    };
+    // Only squares mostly inside the photo are drawn (inPhoto): a square at
+    // the very edge shows as a thin bright sliver that reads as a lamp (2 Oct:
+    // the front row, where he lay down, is mostly below the photo's edge).
+    // Light enough at the most-used square for the floor to show through.
     const max = Math.max(1, ...cells.filter((v, c) => inPhoto(c)));
     const rects = cells.map((v, c) => (v > 0 && inPhoto(c)
-      ? `<rect x="${c % GX}" y="${Math.floor(c / GX)}" width="1" height="1" class="heatcell" fill-opacity="${(0.12 + 0.6 * (v / max)).toFixed(2)}" data-tip="${Math.round((v / Math.max(1, cellsTot)) * 100)}% of the time"/>` : "")).join("");
+      ? `<rect x="${c % GX}" y="${Math.floor(c / GX)}" width="1" height="1" class="heatcell" fill-opacity="${(0.06 + 0.3 * (v / max)).toFixed(2)}" data-tip="${Math.round((v / Math.max(1, cellsTot)) * 100)}% of the time"/>` : "")).join("");
     const img = mapShot ? `<img src="${toUri(mapShot.jpg)}" alt="${esc(name)}'s stall">` : `<div class="nophoto">No photo of the stall in this session.</div>`;
     const [cx0, cy0, cx1, cy1] = mapCrop;                          // the photo is this part of the picture
     const vb = `${(cx0 * GX).toFixed(3)} ${(cy0 * GY).toFixed(3)} ${((cx1 - cx0) * GX).toFixed(3)} ${((cy1 - cy0) * GY).toFixed(3)}`;
-    return `<div class="map">${img}<svg viewBox="${vb}" preserveAspectRatio="none" aria-label="Where ${esc(name)} stood">${rects}</svg></div>`;
+    return `<div class="map">${img}<svg viewBox="${vb}" preserveAspectRatio="none" aria-label="Where ${esc(name)} stood">${rects}</svg></div>`
+      + (mapShot ? `<div class="mapkey"><span>A little time</span><i></i><span>Most time</span><em>Photo: ${esc(clock(mapShot.at))}</em></div>` : "");
   }
 
   function distribution() {
@@ -939,6 +950,7 @@ tr.dim td{color:var(--muted)}
 .tb-lie{fill:#7c5cff;background:#7c5cff}.tb-eat{fill:#2f9e44;background:#2f9e44}.tb-rest{fill:#4dabf7;background:#4dabf7}.tb-move{fill:#f08c00;background:#f08c00}.tb-out{fill:#ced4da;background:#ced4da}
 .tbbar{display:flex;height:34px;border-radius:9px;overflow:hidden;margin-top:12px}.tbs{display:flex;align-items:center;justify-content:center;color:#fff;font-size:11.5px;font-weight:600}.tbs.tb-out{color:var(--ink2)}
 .map{position:relative;margin-top:10px;overflow:hidden;border-radius:10px}.map img{width:100%;display:block}.map svg{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.heatcell{fill:#ff3d00}
+.mapkey{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:var(--ink2)}.mapkey i{width:120px;height:9px;border-radius:5px;background:linear-gradient(90deg,rgba(255,61,0,.06),rgba(255,61,0,.36));border:1px solid var(--grid)}.mapkey em{margin-left:auto;font-style:normal;color:var(--muted)}
 .gal.heat,.page .gal.heat{grid-template-columns:repeat(2,1fr);gap:12px}.gal.heat figcaption{font-size:10.5px}
 </style></head><body><main>
 <div class="toolbar no-print"><button type="button" onclick="window.print()">Save as PDF</button><span>In the print window choose “Save as PDF”.</span></div>
@@ -1018,7 +1030,7 @@ ${budgetBar()}
 <div class="stats">${tbShown.filter(([kk]) => kk !== "unseen").slice(0, 4).map(([kk, l]) => `<div class="stat"><b>${hmText(tbTot[kk])}</b><span>${esc(l.toLowerCase())}</span></div>`).join("")}</div>
 <h3 style="margin:18px 0 0;font-size:14px">${minutes >= 180 ? "Hour by hour" : "Every 10 minutes"}</h3>${budgetHours()}
 <div class="legend">${tbShown.map(([, l, c]) => `<span><i class="sw ${c}"></i>${esc(l)}</span>`).join("")}</div></section>
-<section class="card"><div class="sh">${sn()}<h2>Where ${esc(name)} spent the time</h2></div><p class="sub">${esc(whereText)} Stronger shading: where ${esc(name)} stood longer (the hooves), seen from the stall door.</p>
+<section class="card"><div class="sh">${sn()}<h2>Where ${esc(name)} spent the time</h2></div><p class="sub">${esc(whereText)} Darker squares: where ${esc(name)}'s hooves were for longer, seen from the stall door.</p>
 ${stallMap()}</section>
 ${pg()}</div>` : ""}
 ${patternsOk ? `<div class="page">
