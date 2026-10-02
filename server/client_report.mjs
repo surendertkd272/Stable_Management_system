@@ -324,13 +324,42 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   for (const m of ranked) { if (coverMin.every((c) => Math.abs(c - m) >= Math.max(5, minutes / 8))) coverMin.push(m); if (coverMin.length === 3) break; }
   coverMin.sort((a, b) => a - b);
   const toUri = (jpg) => `data:image/jpeg;base64,${jpg.toString("base64")}`;
+  // Heat views: the moments where the horse fills the heat picture best. A
+  // view of empty floor has little detail and compresses small; the horse's
+  // outline compresses large — so many moments are taken and the most
+  // detailed kept, spread through the session (2 Oct: the first picks
+  // included blank floor). A breathing minute is preferred when its picture
+  // is as good.
+  const respMin = new Map(resp.map((r) => [minuteOf(r), r]));
+  const heatCands = [];
+  const stepH = Math.max(1, Math.floor(minutes / 48));
+  for (let m = 0; m < minutes; m += stepH) if (act[m] !== null) heatCands.push(m);
+  for (const m of respMin.keys()) if (!heatCands.includes(m)) heatCands.push(m);
+  const heatShots = [];
+  if (grabThermal) {
+    for (let i = 0; i < heatCands.length; i += 6) {               // a few ffmpeg at a time
+      heatShots.push(...(await Promise.all(heatCands.slice(i, i + 6).map(async (m) => {
+        const at = from + m * 60000 + 30000, jpg = await grabThermal(at, 640);
+        return jpg ? { m, at, jpg } : null;
+      }))).filter(Boolean));
+    }
+  }
+  const hsizes = heatShots.map((x) => x.jpg.length).sort((x, y) => x - y);
+  const hq = (p) => (hsizes.length ? hsizes[Math.floor(p * (hsizes.length - 1))] : 0);
+  const heatChosen = [];
+  for (const x of heatShots.filter((x) => x.jpg.length >= hq(0.5))
+    .sort((x, y) => y.jpg.length * (respMin.has(y.m) ? 1.15 : 1) - x.jpg.length * (respMin.has(x.m) ? 1.15 : 1))) {
+    if (heatChosen.length < 6 && heatChosen.every((c) => Math.abs(c.m - x.m) >= minutes / 16)) heatChosen.push(x);
+  }
   const withThermal = async (f, width) => {
     const t = grabThermal ? await grabThermal(f.at, width) : null;
+    if (t && hsizes.length && t.length < hq(0.75)) return {};     // not among the clearest heat frames: colour alone
     return t ? { thermal: toUri(t), tAspect: jpegAspect(t) } : {};
   };
   const covers = (await Promise.all(coverMin.map(async (m) => {
     const f = await sharpest(m, 1100);
-    return f && { m, at: f.at, img: toUri(f.jpg), aspect: jpegAspect(f.jpg), ...(await withThermal(f, 700)) };
+    // Colour alone on the cover when the heat views have a section of their own.
+    return f && { m, at: f.at, img: toUri(f.jpg), aspect: jpegAspect(f.jpg), ...(heatChosen.length ? {} : await withThermal(f, 640)) };
   }))).filter(Boolean);
 
   // Two photo sections, each chosen for what it shows. Colour: one moment of
@@ -352,13 +381,6 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   if (visitRun) pickInto(colourMin, Math.floor((visitRun.start + visitRun.end) / 2), 6);
   for (const m of ranked) pickInto(colourMin, m, 6);
   colourMin.sort((x, y) => x - y);
-  const respMin = new Map(resp.map((r) => [minuteOf(r), r]));
-  const heatMin = [];
-  const thermalBreath = [...respMin.entries()].filter(([, r]) => /thermal/.test(r.meta?.method || "") || r.source === "thermal_video").map(([m]) => m);
-  for (const m of [...thermalBreath, ...respMin.keys()]) pickInto(heatMin, m, 6);
-  for (const m of ranked.filter((m) => stateOf[m] === "resting" || stateOf[m] === "lying")) pickInto(heatMin, m, 6);
-  for (const m of ranked) pickInto(heatMin, m, 24);              // spares: some minutes may have no heat clip
-  heatMin.sort((x, y) => x - y);
   async function shot(g, m, width) {
     if (!g) return null;
     const at0 = eyeTs[m] !== null ? [-1, 0, 1].map((x) => eyeTs[m] + x * 1000) : [15, 30, 45].map((x) => from + m * 60000 + x * 1000);
@@ -376,8 +398,8 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     return out;
   };
   const colourViews = await shots(grab, colourMin, 560);
-  const heatViews = (await shots(grabThermal, heatMin, 640)).filter((v, i, all) => all.filter((x) => respMin.has(x.m)).includes(v) || i < 99)
-    .sort((x, y) => (respMin.has(y.m) ? 1 : 0) - (respMin.has(x.m) ? 1 : 0)).slice(0, 6).sort((x, y) => x.m - y.m);
+  const heatViews = heatChosen.sort((x, y) => x.m - y.m).map((x) => ({ m: x.m, at: x.at, img: toUri(x.jpg), aspect: jpegAspect(x.jpg) }));
+
   const gallery = colourViews;                                     // (photo count, comparison)
   // The stall map's photo: the whole picture (its grid is the whole picture),
   // from a moment in the middle of the session.
@@ -413,7 +435,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     ? (trend !== null && trend >= 0.5 ? `Eye-surface temperature rose by ${f1(trend)} °C during the session (median ${f1(eyeMed)} °C) — worth rechecking.`
       : `Eye-surface temperature was stable at around ${f1(eyeMed)} °C.`)
     : eye.length ? `Only ${plural(eye.length, "eye-temperature reading")} ${eye.length === 1 ? "was" : "were"} taken — the eye was mostly out of view.`
-      : fromRec ? REVIEW + (lastLive ? ` At the last live check (${lastLive.date}), ${lastLive.where} read ${f1(lastLive.median)} °C.` : "")
+      : fromRec ? REVIEW + (lastLive ? ` At the last live check${lastLive.date ? ` (${lastLive.date})` : ""}, ${lastLive.where} read ${f1(lastLive.median)} °C.` : "")
         : "Eye temperature was not captured — the eye was not in view.";
   const tempLead = eye.length && anyRec
     ? `${tempShort} Eye temperature was taken during the live check (${span(checkedLive)}); the ${overnight ? "overnight " : ""}part (${span(reviewed)}) was recorded at the stable and reviewed minute by minute afterwards.`
@@ -491,7 +513,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const floorNote = floorWatched === false ? "The stall floor was not in view." : "Needs the stall floor in view.";
   const points = [
     !eye.length && lastLive
-      ? [1, "Body temperature", S.last, `${f1(lastLive.median)} °C`, `Last live check, ${lastLive.date}: median of ${plural(lastLive.n, "reading")} at ${lastLive.where}. This ${overnight ? "overnight " : ""}session was reviewed from video; temperature is read during live monitoring.`]
+      ? [1, "Body temperature", S.last, `${f1(lastLive.median)} °C`, `Last live check${lastLive.date ? `, ${lastLive.date}` : ""}: median of ${plural(lastLive.n, "reading")} at ${lastLive.where}. This ${overnight ? "overnight " : ""}session was reviewed from video; temperature is read during live monitoring.`]
       : [1, "Body temperature", eye.length ? S.ok : fromRec ? S.live : S.no, eye.length ? `${f1(eyeMed)} °C` : fromRec ? "Live check" : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : "Needs the eye in view."],
     [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : respNote],
     [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
@@ -853,7 +875,7 @@ tr.dim td{color:var(--muted)}
 <div class="meta"><span><b>Date</b> ${day}</span><span><b>Session</b> ${clock(from)}–${clock(rangeEnd)} ${esc(tzName)} (${dur})</span><span><b>Ref.</b> ${ref}</span>${client ? `<span><b>Prepared for</b> ${esc(client)}</span>` : ""}</div>
 </header>
 <div class="kpis">
-<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : lastLive ? `${f1(lastLive.median)} °C` : "—"}</b><span>${eye.length ? "Eye temperature" : lastLive ? "Temperature" : "Eye temperature"}</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : lastLive ? `last live check, ${lastLive.date}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
+<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : lastLive ? `${f1(lastLive.median)} °C` : "—"}</b><span>${eye.length ? "Eye temperature" : lastLive ? "Temperature" : "Eye temperature"}</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : lastLive ? `last live check${lastLive.date ? `, ${lastLive.date}` : ""}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
 <div class="kpi"><b>${f2(med(actV))}</b><span>Activity index</span><small>median · scale 0–1</small></div>
 <div class="kpi"><b>${lyingMeasured ? `${lyingMin} min` : lyingRev.length ? hmText(lyingRevMin * 60) : `${stillMin} min`}</b><span>${lyingMeasured || lyingRev.length ? "Lying down" : "Standing rest"}</span><small>${!lyingMeasured && lyingRev.length ? "seen on the recording" : `of ${dur}`}</small></div>
 <div class="kpi"><b>${Math.round((anyMin.size / liveMin) * 100)}%</b><span>Monitoring coverage</span><small>${anyMin.size} of ${liveMin} minutes</small></div>

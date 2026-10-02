@@ -92,7 +92,7 @@ if (arg("last-live")) {
   const vals = readings.filter((r) => r.horseId === horse.id && r.metric === "body_temp_c" && Date.parse(r.ts) >= a && Date.parse(r.ts) <= b)
     .map((r) => r.value).sort((x, y) => x - y);
   if (vals.length) lastLive = { median: vals[Math.floor(vals.length / 2)], n: vals.length, where: arg("last-live-where", "the warmest point of the head"),
-    date: new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short" }).format(a) };
+    date: flag("last-live-no-date") ? "" : new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short" }).format(a) };
 }
 const crop = arg("colour-crop") ? arg("colour-crop").split(",").map(Number) : null;
 const notes = arg("notes-file") ? readFileSync(arg("notes-file"), "utf8") : arg("notes", "");

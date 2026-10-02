@@ -109,7 +109,8 @@ test("how the time was spent: budget, hour by hour, where he stood; feeding from
       where: [[3 * 12 + 2, 50], [5 * 12 + 8, 10]] }));
   }
   rd.push(R("respiratory_rate_bpm", 9.2, 12, { method: "thermal video, nostril box" }, "thermal_video"));
-  const { html } = await clientReport({ horse, readings: rd, from, to: from + hour, tz: "Asia/Kolkata", grab, grabThermal: grab, grabFull: grab,
+  const sameDetail = async (ms, width) => Buffer.alloc(2000, width);  // equally detailed heat frames: the breathing minute is preferred
+  const { html } = await clientReport({ horse, readings: rd, from, to: from + hour, tz: "Asia/Kolkata", grab, grabThermal: sameDetail, grabFull: grab,
     client: "Remount Veterinary Corps" });
   assert.match(html, /<b>Prepared for<\/b> Remount Veterinary Corps/);
   assert.match(html, /<h2>How the time was spent<\/h2>/);
@@ -152,6 +153,15 @@ test("patterns through the night: phases in words, rest and eating bouts, breath
   assert.match(html, /1 reading, 7\.4–7\.4 breaths per minute \(00:20 standing at rest\)/);
   assert.match(html, /<h2>Hour by hour<\/h2>/);
   assert.ok(clean(html));
+});
+
+test("heat views: the frames showing the horse, not the empty floor", async () => {
+  // Minutes 0-29: an empty view (small, plain frames); 30-59: the horse (detailed).
+  const g = async (ms, width) => Buffer.alloc(((ms - from) / 60000 < 30 ? 600 : 3000), width);
+  const { html } = await clientReport({ horse, readings: hourOf(), from, to: from + hour, tz: "Asia/Kolkata", grab, grabThermal: g });
+  const heat = html.slice(html.indexOf("<h2>Heat views</h2>"), html.indexOf("<h2>Heat views</h2>") + 200000);
+  const times = [...heat.matchAll(/<figcaption><b>(\d\d:\d\d)<\/b>/g)].map((m) => m[1]).slice(0, 6);
+  assert.ok(times.length >= 3 && times.every((t) => t >= "15:00"), times);
 });
 
 test("a rising temperature is said, with the size of the rise", async () => {
@@ -217,7 +227,7 @@ test("photos pair colour with thermal; the comparison page is about the horse, n
     grabThermal: grab, previous: { summary: before.summary } });
   assert.equal(summary.eye.n, 0);
   assert.equal((html.match(/Page \d of 7/g) || []).length, 7, "seven pages: the heat views and the comparison added");
-  assert.match(html, /class="pair"/, "cover photos: colour and thermal side by side");
+  assert.doesNotMatch(html, /class="pair"/, "cover photos in colour: the heat images have their own section");
   assert.match(html, /<h2>Colour views<\/h2>/);
   assert.match(html, /<h2>Heat views<\/h2>/, "the heat images in a section of their own");
   assert.match(html, /Tara across sessions/);
