@@ -10,6 +10,7 @@
 //        [--client "Remount Veterinary Corps"]  (on the cover: who the report is prepared for)
 //        [--review "03:00-04:20|lying|with short spells flat on the side"]   (seen on the recording by a person:
 //                                               lying down where the view cannot tell it; said as reviewed)
+//        [--no-auto-visits]                     (people seen by the detector are not used; --review "23:24-23:29|visit" instead)
 //        [--mark "03:30|Lying down" --mark …]   (a photo of that moment among the colour views, said as seen on the recording)
 //        [--compare-from <ISO> --compare-minutes 60 | --compare-to <ISO>] [--compare-away …] [--compare-paused …]
 //                                               (a page comparing the horse with an earlier session)
@@ -106,7 +107,7 @@ const { html, ref, photos } = await clientReport({
   grabFull: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
   mapCrop: crop || [0, 0.09, 1, 0.91],
   client: arg("client", ""),
-  review, marks, lastLive,
+  review, marks, lastLive, autoVisits: !flag("no-auto-visits"),
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
 });
 const outDir = arg("out", join(HOME, "research", "reports"));

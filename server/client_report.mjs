@@ -58,7 +58,7 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // an earlier session (its report's `summary`), for a page comparing the horse
 // across the two sessions.
 export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
-  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", review = [], marks = [], lastLive = null, now = Date.now() }) {
+  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", review = [], marks = [], lastLive = null, autoVisits = true, now = Date.now() }) {
   tz = safeTimeZone(tz);
   const minutes = Math.max(1, Math.round((to - from) / 60000));
   const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
@@ -115,9 +115,18 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   // and checks — context, and left out of the horse's own activity.
   const peopleSec = new Array(minutes).fill(0);
   for (const r of of("people_in_view_s")) peopleSec[minuteOf(r)] = Math.max(peopleSec[minuteOf(r)], r.value);
-  const peopleSeen = of("people_in_view_s").length > 0;
-  const visits = [];
-  for (let m = 0; m < minutes; m++) {
+  // autoVisits false: the detector's people are not trusted for this view
+  // (2 Oct's night: the horse's dark hindquarters taken for a person) — only
+  // visits seen on the recording are given, as such.
+  const revVisits = review.filter((x) => x.kind === "visit" && x.to > x.from)
+    .map((x) => ({ start: Math.max(0, Math.floor((x.from - from) / 60000)), end: Math.min(minutes - 1, Math.floor((x.to - from) / 60000)), reviewed: true }));
+  const peopleSeen = autoVisits ? of("people_in_view_s").length > 0 : revVisits.length > 0;
+  if (!autoVisits) {
+    peopleSec.fill(0);
+    for (const v of revVisits) for (let m = v.start; m <= v.end; m++) peopleSec[m] = 60;
+  }
+  const visits = autoVisits ? [] : revVisits;
+  if (autoVisits) for (let m = 0; m < minutes; m++) {
     if (peopleSec[m] < 5) continue;
     const last = visits.at(-1);
     if (last && m - last.end <= 2) last.end = m; else visits.push({ start: m, end: m });
@@ -238,6 +247,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const lyingRevMin = Math.round(lyingRev.reduce((x, r) => x + (r.to - r.from), 0) / 60000);
   const lyingRevText = lyingRev.map((r) => `${clock(r.from)}–${clock(r.to)}`).join(" and ");
   const lyingRevNote = lyingRev.map((r) => r.text).filter(Boolean).join("; ");
+  const inLyingRev = (ms) => lyingRev.some((x) => ms >= x.from && ms <= x.to);
 
   // ---- patterns through the session: bouts, phases, hour by hour ---------------- //
   const perMin = Object.fromEntries(TB.map(([k]) => [k, new Array(minutes).fill(0)]));
@@ -265,6 +275,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     for (const [k] of TB) h.s[k] += perMin[k][m];
     if (act[m] !== null) h.act.push(act[m]);
     if (peopleSec[m] >= 10) h.people += 1;
+    if (inLyingRev(from + m * 60000 + 30000)) h.lyingRev = (h.lyingRev || 0) + 1;
   }
   for (const h of hours) {
     h.seen = TB.reduce((x, [k]) => x + (k === "unseen" ? 0 : h.s[k]), 0);
@@ -289,7 +300,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   });
   const byAct = fullHours.filter((h) => h.avg !== null).slice().sort((x, y) => x.avg - y.avg);
   const quietest = byAct[0], busiestHour = byAct.at(-1);
-  const respTimes = resp.map((r) => ({ at: clock(Date.parse(r.ts)), v: r.value, what: stateOf[minuteOf(r)] }));
+  const respTimes = resp.map((r) => ({ at: clock(Date.parse(r.ts)), v: r.value, what: inLyingRev(Date.parse(r.ts)) ? "lying" : stateOf[minuteOf(r)] }));
   const patternsOk = budgetOk && minutes >= 120 && fullHours.length >= 2;
 
   // ---- photos: eye in view and calm, spread through the session -------------- //
@@ -303,6 +314,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     return ok.length ? ok.sort((a, b) => b.jpg.length - a.jpg.length)[0] : null;   // more detail compresses larger
   }
   const caption = (m) => {
+    if (inLyingRev(from + m * 60000 + 30000)) return "Lying down · seen on the recording";
     const a = act[m] === null ? "no reading" : LEVEL_WORD[levelOf(act[m])];
     if (recMin[m] && eyeMin[m] === null) return a[0].toUpperCase() + a.slice(1);   // reviewed: no eye to speak of
     return `${eyeMin[m] === null ? "eye not in view" : eyeSure[m] ? `eye in view, ${f1(eyeMin[m])} °C` : `temperature ${f1(eyeMin[m])} °C`} · ${a}`;
@@ -345,7 +357,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const thermalBreath = [...respMin.entries()].filter(([, r]) => /thermal/.test(r.meta?.method || "") || r.source === "thermal_video").map(([m]) => m);
   for (const m of [...thermalBreath, ...respMin.keys()]) pickInto(heatMin, m, 6);
   for (const m of ranked.filter((m) => stateOf[m] === "resting" || stateOf[m] === "lying")) pickInto(heatMin, m, 6);
-  for (const m of ranked) pickInto(heatMin, m, 6);
+  for (const m of ranked) pickInto(heatMin, m, 24);              // spares: some minutes may have no heat clip
   heatMin.sort((x, y) => x - y);
   async function shot(g, m, width) {
     if (!g) return null;
@@ -364,7 +376,8 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     return out;
   };
   const colourViews = await shots(grab, colourMin, 560);
-  const heatViews = await shots(grabThermal, heatMin, 640);
+  const heatViews = (await shots(grabThermal, heatMin, 640)).filter((v, i, all) => all.filter((x) => respMin.has(x.m)).includes(v) || i < 99)
+    .sort((x, y) => (respMin.has(y.m) ? 1 : 0) - (respMin.has(x.m) ? 1 : 0)).slice(0, 6).sort((x, y) => x.m - y.m);
   const gallery = colourViews;                                     // (photo count, comparison)
   // The stall map's photo: the whole picture (its grid is the whole picture),
   // from a moment in the middle of the session.
@@ -384,6 +397,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     : "";
   const colourCaption = (m) => {
     if (markOf.has(m)) return `${markOf.get(m)} · seen on the recording`;
+    if (inLyingRev(from + m * 60000 + 30000)) return "Lying down · seen on the recording";
     const what = stateOf[m] ? STATE_WORD[stateOf[m]] : caption(m).replace(/^./, (c) => c.toUpperCase());
     return `${what}${peopleSec[m] >= 10 ? " · people at the stall" : ""}${stateOf[m] && act[m] !== null ? ` · ${LEVEL_WORD[levelOf(act[m])]}` : ""}`;
   };
@@ -399,7 +413,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     ? (trend !== null && trend >= 0.5 ? `Eye-surface temperature rose by ${f1(trend)} °C during the session (median ${f1(eyeMed)} °C) — worth rechecking.`
       : `Eye-surface temperature was stable at around ${f1(eyeMed)} °C.`)
     : eye.length ? `Only ${plural(eye.length, "eye-temperature reading")} ${eye.length === 1 ? "was" : "were"} taken — the eye was mostly out of view.`
-      : fromRec ? REVIEW + (lastLive ? ` At the last live check (${lastLive.date}) the ${lastLive.where} read ${f1(lastLive.median)} °C.` : "")
+      : fromRec ? REVIEW + (lastLive ? ` At the last live check (${lastLive.date}), ${lastLive.where} read ${f1(lastLive.median)} °C.` : "")
         : "Eye temperature was not captured — the eye was not in view.";
   const tempLead = eye.length && anyRec
     ? `${tempShort} Eye temperature was taken during the live check (${span(checkedLive)}); the ${overnight ? "overnight " : ""}part (${span(reviewed)}) was recorded at the stable and reviewed minute by minute afterwards.`
@@ -436,21 +450,21 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     (floorEv.urination.length || floorEv.excretion.length) && ["Urination and manure", [floorEv.urination.length && `urination at ${floorEv.urination.map((r) => clock(Date.parse(r.ts))).join(", ")}`, floorEv.excretion.length && `manure at ${floorEv.excretion.map((r) => clock(Date.parse(r.ts))).join(", ")}`].filter(Boolean).join("; ").replace(/^./, (c) => c.toUpperCase()) + "."],
   ].filter(Boolean).slice(0, 5);
   const h0 = hourOf(from), h1 = hourOf(to);
-  const night = (h) => h >= 20 || h < 6;
+  const night = (h) => h >= 20 || h < 7;
   const context = [
     ["Time of day", night(h0) && night(h1) ? "A night session: horses do most of their lying down and deep rest at night."
       : !night(h0) && !night(h1) ? "A daytime session: horses are usually more active by day and do most of their lying down at night."
         : "The session spans day and night; horses rest more after dark."],
     peopleSeen && ["Visits", visits.length
-      ? `People came to the stall ${visits.length === 1 ? "once" : `${visits.length} times`} (${visits.slice(0, 5).map((v) => `${clock(from + v.start * 60000)}–${clock(from + (v.end + 1) * 60000)}`).join(", ")}${visits.length > 5 ? ", …" : ""}). Their movement is left out of ${name}'s activity.`
+      ? `${autoVisits ? "People came to the stall" : "Seen on the recording: someone in the stall"} ${visits.length === 1 ? "once" : `${visits.length} times`} (${visits.slice(0, 5).map((v) => `${clock(from + v.start * 60000)}–${clock(from + (v.end + 1) * 60000)}`).join(", ")}${visits.length > 5 ? ", …" : ""}).${autoVisits ? ` Their movement is left out of ${name}'s activity.` : ""}`
       : "No one came to the stall during the session."],
     ["Individual baseline", `Horses vary; after about three days of monitoring, ${name}'s readings are compared with ${name}'s own normal rather than a general range.`],
   ].filter(Boolean);
   const notesText = String(notes || "").trim().slice(0, MAX_NOTES);
   const notSeen = [
-    !eye.length && "temperature",
+    !eye.length && !lastLive && "temperature",
     !resp.length && "respiration",
-    !lyingMeasured && "lying pattern",
+    !lyingMeasured && !lyingRev.length && "lying pattern",
     !(floorOk && floorWatched === true) && "urination and excretion",
   ].filter(Boolean);
 
@@ -509,7 +523,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
       ? `<b>Continue monitoring over several nights</b> to establish ${esc(name)}'s personal baseline; changes in temperature, breathing and activity are then flagged automatically.`
       : `<b>Run longer sessions, such as overnight,</b> to establish ${esc(name)}'s personal baseline; changes in temperature and activity are then flagged automatically.`,
     !eye.length && `<b>Include a live monitoring period</b> to add eye temperature to ${esc(name)}'s record.`,
-    !lyingMeasured && actV.length && `<b>Continue overnight monitoring</b> so lying down can be reported: it is shown once ${esc(name)} has been seen both lying and standing in this stall.`,
+    !lyingMeasured && !lyingRev.length && actV.length && `<b>Continue overnight monitoring</b> so lying down can be reported: it is shown once ${esc(name)} has been seen both lying and standing in this stall.`,
   ].filter(Boolean).slice(0, 4);
 
   // ---- charts ------------------------------------------------------------------ //
@@ -922,8 +936,8 @@ ${hayKnown ? `<div class="find">${svgIcon("check")}<div><b>Eating</b><span>${eat
 <div class="find">${svgIcon("check")}<div><b>Breathing</b><span>${respTimes.length ? `${plural(respTimes.length, "reading")}, ${f1(Math.min(...respTimes.map((x) => x.v)))}–${f1(Math.max(...respTimes.map((x) => x.v)))} breaths per minute (${esc(respTimes.slice(0, 6).map((x) => `${x.at}${x.what ? ` ${STATE_WORD[x.what].toLowerCase()}` : ""}`).join(", "))}${respTimes.length > 6 ? ", …" : ""}).` : "Not read in this session: it needs the flank or the nostril still in view for 30 seconds."}</span></div></div>
 </div></div></section>
 <section class="card"><div class="sh">${sn()}<h2>Hour by hour</h2></div><p class="sub">Shares of the time ${esc(name)} was seen in each hour.</p>
-<table style="margin-top:10px"><thead><tr><th>Hour</th>${hayKnown ? "<th>Eating</th>" : ""}<th>At rest</th>${lyingMeasured ? "<th>Lying</th>" : ""}<th>Moving</th><th>Avg activity</th>${peopleSeen ? "<th>Visits</th>" : ""}</tr></thead><tbody>
-${hours.filter((h) => h.seen > 0).map((h) => `<tr><td class="num">${esc(h.from)}</td>${hayKnown ? `<td class="num">${Math.round(h.share("eating") * 100)}%</td>` : ""}<td class="num">${Math.round(h.share("resting") * 100)}%</td>${lyingMeasured ? `<td class="num">${Math.round(h.share("lying") * 100)}%</td>` : ""}<td class="num">${Math.round(h.share("moving") * 100)}%</td><td class="num">${f2(h.avg)}</td>${peopleSeen ? `<td class="num">${h.people ? `${h.people} min` : "—"}</td>` : ""}</tr>`).join("")}
+<table style="margin-top:10px"><thead><tr><th>Hour</th>${hayKnown ? "<th>Eating</th>" : ""}<th>At rest</th>${lyingMeasured ? "<th>Lying</th>" : lyingRev.length ? "<th>Lying (seen)</th>" : ""}<th>Moving</th><th>Avg activity</th>${peopleSeen ? "<th>Visits</th>" : ""}</tr></thead><tbody>
+${hours.filter((h) => h.seen > 0).map((h) => `<tr><td class="num">${esc(h.from)}</td>${hayKnown ? `<td class="num">${Math.round(h.share("eating") * 100)}%</td>` : ""}<td class="num">${Math.round(Math.max(0, h.share("resting") - (lyingRev.length && !lyingMeasured ? (h.lyingRev || 0) / (h.end - h.start + 1) : 0)) * 100)}%</td>${lyingMeasured ? `<td class="num">${Math.round(h.share("lying") * 100)}%</td>` : lyingRev.length ? `<td class="num">${h.lyingRev ? `${Math.round((h.lyingRev / (h.end - h.start + 1)) * 100)}%` : "—"}</td>` : ""}<td class="num">${Math.round(h.share("moving") * 100)}%</td><td class="num">${f2(h.avg)}</td>${peopleSeen ? `<td class="num">${h.people ? `${h.people} min` : "—"}</td>` : ""}</tr>`).join("")}
 </tbody></table></section>
 ${pg()}</div>` : ""}
 <div class="page">
