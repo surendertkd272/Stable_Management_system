@@ -8,6 +8,9 @@
 //        [--colour-crop "0.46,0.09,0.87,0.91"]   (colour photos zoomed on the horse's stall, 0..1 of the picture)
 //        [--no-thermal]                         (colour photos only; by default each photo pairs colour and thermal)
 //        [--client "Remount Veterinary Corps"]  (on the cover: who the report is prepared for)
+//        [--review "03:00-04:20|lying|with short spells flat on the side"]   (seen on the recording by a person:
+//                                               lying down where the view cannot tell it; said as reviewed)
+//        [--mark "03:30|Lying down" --mark …]   (a photo of that moment among the colour views, said as seen on the recording)
 //        [--compare-from <ISO> --compare-minutes 60 | --compare-to <ISO>] [--compare-away …] [--compare-paused …]
 //                                               (a page comparing the horse with an earlier session)
 //        [--away "16:40-16:59,…"]   (sessions recorded before the eye-shape check,
@@ -74,6 +77,22 @@ if (arg("compare-from")) {
     paused: windows(arg("compare-paused"), pFrom), floorWatched: floorOf(pCams, pCam) });
   previous = { summary: prev.summary };
 }
+// Local clock times inside the session, which may run past midnight.
+const inSession = (hm) => { let t = localMs(hm, from); while (t < from - 60000) t += 86400000; return t; };
+const all = (k) => process.argv.flatMap((v, i) => (v === `--${k}` && process.argv[i + 1] ? [process.argv[i + 1]] : []));
+const review = all("review").map((v) => { const [span, kind, text = ""] = v.split("|"); const [a, b] = span.split("-");
+  return { from: inSession(a), to: inSession(b) < inSession(a) ? inSession(b) + 86400000 : inSession(b), kind, text }; });
+const marks = all("mark").map((v) => { const [hm, ...text] = v.split("|"); return { at: inSession(hm), text: text.join("|") }; });
+// --last-live <ISO from>,<ISO to>: the horse's last live check, for the
+// temperature when this session had none (said as such, with its date).
+let lastLive = null;
+if (arg("last-live")) {
+  const [a, b] = arg("last-live").split(",").map((x) => Date.parse(x));
+  const vals = readings.filter((r) => r.horseId === horse.id && r.metric === "body_temp_c" && Date.parse(r.ts) >= a && Date.parse(r.ts) <= b)
+    .map((r) => r.value).sort((x, y) => x - y);
+  if (vals.length) lastLive = { median: vals[Math.floor(vals.length / 2)], n: vals.length, where: arg("last-live-where", "the warmest point of the head"),
+    date: new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short" }).format(a) };
+}
 const crop = arg("colour-crop") ? arg("colour-crop").split(",").map(Number) : null;
 const notes = arg("notes-file") ? readFileSync(arg("notes-file"), "utf8") : arg("notes", "");
 
@@ -87,6 +106,7 @@ const { html, ref, photos } = await clientReport({
   grabFull: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
   mapCrop: crop || [0, 0.09, 1, 0.91],
   client: arg("client", ""),
+  review, marks, lastLive,
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
 });
 const outDir = arg("out", join(HOME, "research", "reports"));

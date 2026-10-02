@@ -58,7 +58,7 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // an earlier session (its report's `summary`), for a page comparing the horse
 // across the two sessions.
 export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
-  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", now = Date.now() }) {
+  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", review = [], marks = [], lastLive = null, now = Date.now() }) {
   tz = safeTimeZone(tz);
   const minutes = Math.max(1, Math.round((to - from) / 60000));
   const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
@@ -232,6 +232,13 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const hmText = (sec) => (sec >= 3600 ? `${Math.floor(sec / 3600)} h ${Math.round((sec % 3600) / 60)} min` : `${Math.round(sec / 60)} min`);
   const STATE_WORD = { lying: "Lying down", eating: "Eating at the hay", resting: "Standing at rest", moving: "Moving about" };
 
+  // Seen on the recording by a person (lying down where the stall's view
+  // does not let the system tell lying from standing): said as reviewed.
+  const lyingRev = review.filter((x) => x.kind === "lying" && x.to > x.from);
+  const lyingRevMin = Math.round(lyingRev.reduce((x, r) => x + (r.to - r.from), 0) / 60000);
+  const lyingRevText = lyingRev.map((r) => `${clock(r.from)}–${clock(r.to)}`).join(" and ");
+  const lyingRevNote = lyingRev.map((r) => r.text).filter(Boolean).join("; ");
+
   // ---- patterns through the session: bouts, phases, hour by hour ---------------- //
   const perMin = Object.fromEntries(TB.map(([k]) => [k, new Array(minutes).fill(0)]));
   for (const r of tbR) for (const [k] of TB) perMin[k][minuteOf(r)] += r.meta?.[`${k}S`] || 0;
@@ -326,6 +333,8 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const spread = minutes / 12;
   const pickInto = (list, m, n) => { if (m !== undefined && list.length < n && act[m] !== null && list.every((x) => Math.abs(x - m) >= spread)) list.push(m); };
   const colourMin = [];
+  const markOf = new Map(marks.map((mk) => [Math.max(0, Math.min(minutes - 1, Math.floor((mk.at - from) / 60000))), mk.text]));
+  for (const m of markOf.keys()) if (colourMin.length < 6) colourMin.push(m);
   for (const k of ["lying", "eating", "resting", "moving"]) { const r = runsOf((m) => stateOf[m] === k)[0]; if (r) pickInto(colourMin, Math.floor((r.start + r.end) / 2), 6); }
   const visitRun = runsOf((m) => peopleSec[m] >= 10)[0];
   if (visitRun) pickInto(colourMin, Math.floor((visitRun.start + visitRun.end) / 2), 6);
@@ -374,6 +383,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     ? `${name} spent most of the time at the ${topThird[0].replace("middle centre", "centre")} of the stall (${Math.round((topThird[1] / cellsTot) * 100)}% of the time seen).`
     : "";
   const colourCaption = (m) => {
+    if (markOf.has(m)) return `${markOf.get(m)} · seen on the recording`;
     const what = stateOf[m] ? STATE_WORD[stateOf[m]] : caption(m).replace(/^./, (c) => c.toUpperCase());
     return `${what}${peopleSec[m] >= 10 ? " · people at the stall" : ""}${stateOf[m] && act[m] !== null ? ` · ${LEVEL_WORD[levelOf(act[m])]}` : ""}`;
   };
@@ -389,7 +399,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     ? (trend !== null && trend >= 0.5 ? `Eye-surface temperature rose by ${f1(trend)} °C during the session (median ${f1(eyeMed)} °C) — worth rechecking.`
       : `Eye-surface temperature was stable at around ${f1(eyeMed)} °C.`)
     : eye.length ? `Only ${plural(eye.length, "eye-temperature reading")} ${eye.length === 1 ? "was" : "were"} taken — the eye was mostly out of view.`
-      : fromRec ? REVIEW
+      : fromRec ? REVIEW + (lastLive ? ` At the last live check (${lastLive.date}) the ${lastLive.where} read ${f1(lastLive.median)} °C.` : "")
         : "Eye temperature was not captured — the eye was not in view.";
   const tempLead = eye.length && anyRec
     ? `${tempShort} Eye temperature was taken during the live check (${span(checkedLive)}); the ${overnight ? "overnight " : ""}part (${span(reviewed)}) was recorded at the stable and reviewed minute by minute afterwards.`
@@ -417,7 +427,8 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
       ? `Eye-surface temperature stayed within ${f1(eyeLo)}–${f1(eyeHi)} °C (median ${f1(eyeMed)} °C)${trend === null ? "" : trend >= 0.5 ? `, rising by ${f1(trend)} °C from the first half of the session to the second` : trend <= -0.5 ? `, easing by ${f1(-trend)} °C through the session` : " with no upward trend"}.`
       : `${plural(eye.length, "reading")} (${eyeV.map(f1).join(", ")} °C) — too few to judge a trend.`],
     actV.length && ["Activity", `${bands.high} minutes of high and ${bands.moderate} of moderate activity${busiest ? `; the most active period was ${busiest.label} (average ${f2(busiest.act)})` : ""}.`],
-    actV.length && ["Rest", lyingMeasured ? `Lay down for ${lyingMin} min${posture.filter((r) => r.meta?.kind === "lie_down").length ? ` (${plural(posture.filter((r) => r.meta?.kind === "lie_down").length, "lie-down")})` : ""}; stood still for ${stillMin} min.`
+    actV.length && lyingRev.length && !lyingMeasured && ["Rest", `Lay down ${lyingRevText} (${hmText(lyingRevMin * 60)}, seen on the recording${lyingRevNote ? `; ${lyingRevNote}` : ""}); stood at rest for ${hmText(stillMin * 60)}.`],
+    actV.length && !(lyingRev.length && !lyingMeasured) && ["Rest", lyingMeasured ? `Lay down for ${lyingMin} min${posture.filter((r) => r.meta?.kind === "lie_down").length ? ` (${plural(posture.filter((r) => r.meta?.kind === "lie_down").length, "lie-down")})` : ""}; stood still for ${stillMin} min.`
       : spells.length ? `Standing rest in ${plural(spells.length, "spell")} (${spellText(spells.slice(0, 6))}${spells.length > 6 ? ", …" : ""}), ${stillMin} minutes in total.` : `${stillMin} minutes standing still, in short moments.`],
     resp.length && ["Breathing", `${f1(med(respV))} breaths per minute (median of ${plural(resp.length, "reading")})${regs.length ? `, ${med(regs) >= 0.75 ? "regular" : med(regs) >= 0.5 ? "slightly irregular" : "irregular"} rhythm` : ""}.`],
     actV.length && ["Stall behaviour", viceNames.length ? `${viceNames.join(" and ")} flagged (${vices.map((r) => clock(Date.parse(r.ts))).join(", ")}). A flag is a movement pattern, not a diagnosis — confirm it on the recording.`
@@ -461,14 +472,19 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const feederSeen = seenNear(["feed_offered_g", "feed_intake_g", "feed_refusal_g", "hay_intake_g", "feeder_fault"]);
 
   // ---- the 12 points ----------------------------------------------------------- //
-  const S = { ok: ["ok", "✓", "Measured"], part: ["part", "◐", "Partly captured"], no: ["cam", "◌", "Not captured"] };
+  const S = { ok: ["ok", "✓", "Measured"], part: ["part", "◐", "Partly captured"], no: ["cam", "◌", "Not captured"],
+    rev: ["ok", "✓", "Reviewed"], live: ["part", "◐", "Live only"], last: ["part", "◐", "Last live check"] };
   const floorNote = floorWatched === false ? "The stall floor was not in view." : "Needs the stall floor in view.";
   const points = [
-    [1, "Body temperature", eye.length ? S.ok : S.no, eye.length ? `${f1(eyeMed)} °C` : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : "Needs the eye in view."],
+    !eye.length && lastLive
+      ? [1, "Body temperature", S.last, `${f1(lastLive.median)} °C`, `Last live check, ${lastLive.date}: median of ${plural(lastLive.n, "reading")} at ${lastLive.where}. This ${overnight ? "overnight " : ""}session was reviewed from video; temperature is read during live monitoring.`]
+      : [1, "Body temperature", eye.length ? S.ok : fromRec ? S.live : S.no, eye.length ? `${f1(eyeMed)} °C` : fromRec ? "Live check" : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature reads about 2 °C below rectal temperature.${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : "Needs the eye in view."],
     [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : respNote],
     [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
     [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${liveMin} minutes; ${bands.high} minutes of high activity.` : "No movement data in this session."],
-    [5, "Resting pattern", lyingMeasured ? S.ok : actV.length ? S.part : S.no, lyingMeasured ? `${lyingMin} min lying` : actV.length ? `${stillMin} min` : "—", lyingMeasured ? `Lying down ${lyingMin} min; standing still ${stillMin} min.` : actV.length ? "Standing rest. Lying down is measured when the horse's whole body is in view." : "No movement data in this session."],
+    !lyingMeasured && lyingRev.length
+      ? [5, "Resting pattern", S.rev, `${hmText(lyingRevMin * 60)} lying`, `Seen lying down on the recording ${lyingRevText}${lyingRevNote ? ` (${lyingRevNote})` : ""}; standing rest ${hmText(stillMin * 60)}.`]
+      : [5, "Resting pattern", lyingMeasured ? S.ok : actV.length ? S.part : S.no, lyingMeasured ? `${lyingMin} min lying` : actV.length ? `${stillMin} min` : "—", lyingMeasured ? `Lying down ${lyingMin} min; standing still ${stillMin} min.` : actV.length ? "Standing rest. Lying down is measured when the horse's whole body is in view." : "No movement data in this session."],
     [6, "Stable vices", actV.length ? S.ok : S.no, actV.length ? (viceNames.length ? "Flagged" : "None") : "—", actV.length ? (viceNames.length ? `${viceNames.join(", ")} flagged for review on the recording.` : "No weaving, box walking or head tossing identified.") + " Crib-biting is not assessed." : "No movement data in this session."],
     [7, "Urination", floorOk && floorWatched === true ? S.ok : S.no, floorOk && floorWatched === true ? (floorEv.urination.length ? `${floorEv.urination.length} seen` : "None seen") : "—", floorOk && floorWatched === true ? "Wet patches on the bedding after the horse moved away." : floorNote],
     [8, "Excretion", floorOk && floorWatched === true ? S.ok : S.no, floorOk && floorWatched === true ? (floorEv.excretion.length ? `${floorEv.excretion.length} seen` : "None seen") : "—", floorOk && floorWatched === true ? "New manure on the bedding after the horse moved away." : floorNote],
@@ -823,9 +839,9 @@ tr.dim td{color:var(--muted)}
 <div class="meta"><span><b>Date</b> ${day}</span><span><b>Session</b> ${clock(from)}–${clock(rangeEnd)} ${esc(tzName)} (${dur})</span><span><b>Ref.</b> ${ref}</span>${client ? `<span><b>Prepared for</b> ${esc(client)}</span>` : ""}</div>
 </header>
 <div class="kpis">
-<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>Eye temperature</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
+<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : lastLive ? `${f1(lastLive.median)} °C` : "—"}</b><span>${eye.length ? "Eye temperature" : lastLive ? "Temperature" : "Eye temperature"}</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : lastLive ? `last live check, ${lastLive.date}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
 <div class="kpi"><b>${f2(med(actV))}</b><span>Activity index</span><small>median · scale 0–1</small></div>
-<div class="kpi"><b>${lyingMeasured ? `${lyingMin} min` : `${stillMin} min`}</b><span>${lyingMeasured ? "Lying down" : "Standing rest"}</span><small>of ${dur}</small></div>
+<div class="kpi"><b>${lyingMeasured ? `${lyingMin} min` : lyingRev.length ? hmText(lyingRevMin * 60) : `${stillMin} min`}</b><span>${lyingMeasured || lyingRev.length ? "Lying down" : "Standing rest"}</span><small>${!lyingMeasured && lyingRev.length ? "seen on the recording" : `of ${dur}`}</small></div>
 <div class="kpi"><b>${Math.round((anyMin.size / liveMin) * 100)}%</b><span>Monitoring coverage</span><small>${anyMin.size} of ${liveMin} minutes</small></div>
 </div>
 
@@ -887,7 +903,7 @@ ${fromRec ? "" : `<section class="card"><div class="sh">${sn()}<h2>Eye temperatu
 <div class="stats"><div class="stat"><b>${eye.length ? `${f1(eyeMed)} °C` : "—"}</b><span>median</span></div><div class="stat"><b>${eye.length ? `${f1(eyeLo)}–${f1(eyeHi)} °C` : "—"}</b><span>range</span></div><div class="stat"><b>${eye.length}</b><span>readings</span></div><div class="stat"><b>${eyeMinutes} min</b><span>eye in view</span></div></div></section>`}
 ${pg()}</div>
 ${budgetOk ? `<div class="page">
-<section class="card"><div class="sh">${sn()}<h2>How the time was spent</h2></div><p class="sub">Each second of the session, from the video: ${tbShown.filter(([kk]) => kk !== "unseen").map(([, l]) => l.toLowerCase()).join(", ")}.${lyingMeasured ? "" : ` Lying down is shown once ${esc(name)} has been seen both lying and standing in this stall; until then, time lying counts as rest.`}</p>
+<section class="card"><div class="sh">${sn()}<h2>How the time was spent</h2></div><p class="sub">Each second of the session, from the video: ${tbShown.filter(([kk]) => kk !== "unseen").map(([, l]) => l.toLowerCase()).join(", ")}.${lyingMeasured ? "" : lyingRev.length ? ` Lying down was seen on the recording (${esc(lyingRevText)}); in this bar that time counts as rest.` : ` Lying down is shown once ${esc(name)} has been seen both lying and standing in this stall; until then, time lying counts as rest.`}</p>
 ${budgetBar()}
 <div class="stats">${tbShown.filter(([kk]) => kk !== "unseen").slice(0, 4).map(([kk, l]) => `<div class="stat"><b>${hmText(tbTot[kk])}</b><span>${esc(l.toLowerCase())}</span></div>`).join("")}</div>
 <h3 style="margin:18px 0 0;font-size:14px">${minutes >= 180 ? "Hour by hour" : "Every 10 minutes"}</h3>${budgetHours()}
@@ -901,7 +917,7 @@ ${patternsOk ? `<div class="page">
 ${phaseText.map((x) => `<div class="find">${svgIcon("info")}<div><b>${esc(x.when)}</b><span>${esc(x.text.replace(/^./, (c) => c.toUpperCase()))}.</span></div></div>`).join("")}
 ${quietest && busiestHour && quietest !== busiestHour ? `<div class="find">${svgIcon("check")}<div><b>Quietest and busiest hours</b><span>Quietest from ${esc(quietest.from)} (average activity ${f2(quietest.avg)}); most active from ${esc(busiestHour.from)} (${f2(busiestHour.avg)}).</span></div></div>` : ""}
 </div><div><h3>Rest, eating and breathing</h3>
-<div class="find">${svgIcon("check")}<div><b>Rest</b><span>${restBouts.filter((x) => x.min >= 10).length ? `${plural(restBouts.filter((x) => x.min >= 10).length, "spell")} of 10 minutes or more standing at rest; the longest ${esc(span2(longest(restBouts)))} (${hmText(longest(restBouts).min * 60)}).` : `Rest came in short spells${longest(restBouts) ? `, the longest ${hmText(longest(restBouts).min * 60)} (${esc(span2(longest(restBouts)))})` : ""}.`}</span></div></div>
+<div class="find">${svgIcon("check")}<div><b>Rest</b><span>${lyingRev.length && !lyingMeasured ? `Lay down ${esc(lyingRevText)} (${hmText(lyingRevMin * 60)}, seen on the recording). ` : ""}${restBouts.filter((x) => x.min >= 10).length ? `${plural(restBouts.filter((x) => x.min >= 10).length, "spell")} of 10 minutes or more standing at rest; the longest ${esc(span2(longest(restBouts)))} (${hmText(longest(restBouts).min * 60)}).` : `Rest came in short spells${longest(restBouts) ? `, the longest ${hmText(longest(restBouts).min * 60)} (${esc(span2(longest(restBouts)))})` : ""}.`}</span></div></div>
 ${hayKnown ? `<div class="find">${svgIcon("check")}<div><b>Eating</b><span>${eatBouts.filter((x) => x.min >= 5).length ? `${plural(eatBouts.filter((x) => x.min >= 5).length, "bout")} of 5 minutes or more at the hay, ${hmText(tbTot.eating)} in all; the longest ${esc(span2(longest(eatBouts)))} (${hmText(longest(eatBouts).min * 60)}).` : `${hmText(tbTot.eating)} at the hay, in short visits.`}</span></div></div>` : ""}
 <div class="find">${svgIcon("check")}<div><b>Breathing</b><span>${respTimes.length ? `${plural(respTimes.length, "reading")}, ${f1(Math.min(...respTimes.map((x) => x.v)))}–${f1(Math.max(...respTimes.map((x) => x.v)))} breaths per minute (${esc(respTimes.slice(0, 6).map((x) => `${x.at}${x.what ? ` ${STATE_WORD[x.what].toLowerCase()}` : ""}`).join(", "))}${respTimes.length > 6 ? ", …" : ""}).` : "Not read in this session: it needs the flank or the nostril still in view for 30 seconds."}</span></div></div>
 </div></div></section>

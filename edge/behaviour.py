@@ -411,7 +411,38 @@ class PostureTracker:
         r = ref[0] + ref[1] * y
         return h / r if r > 0.05 else h
 
+    def learn_labelled(self, lying, standing):
+        """This stall's model from boxes a person has labelled — lying ones
+        (a stretch seen lying on the recording) and standing ones — where the
+        view does not separate them by itself (2 Oct: lying at the front of
+        the stall facing the camera is about as tall as standing there with
+        the legs out of the picture). The depth correction comes from the
+        standing boxes only, so lying cannot pass for 'standing height'. A
+        labelled model is kept: learn() does not replace it."""
+        if len(lying) < 30 or len(standing) < 200:
+            return None
+        keep_hist = self.hist
+        self.hist = [list(e) for e in standing]
+        ref = self._ref()
+        self.hist = keep_hist
+        norm = lambda e: self._norm(e[0], e[2] if len(e) >= 3 else None, ref)  # noqa: E731
+        lh = sorted(norm(e) for e in lying)
+        sh = sorted(norm(e) for e in standing)
+        lie_h, stand_h = lh[len(lh) // 2], sh[len(sh) // 2]
+        if stand_h <= 0 or lie_h >= stand_h:
+            return None
+        # The split: where lying and standing heights are told apart best (the
+        # fewest labelled boxes on the wrong side).
+        cands = sorted(set(round(v, 3) for v in lh + sh))
+        split = min(cands, key=lambda c: sum(v >= c for v in lh) / len(lh) + sum(v < c for v in sh) / len(sh))
+        ars = sorted(e[1] for e in lying)
+        self.model = {"split": split, "stand_h": stand_h, "lie_h": lie_h, "lie_ar": ars[len(ars) // 2], "ref": ref, "labelled": True,
+                      "agreement": round(1 - (sum(v >= split for v in lh) / len(lh) + sum(v < split for v in sh) / len(sh)) / 2, 3)}
+        return self.model
+
     def learn(self):
+        if self.model and self.model.get("labelled"):
+            return                                            # a person-labelled model stands
         ref = self._ref()
         rows = [e for e in self.hist if not ref or (len(e) >= 3 and e[2] is not None)]
         hs = [self._norm(e[0], e[2] if len(e) >= 3 else None, ref) for e in rows]

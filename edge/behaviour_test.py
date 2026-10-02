@@ -201,6 +201,26 @@ check("a long quiet lie is not a cast", not any(e["kind"] == "possible_cast" for
 st = tr.to_state()
 check("posture model survives a restart", PostureTracker(st).model == tr.model)
 
+# A view where lying cannot be told apart by itself (2 Oct): standing further
+# back looks smaller, and lying at the front facing the camera is about as
+# tall as standing at the back. Taught from boxes a person labelled.
+lab_rng = random.Random(5)
+def stand_at(y):                        # standing: taller nearer the camera
+    return [round(0.95 * y - 0.13 + lab_rng.gauss(0, 0.01), 4), 0.55, round(y, 4)]
+standing = [stand_at(lab_rng.uniform(0.55, 1.0)) for _ in range(1500)]
+lying = [[round(0.49 + lab_rng.gauss(0, 0.01), 4), 0.7, round(0.97 + lab_rng.gauss(0, 0.005), 4)] for _ in range(300)]
+pt = PostureTracker({"hist": standing + lying})
+pt.learn()
+check("unlabelled, this view learns nothing (or nothing it should)", pt.model is None or pt.model.get("split", 0) < 0.4, pt.model)
+m = PostureTracker().learn_labelled(lying, standing)
+check("labelled: a model, with the labelled boxes on the right side", m is not None and m["agreement"] >= 0.95, m)
+lt = PostureTracker({"model": m})
+norm = lambda e: PostureTracker._norm(e[0], e[2], m["ref"])  # noqa: E731
+check("lying at the front reads as lying", norm([0.49, 0.7, 0.97]) < m["split"], (norm([0.49, 0.7, 0.97]), m["split"]))
+check("standing at the back reads as standing", norm(stand_at(0.6)) >= m["split"], (norm(stand_at(0.6)), m["split"]))
+lt.learn()
+check("a labelled model is not replaced by unlabelled learning", lt.model == m)
+
 # ---- warm body box (thermal) --------------------------------------------------- #
 frame = bytearray(60 for _ in range(W * H))
 for y in range(40, 110):

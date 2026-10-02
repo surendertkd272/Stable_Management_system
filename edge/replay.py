@@ -36,9 +36,11 @@ import heapq
 import json
 import multiprocessing as mp
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
 import time as _time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -132,6 +134,28 @@ def frames(clips, w, h, fps, t0, t1, kind, pix="gray"):
         finally:
             p.stdout.close()
             p.wait()
+
+
+def ahead(gen, n=64):
+    """Read a frame source in a thread of its own, up to n frames ahead. The
+    streams are merged in time order, and each decoder otherwise sits
+    blocked on its pipe until its next frame is wanted - three decoders taking
+    turns instead of working side by side (2 Oct: the colour detector frames
+    made a night run at 2x its length instead of 20x)."""
+    q, end = queue.Queue(maxsize=n), object()
+
+    def run():
+        try:
+            for item in gen:
+                q.put(item)
+        finally:
+            q.put(end)
+    threading.Thread(target=run, daemon=True).start()
+    while True:
+        item = q.get()
+        if item is end:
+            return
+        yield item
 
 
 # --------------------------------------------------------------------------- #
@@ -297,9 +321,9 @@ def run_chunk(job):
     clock, out = Clock(), []
     w = make_worker(dev, posture_state, model, clock, lambda rs: out.extend(tidy(rs)))
     vw, vh = w.VISIBLE_SIZE
-    src = heapq.merge(frames(therm, W, H, FPS, t0, t1, "thermal"),
-                      frames(vis, vw, vh, FPS, t0, t1, "visible") if vis else iter(()),
-                      frames(vis, vw, vh, 1, t0, t1, "colour", "bgr24") if (vis and model) else iter(()),
+    src = heapq.merge(ahead(frames(therm, W, H, FPS, t0, t1, "thermal")),
+                      ahead(frames(vis, vw, vh, FPS, t0, t1, "visible")) if vis else iter(()),
+                      ahead(frames(vis, vw, vh, 1, t0, t1, "colour", "bgr24")) if (vis and model) else iter(()),
                       key=lambda x: (x[0], x[1]))
     if not vis:
         w.vvideo, w.vanalyzer = None, None
@@ -359,6 +383,7 @@ def device_from_state(state_file, dev_id):
     if not rois.get("nostril"):
         raise SystemExit("this camera has no calibration boxes — calibrate it first (the nostril box is needed)")
     return {"id": d["id"], "name": d.get("name") or d["id"], "kind": "thermal_camera", "rois": rois,
+            "calibratedAt": (d.get("rois") or {}).get("pushedAt"),
             "calibrated": not (d.get("rois") or {}).get("stale"), "behaviourStream": d.get("behaviourStream"),
             "colourStream": None, "floorCalib": d.get("floorCalib") or {}}
 
@@ -387,6 +412,10 @@ def main():
     ap.add_argument("--detector-model", default=os.environ.get("EQUICARE_DETECTOR_MODEL")
                     or str(Path.home() / "EquiCare-demo" / "models" / "yolox_tiny.onnx"))
     ap.add_argument("--no-detector", action="store_true", help="skip the horse detector (no lying, no colour floor)")
+    ap.add_argument("--review-lying", help="local HH:MM-HH:MM[,…]: stretches a person saw the horse lying on the "
+                    "recording — the posture model learns this stall's lying and standing boxes from them")
+    ap.add_argument("--save-posture", action="store_true",
+                    help="keep that labelled model for this camera (live monitoring and later nights use it)")
     ap.add_argument("--out", help="also write the readings here (JSON lines)")
     ap.add_argument("--server", help="send the readings to this EquiCare server")
     ap.add_argument("--token-file", help="the edge box token, for --server")
@@ -421,10 +450,35 @@ def main():
         parts = chunks(vis, a.jobs * 2)
         with ctx.Pool(a.jobs) as pool:
             got = pool.map(posture_samples, [(p, lo, hi, model) for p in parts])
-        hist = [h for _, h in sorted((x for g in got for x in g), key=lambda x: x[0])]
+        timed = sorted((x for g in got for x in g), key=lambda x: x[0])
+        hist = [h for _, h in timed]
         from behaviour import PostureTracker  # noqa
         pt = PostureTracker({"hist": hist})
-        pt.learn()
+        if a.review_lying:
+            spans = []
+            for w in a.review_lying.split(","):
+                x, y = (dt.datetime.fromisoformat(f"{dt.datetime.fromtimestamp(lo, tz).date()}T{v}").replace(tzinfo=tz).timestamp()
+                        for v in w.split("-"))
+                while x < lo - 60:
+                    x += 86400
+                while y < x:
+                    y += 86400
+                spans.append((x, y))
+            # Lying: inside the stretches; standing: away from them (a margin
+            # of 10 minutes either side, for lying down and getting up).
+            lying = [h for t, h in timed if any(x <= t <= y for x, y in spans)]
+            standing = [h for t, h in timed if all(t < x - 600 or t > y + 600 for x, y in spans)]
+            m = pt.learn_labelled(lying, standing)
+            print(f"[replay]   labelled: {len(lying)} lying and {len(standing)} standing boxes; " + (
+                f"lying below {m['split']:.2f} of the standing height at that spot ({100 * m['agreement']:.0f}% of the labelled boxes on the right side)"
+                if m else "too few to learn from"), flush=True)
+            if m and a.save_posture:
+                st = Path(os.environ.get("EQUICARE_STATE_DIR") or (Path.home() / "EquiCare-demo" / "state")) / f"posture-{dev['id']}-visible.json"
+                st.parent.mkdir(parents=True, exist_ok=True)
+                st.write_text(json.dumps({**pt.to_state(), "posture": None, "calibratedAt": dev.get("calibratedAt")}))
+                print(f"[replay]   posture model kept for this camera: {st}", flush=True)
+        else:
+            pt.learn()
         posture_state = {"hist": pt.hist, "model": pt.model, "posture": None}
         print(f"[replay]   {len(hist)} horse boxes; " + (
             f"standing ~{pt.model['stand_h']:.2f}, lying ~{pt.model['lie_h']:.2f} of the frame height" if pt.model
