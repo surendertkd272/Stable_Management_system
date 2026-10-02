@@ -132,6 +132,28 @@ test("urination and droppings: patches close together are moved bedding, not cou
   assert.match(html, /Excretion<small>Point 8<\/small><\/td><td class="pt-val">1 seen</);
 });
 
+test("patterns through the night: phases in words, rest and eating bouts, breathing, hour by hour", async () => {
+  const night = Date.parse("2026-09-20T15:30:00Z");                    // 21:00 IST, 4 h
+  const atN = (min) => new Date(night + min * 60000 + 55000).toISOString();
+  const rd = [];
+  for (let m = 0; m < 240; m++) {
+    const early = m < 120;
+    rd.push({ metric: "activity_index", value: early ? 0.3 : 0.04, ts: atN(m), source: "visible_video", confidence: 0.6, meta: { fromRecording: true }, horseId: "tara" });
+    rd.push({ metric: "time_budget", value: 60, ts: atN(m), source: "visible_video", confidence: 0.5, horseId: "tara",
+      meta: { fromRecording: true, hay: true, grid: "12x8", where: [[40, 60]], lyingS: 0, eatingS: early ? 45 : 5, restingS: early ? 10 : 52, movingS: early ? 5 : 3, unseenS: 0 } });
+  }
+  rd.push({ metric: "respiratory_rate_bpm", value: 7.4, ts: atN(200), source: "visible_video", confidence: 0.8, meta: { method: "colour video, flank movement", fromRecording: true }, horseId: "tara" });
+  const { html } = await clientReport({ horse, readings: rd, from: night, to: night + 240 * 60000, tz: "Asia/Kolkata", grab, grabFull: grab });
+  assert.match(html, /<h2>Patterns through the night<\/h2>/);
+  assert.match(html, /21:00–23:00<\/b><span>Mostly eating at the hay \(75% eating\)/);
+  assert.match(html, /23:00–01:00<\/b><span>Mostly at rest \(87% at rest\)/);
+  assert.match(html, /Quietest from 23:00 \(average activity 0\.04\); most active from 2[12]:00 \(0\.30\)/);
+  assert.match(html, /1 spell of 10 minutes or more standing at rest; the longest 23:00–01:00 \(2 h 0 min\)/);
+  assert.match(html, /1 reading, 7\.4–7\.4 breaths per minute \(00:20 standing at rest\)/);
+  assert.match(html, /<h2>Hour by hour<\/h2>/);
+  assert.ok(clean(html));
+});
+
 test("a rising temperature is said, with the size of the rise", async () => {
   const { html } = await clientReport({ horse, readings: hourOf({ eyeEvery: 2, rise: 1.2 }), from, to: from + hour, tz: "UTC" });
   assert.match(html, /Temperature rising/);

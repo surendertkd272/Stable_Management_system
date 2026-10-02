@@ -232,6 +232,59 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const hmText = (sec) => (sec >= 3600 ? `${Math.floor(sec / 3600)} h ${Math.round((sec % 3600) / 60)} min` : `${Math.round(sec / 60)} min`);
   const STATE_WORD = { lying: "Lying down", eating: "Eating at the hay", resting: "Standing at rest", moving: "Moving about" };
 
+  // ---- patterns through the session: bouts, phases, hour by hour ---------------- //
+  const perMin = Object.fromEntries(TB.map(([k]) => [k, new Array(minutes).fill(0)]));
+  for (const r of tbR) for (const [k] of TB) perMin[k][minuteOf(r)] += r.meta?.[`${k}S`] || 0;
+  // Bouts: minutes mostly in one state, joined over short breaks.
+  const bouts = (k, minS, gap) => {
+    const out = [];
+    for (let m = 0; m < minutes; m++) {
+      if (perMin[k][m] < minS) continue;
+      const l = out.at(-1);
+      if (l && m - l.end <= gap) l.end = m; else out.push({ start: m, end: m });
+    }
+    return out.map((b) => ({ ...b, min: b.end - b.start + 1 }));
+  };
+  const restBouts = bouts("resting", 40, 1), eatBouts = bouts("eating", 30, 2);
+  const longest = (list) => list.slice().sort((x, y) => y.min - x.min)[0] || null;
+  const span2 = (b) => `${clock(from + b.start * 60000)}–${clock(from + (b.end + 1) * 60000)}`;
+  // Clock hours: shares of each state, average activity, visits.
+  const hours = [];
+  for (let m = 0; m < minutes; m++) {
+    const label = T({ hour: "2-digit", hourCycle: "h23" }).format(from + m * 60000);
+    let h = hours.at(-1);
+    if (!h || h.label !== label) { h = { label, start: m, end: m, s: Object.fromEntries(TB.map(([k]) => [k, 0])), act: [], people: 0 }; hours.push(h); }
+    h.end = m;
+    for (const [k] of TB) h.s[k] += perMin[k][m];
+    if (act[m] !== null) h.act.push(act[m]);
+    if (peopleSec[m] >= 10) h.people += 1;
+  }
+  for (const h of hours) {
+    h.seen = TB.reduce((x, [k]) => x + (k === "unseen" ? 0 : h.s[k]), 0);
+    h.share = (k) => (h.seen ? h.s[k] / h.seen : 0);
+    h.avg = avg(h.act);
+    h.from = clock(from + h.start * 60000);
+  }
+  const fullHours = hours.filter((h) => h.end - h.start >= 29 && h.seen >= 600);
+  const dominantOf = (h) => (h.share("resting") >= 0.5 ? "rest" : h.share("eating") >= 0.4 ? "eating" : h.share("eating") + h.share("resting") >= 0.6 ? "both" : "busy");
+  // Phases: consecutive hours with the same character, in words.
+  const phases = [];
+  for (const h of fullHours) {
+    const d = dominantOf(h), l = phases.at(-1);
+    if (l && l.kind === d && l.hours.at(-1).end + 1 >= h.start) l.hours.push(h); else phases.push({ kind: d, hours: [h] });
+  }
+  const PHASE = { rest: "mostly at rest", eating: "mostly eating at the hay", both: "eating and resting in turns", busy: "more active, moving and eating" };
+  const phaseText = phases.map((ph) => {
+    const a = ph.hours[0].start, b = ph.hours.at(-1).end + 1;
+    const sh = (k) => Math.round((ph.hours.reduce((x, h) => x + h.s[k], 0) / Math.max(1, ph.hours.reduce((x, h) => x + h.seen, 0))) * 100);
+    const detail = ph.kind === "rest" ? `${sh("resting")}% at rest` : ph.kind === "eating" ? `${sh("eating")}% eating` : `${sh("eating")}% eating, ${sh("resting")}% at rest`;
+    return { when: `${clock(from + a * 60000)}–${clock(from + b * 60000)}`, text: `${PHASE[ph.kind]} (${detail})` };
+  });
+  const byAct = fullHours.filter((h) => h.avg !== null).slice().sort((x, y) => x.avg - y.avg);
+  const quietest = byAct[0], busiestHour = byAct.at(-1);
+  const respTimes = resp.map((r) => ({ at: clock(Date.parse(r.ts)), v: r.value, what: stateOf[minuteOf(r)] }));
+  const patternsOk = budgetOk && minutes >= 120 && fullHours.length >= 2;
+
   // ---- photos: eye in view and calm, spread through the session -------------- //
   const score = (m) => (act[m] === null ? -1 : (eyeMin[m] !== null ? 2 : 0) + (1 - Math.min(1, act[m])) - (inAway(from + m * 60000 + 30000) ? 3 : 0));
   // A photo for an eye reading comes from the second the eye was read.
@@ -603,7 +656,7 @@ ${grid}${bandsSvg}${tk}${bars}${line}
     points: points.slice(0, 8).filter((x) => x[2] !== S.no).map((x) => x[0]),
     pointNames: Object.fromEntries(points.slice(0, 8).map((x) => [x[0], x[1]])),
   };
-  const pages = 5 + (heatViews.length ? 1 : 0) + (budgetOk ? 1 : 0) + (previous ? 1 : 0);
+  const pages = 5 + (heatViews.length ? 1 : 0) + (budgetOk ? 1 : 0) + (patternsOk ? 1 : 0) + (previous ? 1 : 0);
   // Sections and pages are numbered as they are laid out: some appear only
   // when there is something to show.
   let secN = 0, pgN = 0;
@@ -841,6 +894,21 @@ ${budgetBar()}
 <div class="legend">${tbShown.map(([, l, c]) => `<span><i class="sw ${c}"></i>${esc(l)}</span>`).join("")}</div></section>
 <section class="card"><div class="sh">${sn()}<h2>Where ${esc(name)} spent the time</h2></div><p class="sub">${esc(whereText)} Darker shading: where ${esc(name)} stood longer (the hooves), seen from the stall door.</p>
 ${stallMap()}</section>
+${pg()}</div>` : ""}
+${patternsOk ? `<div class="page">
+<section class="card"><div class="sh">${sn()}<h2>Patterns through the ${overnight ? "night" : "session"}</h2></div><p class="sub">How ${esc(name)}'s ${overnight ? "night" : "session"} went, from the measurements, in time order.</p>
+<div class="obs"><div><h3>${overnight ? "The night" : "The session"} at a glance</h3>
+${phaseText.map((x) => `<div class="find">${svgIcon("info")}<div><b>${esc(x.when)}</b><span>${esc(x.text.replace(/^./, (c) => c.toUpperCase()))}.</span></div></div>`).join("")}
+${quietest && busiestHour && quietest !== busiestHour ? `<div class="find">${svgIcon("check")}<div><b>Quietest and busiest hours</b><span>Quietest from ${esc(quietest.from)} (average activity ${f2(quietest.avg)}); most active from ${esc(busiestHour.from)} (${f2(busiestHour.avg)}).</span></div></div>` : ""}
+</div><div><h3>Rest, eating and breathing</h3>
+<div class="find">${svgIcon("check")}<div><b>Rest</b><span>${restBouts.filter((x) => x.min >= 10).length ? `${plural(restBouts.filter((x) => x.min >= 10).length, "spell")} of 10 minutes or more standing at rest; the longest ${esc(span2(longest(restBouts)))} (${hmText(longest(restBouts).min * 60)}).` : `Rest came in short spells${longest(restBouts) ? `, the longest ${hmText(longest(restBouts).min * 60)} (${esc(span2(longest(restBouts)))})` : ""}.`}</span></div></div>
+${hayKnown ? `<div class="find">${svgIcon("check")}<div><b>Eating</b><span>${eatBouts.filter((x) => x.min >= 5).length ? `${plural(eatBouts.filter((x) => x.min >= 5).length, "bout")} of 5 minutes or more at the hay, ${hmText(tbTot.eating)} in all; the longest ${esc(span2(longest(eatBouts)))} (${hmText(longest(eatBouts).min * 60)}).` : `${hmText(tbTot.eating)} at the hay, in short visits.`}</span></div></div>` : ""}
+<div class="find">${svgIcon("check")}<div><b>Breathing</b><span>${respTimes.length ? `${plural(respTimes.length, "reading")}, ${f1(Math.min(...respTimes.map((x) => x.v)))}–${f1(Math.max(...respTimes.map((x) => x.v)))} breaths per minute (${esc(respTimes.slice(0, 6).map((x) => `${x.at}${x.what ? ` ${STATE_WORD[x.what].toLowerCase()}` : ""}`).join(", "))}${respTimes.length > 6 ? ", …" : ""}).` : "Not read in this session: it needs the flank or the nostril still in view for 30 seconds."}</span></div></div>
+</div></div></section>
+<section class="card"><div class="sh">${sn()}<h2>Hour by hour</h2></div><p class="sub">Shares of the time ${esc(name)} was seen in each hour.</p>
+<table style="margin-top:10px"><thead><tr><th>Hour</th>${hayKnown ? "<th>Eating</th>" : ""}<th>At rest</th>${lyingMeasured ? "<th>Lying</th>" : ""}<th>Moving</th><th>Avg activity</th>${peopleSeen ? "<th>Visits</th>" : ""}</tr></thead><tbody>
+${hours.filter((h) => h.seen > 0).map((h) => `<tr><td class="num">${esc(h.from)}</td>${hayKnown ? `<td class="num">${Math.round(h.share("eating") * 100)}%</td>` : ""}<td class="num">${Math.round(h.share("resting") * 100)}%</td>${lyingMeasured ? `<td class="num">${Math.round(h.share("lying") * 100)}%</td>` : ""}<td class="num">${Math.round(h.share("moving") * 100)}%</td><td class="num">${f2(h.avg)}</td>${peopleSeen ? `<td class="num">${h.people ? `${h.people} min` : "—"}</td>` : ""}</tr>`).join("")}
+</tbody></table></section>
 ${pg()}</div>` : ""}
 <div class="page">
 <section class="card"><div class="sh">${sn()}<h2>${block < 60 ? `${block}-minute` : `${block / 60}-hour`} breakdown</h2></div>
