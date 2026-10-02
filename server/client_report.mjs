@@ -58,7 +58,7 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // an earlier session (its report's `summary`), for a page comparing the horse
 // across the two sessions.
 export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
-  grabThermal = null, grabFull = null, previous = null, clipCount = 0, client = "", now = Date.now() }) {
+  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", now = Date.now() }) {
   tz = safeTimeZone(tz);
   const minutes = Math.max(1, Math.round((to - from) / 60000));
   const T = (o) => new Intl.DateTimeFormat("en-GB", { timeZone: tz, ...o });
@@ -430,8 +430,11 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   // For the owner: what to do for the horse. Setting up the equipment is not
   // the reader's business and is left out.
   const recs = [
-    `<b>Run longer sessions, such as overnight,</b> to establish ${esc(name)}'s personal baseline; changes in temperature and activity are then flagged automatically.`,
-    `<b>Keep the stall clear of people during monitoring</b> so activity reflects the horse alone.`,
+    minutes >= 360
+      ? `<b>Continue monitoring over several nights</b> to establish ${esc(name)}'s personal baseline; changes in temperature, breathing and activity are then flagged automatically.`
+      : `<b>Run longer sessions, such as overnight,</b> to establish ${esc(name)}'s personal baseline; changes in temperature and activity are then flagged automatically.`,
+    !eye.length && `<b>Include a live monitoring period</b> to add eye temperature to ${esc(name)}'s record.`,
+    !lyingMeasured && actV.length && `<b>Continue overnight monitoring</b> so lying down can be reported: it is shown once ${esc(name)} has been seen both lying and standing in this stall.`,
   ].filter(Boolean).slice(0, 4);
 
   // ---- charts ------------------------------------------------------------------ //
@@ -556,7 +559,9 @@ ${grid}${bandsSvg}${tk}${bars}${line}
     const rects = cells.map((v, c) => (v > 0
       ? `<rect x="${c % GX}" y="${Math.floor(c / GX)}" width="1" height="1" class="heatcell" fill-opacity="${(0.12 + 0.6 * (v / max)).toFixed(2)}" data-tip="${Math.round((v / Math.max(1, cellsTot)) * 100)}% of the time"/>` : "")).join("");
     const img = mapShot ? `<img src="${toUri(mapShot.jpg)}" alt="${esc(name)}'s stall">` : `<div class="nophoto">No photo of the stall in this session.</div>`;
-    return `<div class="map">${img}<svg viewBox="0 0 ${GX} ${GY}" preserveAspectRatio="none" aria-label="Where ${esc(name)} stood">${rects}</svg></div>`;
+    const [cx0, cy0, cx1, cy1] = mapCrop;                          // the photo is this part of the picture
+    const vb = `${(cx0 * GX).toFixed(3)} ${(cy0 * GY).toFixed(3)} ${((cx1 - cx0) * GX).toFixed(3)} ${((cy1 - cy0) * GY).toFixed(3)}`;
+    return `<div class="map">${img}<svg viewBox="${vb}" preserveAspectRatio="none" aria-label="Where ${esc(name)} stood">${rects}</svg></div>`;
   }
 
   function distribution() {
@@ -748,7 +753,7 @@ tr.dim td{color:var(--muted)}
 @media print{.no-print{display:none!important}}
 .tb-lie{fill:#7c5cff;background:#7c5cff}.tb-eat{fill:#2f9e44;background:#2f9e44}.tb-rest{fill:#4dabf7;background:#4dabf7}.tb-move{fill:#f08c00;background:#f08c00}.tb-out{fill:#ced4da;background:#ced4da}
 .tbbar{display:flex;height:34px;border-radius:9px;overflow:hidden;margin-top:12px}.tbs{display:flex;align-items:center;justify-content:center;color:#fff;font-size:11.5px;font-weight:600}.tbs.tb-out{color:var(--ink2)}
-.map{position:relative;margin-top:10px}.map img{width:100%;display:block;border-radius:10px}.map svg{position:absolute;inset:0;width:100%;height:100%}.heatcell{fill:#ff3d00}
+.map{position:relative;margin-top:10px;overflow:hidden;border-radius:10px}.map img{width:100%;display:block}.map svg{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.heatcell{fill:#ff3d00}
 .gal.heat,.page .gal.heat{grid-template-columns:repeat(2,1fr);gap:12px}.gal.heat figcaption{font-size:10.5px}
 </style></head><body><main>
 <div class="toolbar no-print"><button type="button" onclick="window.print()">Save as PDF</button><span>In the print window choose “Save as PDF”.</span></div>
@@ -833,8 +838,8 @@ ${stallMap()}</section>
 ${pg()}</div>` : ""}
 <div class="page">
 <section class="card"><div class="sh">${sn()}<h2>${block < 60 ? `${block}-minute` : `${block / 60}-hour`} breakdown</h2></div>
-<table style="margin-top:10px"><thead><tr><th>Period</th><th>Avg activity</th><th>Peak</th><th>Standing rest</th><th>Eye temp.</th><th>Eye in view</th><th>Flags</th></tr></thead><tbody>
-${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.label}</td><td class="num">${f2(b.act)}</td><td class="num">${f2(b.peak)}</td><td class="num">${b.still} min</td><td class="num">${b.n ? `${f1(b.temp)} °C` : "—"}</td><td class="num">${Math.round(b.eyeShare * 100)}%</td><td class="num">${b.flags || "—"}</td></tr>`).join("")}
+<table style="margin-top:10px"><thead><tr><th>Period</th><th>Avg activity</th><th>Peak</th><th>Standing rest</th>${fromRec ? "" : "<th>Eye temp.</th><th>Eye in view</th>"}<th>Flags</th></tr></thead><tbody>
+${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.label}</td><td class="num">${f2(b.act)}</td><td class="num">${f2(b.peak)}</td><td class="num">${b.still} min</td>${fromRec ? "" : `<td class="num">${b.n ? `${f1(b.temp)} °C` : "—"}</td><td class="num">${Math.round(b.eyeShare * 100)}%</td>`}<td class="num">${b.flags || "—"}</td></tr>`).join("")}
 </tbody></table></section>
 
 <section class="card"><div class="sh">${sn()}<h2>Recommendations</h2></div>

@@ -82,7 +82,10 @@ const { html, ref, photos } = await clientReport({
   floorWatched: floorOf(cams, cam),
   grab: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
   grabThermal: cam && clips.length && !flag("no-thermal") ? frameGrabber(cam.id, "thermal", undefined, { lift: true }) : null,
-  grabFull: cam && clips.length ? frameGrabber(cam.id, "visible") : null,   // the stall map: the whole picture
+  // The stall map: the photo and its grid cover the same part of the picture
+  // (the colour crop, else the picture less the strips the camera writes on).
+  grabFull: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
+  mapCrop: crop || [0, 0.09, 1, 0.91],
   client: arg("client", ""),
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
 });
