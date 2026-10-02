@@ -329,7 +329,7 @@ def posture_samples(job):
         edges = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
         hgt, wid = best["y1"] - best["y0"], best["x1"] - best["x0"]
         if edges < 3 and hgt > 0:
-            hist.append((t, [round(hgt, 4), round(wid / hgt, 3)]))
+            hist.append((t, [round(hgt, 4), round(wid / hgt, 3), round(best["y1"], 4)]))
     return hist
 
 

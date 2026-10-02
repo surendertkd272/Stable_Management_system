@@ -325,14 +325,20 @@ class PostureTracker:
         getting up."""
 
     MIN_BOUT_S = 30.0
-    SEPARATION = 0.25              # lying box at least 25 % lower than standing
+    # Lying: a box at least 40 % lower than standing at the same spot. 25 %
+    # was not enough: on 1 Oct's stall recording a horse that only stood and
+    # ate learned 'lying' from his head lowered to the hay (~25 % lower) and
+    # from standing at the back of the stall (further away looks smaller) —
+    # 93 % 'lying' and nine 'possible rolls'. Hence also the depth correction
+    # (_ref): his box is compared with his standing height at that spot.
+    SEPARATION = 0.40
     LEARN_EVERY = 120
     HISTORY = 20000
     LOST_LATERAL_S = 30.0
 
     def __init__(self, state=None):
         st = state or {}
-        self.hist = list(st.get("hist", []))[-self.HISTORY:]     # [height, aspect]
+        self.hist = list(st.get("hist", []))[-self.HISTORY:]     # [height, aspect, box bottom y]
         self.model = st.get("model")                             # {split, stand_h, lie_h, lie_ar}
         self.state = st.get("posture")                           # "standing" | "lying" | None
         self.cand, self.cand_t = None, None
@@ -356,8 +362,44 @@ class PostureTracker:
         return out
 
     # -- learning ---------------------------------------------------------- #
+    def _ref(self):
+        """Standing height by depth in the stall: (a, b) for h ≈ a + b·y (y the
+        box's bottom, the hooves), from the upper quartile of heights in six
+        bands of y — a horse further back looks smaller. None when he stood at
+        about one depth (no correction needed) or the fit makes no sense."""
+        pts = sorted((e[2], e[0]) for e in self.hist if len(e) >= 3 and e[2] is not None)
+        if len(pts) < 200:
+            return None
+        size = len(pts) // 6
+        xs, ys = [], []
+        for i in range(6):
+            seg = pts[i * size:(i + 1) * size] if i < 5 else pts[i * size:]
+            if len(seg) >= 20:
+                hs = sorted(h for _, h in seg)
+                xs.append(sum(y for y, _ in seg) / len(seg))
+                ys.append(hs[int(0.75 * (len(hs) - 1))])
+        if len(xs) < 3 or max(xs) - min(xs) < 0.08:
+            return None
+        mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+        sxx = sum((x - mx) ** 2 for x in xs)
+        b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx if sxx else 0.0
+        a = my - b * mx
+        if b <= 0 or a + b * min(xs) <= 0.05:
+            return None                                       # nearer must look bigger
+        return [round(a, 4), round(b, 4)]
+
+    @staticmethod
+    def _norm(h, y, ref):
+        """A box height as a share of his standing height at that depth."""
+        if not ref or y is None:
+            return h
+        r = ref[0] + ref[1] * y
+        return h / r if r > 0.05 else h
+
     def learn(self):
-        hs = [h for h, _ in self.hist]
+        ref = self._ref()
+        rows = [e for e in self.hist if not ref or (len(e) >= 3 and e[2] is not None)]
+        hs = [self._norm(e[0], e[2] if len(e) >= 3 else None, ref) for e in rows]
         if len(hs) < 200:
             return
         lo, hi = min(hs), max(hs)
@@ -370,8 +412,8 @@ class PostureTracker:
                 return
             c = [sum(g) / len(g) for g in groups]
         lie_h, stand_h = sorted(c)
-        small = [a for h, a in self.hist if abs(h - lie_h) < abs(h - stand_h)]
-        big = [a for h, a in self.hist if abs(h - lie_h) >= abs(h - stand_h)]
+        small = [e[1] for e, h in zip(rows, hs) if abs(h - lie_h) < abs(h - stand_h)]
+        big = [e[1] for e, h in zip(rows, hs) if abs(h - lie_h) >= abs(h - stand_h)]
         share = len(small) / len(hs)
         if stand_h <= 0 or (stand_h - lie_h) / stand_h < self.SEPARATION or not (0.03 <= share <= 0.97):
             self.model = None                                   # one posture only so far
@@ -381,7 +423,7 @@ class PostureTracker:
         if lie_ar <= stand_ar:                                  # lying must also be wider/lower
             self.model = None
             return
-        self.model = {"split": (lie_h + stand_h) / 2, "stand_h": stand_h, "lie_h": lie_h, "lie_ar": lie_ar}
+        self.model = {"split": (lie_h + stand_h) / 2, "stand_h": stand_h, "lie_h": lie_h, "lie_ar": lie_ar, "ref": ref}
 
     # -- per sample --------------------------------------------------------- #
     def feed(self, t, box, motion=0.0):
@@ -398,19 +440,20 @@ class PostureTracker:
         if hgt <= 0:
             return
         ar = wid / hgt
-        self.hist.append([round(hgt, 4), round(ar, 3)])
+        self.hist.append([round(hgt, 4), round(ar, 3), round(box["y1"], 4)])
         if len(self.hist) > self.HISTORY:
             del self.hist[: len(self.hist) - self.HISTORY]
         self.since_learn += 1
         if self.model is None or self.since_learn >= self.LEARN_EVERY:
             self.since_learn = 0
             self.learn()
-        self.recent.append((t, hgt, ar, motion))
+        self.recent.append((t, hgt, ar, motion, box["y1"]))
         self.recent = [r for r in self.recent if t - r[0] <= 12]
         self.acc["observed_s"] += dt
         if self.model is None:
             return
-        med_h = sorted(r[1] for r in self.recent[-5:])[len(self.recent[-5:]) // 2]
+        ref = self.model.get("ref")
+        med_h = sorted(self._norm(r[1], r[4], ref) for r in self.recent[-5:])[len(self.recent[-5:]) // 2]
         med_ar = sorted(r[2] for r in self.recent[-5:])[len(self.recent[-5:]) // 2]
         now = "lying" if med_h < self.model["split"] else "standing"
         self._advance(t, now)

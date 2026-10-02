@@ -66,6 +66,11 @@ export const METRICS = {
   // detector, once a second): visits and checks, for the report; the horse's
   // activity leaves their movement out.
   people_in_view_s:     { point: 5,  label: "People at the stall",  unit: "s",     source: "visible_video",  kind: "diagnostic" },
+  // How the minute was spent, once a second from the colour picture (value:
+  // seconds observed): meta lyingS / eatingS (at the hay, moving a little) /
+  // restingS / movingS / unseenS, and where he stood (meta.where, cells of
+  // meta.grid over the picture). For the report's time budget and stall map.
+  time_budget:          { point: 5,  label: "Time budget",          unit: "s",     source: "visible_video",  kind: "diagnostic" },
   respiratory_rate_live_bpm: { point: 4, label: "Breathing (last 35 s)", unit: "bpm", source: "thermal_video", kind: "diagnostic" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },

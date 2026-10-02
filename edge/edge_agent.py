@@ -1081,6 +1081,7 @@ class MtrpcCameraWorker(CameraWorker):
         self.flank_followed = False        # this window's flank breathing used auto_flank (followed the horse)
         self.horse_focus, self.people_px, self._focus_t = None, [], None   # last detection (colour pixels)
         self.people_s = 0                  # seconds with people at the stall, this window
+        self.budget, self.where = {}, {}   # this window: seconds per state; seconds per 12x8 cell (where he stood)
         self.cfloor, self.cfloor_events = None, []
         self._lock = threading.Lock()
 
@@ -1097,13 +1098,17 @@ class MtrpcCameraWorker(CameraWorker):
             st = json.loads(self._posture_path().read_text())
         except Exception:                                   # noqa: BLE001  (first run / unreadable)
             st = None
+        # Learned for another aim of the camera (calibrated again since): the
+        # box heights of two views must not be mixed — start learning afresh.
+        if st and st.get("calibratedAt") != (self.dev.get("rois") or {}).get("pushedAt"):
+            st = None
         self.posture = PostureTracker(st)
 
     def _save_posture(self):
         try:
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             tmp = self._posture_path().with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.posture.to_state()))
+            tmp.write_text(json.dumps({**self.posture.to_state(), "calibratedAt": (self.dev.get("rois") or {}).get("pushedAt")}))
             tmp.replace(self._posture_path())
         except Exception as e:                              # noqa: BLE001
             print(f"[edge] {self.name}: could not save the posture model ({e})")
@@ -1252,6 +1257,13 @@ class MtrpcCameraWorker(CameraWorker):
             self.posture.feed(t, best, motion)
             moving = self.vanalyzer.motion.moving_cells(self.cfloor.bounds, self.cfloor.COLS, self.cfloor.ROWS, 30) \
                 if (self.vanalyzer and self.cfloor) else set()
+        state = self._budget_state(best, motion, rois.get("hay"))
+        with self._lock:
+            self.budget[state] = self.budget.get(state, 0) + self.DETECT_EVERY_S
+            if best:                                         # where he stood: his hooves, the box's bottom middle
+                cx, cy = (best["x0"] + best["x1"]) / 2, best["y1"]
+                cell = min(self.GRID[1] - 1, int(cy * self.GRID[1])) * self.GRID[0] + min(self.GRID[0] - 1, int(cx * self.GRID[0]))
+                self.where[cell] = self.where.get(cell, 0) + self.DETECT_EVERY_S
         evs = self.cfloor.feed(snap[0], t, best, still, moving) if self.cfloor else []
         if evs:
             with self._lock:
@@ -1278,6 +1290,26 @@ class MtrpcCameraWorker(CameraWorker):
         self.emit([dict(deviceId=self.dev["id"], metric="respiratory_rate_live_bpm", value=round(pick["bpm"], 1), unit="bpm",
                         ts=now_iso(), source="thermal_video" if pick is br else "visible_video",
                         confidence=round(min(0.95, pick["strength"]) if calibrated else 0.3, 2), meta=meta)])
+
+    GRID = (12, 8)                     # where he stood: the colour picture split 12 across, 8 down
+
+    def _budget_state(self, best, motion, hay):
+        """This second, for the time budget: lying (the posture model),
+        eating (his box well over the hay drawn at calibration, and moving a
+        little — head down, chewing), standing at rest (still), moving about,
+        or not seen. motion is the horse's own (people left out)."""
+        if self.posture is not None and self.posture.state == "lying":
+            return "lying"
+        if not best:
+            return "unseen"
+        if hay and motion >= 0.05:
+            hx0, hy0, hx1, hy1 = hay["x0"] / 10000, hay["y0"] / 10000, hay["x1"] / 10000, hay["y1"] / 10000
+            ix = max(0.0, min(best["x1"], hx1) - max(best["x0"], hx0))
+            iy = max(0.0, min(best["y1"], hy1) - max(best["y0"], hy0))
+            area = max(1e-9, (best["x1"] - best["x0"]) * (best["y1"] - best["y0"]))
+            if ix * iy / area >= 0.3:
+                return "eating"
+        return "resting" if motion < 0.1 else "moving"
 
     def motion_region(self, t):
         """(focus, ignore) for the colour movement at time t: the horse's box
@@ -1392,6 +1424,8 @@ class MtrpcCameraWorker(CameraWorker):
         self.boxes_seen, self.box_widths = 0, []
         self.flank_followed = False
         self.people_s = 0
+        with self._lock:
+            self.budget, self.where = {}, {}
         pixel_window, floor_events = [], []
         calib = self.dev.get("floorCalib") or {}
         t0 = last_floor = last_live = time.time()
@@ -1556,6 +1590,14 @@ class MtrpcCameraWorker(CameraWorker):
         if horse_only:
             add("people_in_view_s", self.people_s, "s", source="visible_video", conf=1.0, windowMin=wmin,
                 method="people seen in the colour picture, once a second")
+            with self._lock:
+                budget, where = dict(self.budget), sorted(self.where.items())
+            if budget:
+                add("time_budget", sum(budget.values()), "s", source="visible_video", conf=0.5, windowMin=wmin,
+                    **{f"{k}S": budget.get(k, 0) for k in ("lying", "eating", "resting", "moving", "unseen")},
+                    hay=bool(rois.get("hay")), grid=f"{self.GRID[0]}x{self.GRID[1]}", where=[[c, v] for c, v in where],
+                    method="once a second from the colour picture: lying (posture model), eating (at the hay, moving a little), "
+                           "standing at rest, moving about", prototype=True)
         # Posture: lying minutes and events, once this stall's model has
         # seen both standing and lying.
         if posture and posture["observed_s"] > 0 and self.posture.model:
