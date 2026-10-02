@@ -111,6 +111,17 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     eyeTs[m] = typeof r.meta?.readAt === "number" ? r.meta.readAt * 1000 : Date.parse(r.ts) - 3000;
     eyeSure[m] = /eye-shaped/.test(r.meta?.method || "");
   }
+  // People at the stall (seconds per minute, from the colour picture): visits
+  // and checks — context, and left out of the horse's own activity.
+  const peopleSec = new Array(minutes).fill(0);
+  for (const r of of("people_in_view_s")) peopleSec[minuteOf(r)] = Math.max(peopleSec[minuteOf(r)], r.value);
+  const peopleSeen = of("people_in_view_s").length > 0;
+  const visits = [];
+  for (let m = 0; m < minutes; m++) {
+    if (peopleSec[m] < 5) continue;
+    const last = visits.at(-1);
+    if (last && m - last.end <= 2) last.end = m; else visits.push({ start: m, end: m });
+  }
   // Camera coverage: the wearable and the stall sensors are not the camera.
   const anyMin = new Set(rd.filter((r) => !offCamera(r)).map(minuteOf));
   const actV = act.filter((v) => v !== null);
@@ -150,6 +161,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const actB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); const v = act.slice(a, b).filter((x) => x !== null); return v.length ? avg(v) : null; });
   const stillB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); const v = still.slice(a, b).filter((x) => x !== null); return v.length ? avg(v) : null; });
   const eyeB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); return eyeMin.slice(a, b).some((x) => x !== null); });
+  const peopleB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); return peopleSec.slice(a, b).some((v) => v >= 5); });
   const recB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); return recMin.slice(a, b).some(Boolean); });
   const anyB = Array.from({ length: nb }, (_, i) => { const [a, b] = bIdx(i); for (let m = a; m < b; m++) if (anyMin.has(m)) return true; return false; });
   const rollSpan = 2;
@@ -279,8 +291,11 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     ["Time of day", night(h0) && night(h1) ? "A night session: horses do most of their lying down and deep rest at night."
       : !night(h0) && !night(h1) ? "A daytime session: horses are usually more active by day and do most of their lying down at night."
         : "The session spans day and night; horses rest more after dark."],
+    peopleSeen && ["Visits", visits.length
+      ? `People came to the stall ${visits.length === 1 ? "once" : `${visits.length} times`} (${visits.slice(0, 5).map((v) => `${clock(from + v.start * 60000)}–${clock(from + (v.end + 1) * 60000)}`).join(", ")}${visits.length > 5 ? ", …" : ""}). Their movement is left out of ${name}'s activity.`
+      : "No one came to the stall during the session."],
     ["Individual baseline", `Horses vary; after about three days of monitoring, ${name}'s readings are compared with ${name}'s own normal rather than a general range.`],
-  ];
+  ].filter(Boolean);
   const notesText = String(notes || "").trim().slice(0, MAX_NOTES);
   const notSeen = [
     !eye.length && "temperature",
@@ -353,6 +368,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
       ["Monitored", (i) => anyB[i], "on"],
       ...(fromRec ? [] : [["Eye in view", (i) => eyeB[i], "on"]]),
       ...(anyRec && !fromRec ? [["Reviewed afterwards", (i) => recB[i], "on"]] : []),
+      ...(peopleSeen ? [["People at the stall", (i) => peopleB[i], "hot"]] : []),
       ["Standing still", (i) => (stillB[i] ?? 0) >= 0.5, "on"],
       ["High activity", (i) => (actB[i] ?? 0) >= 0.6, "hot"],
     ];

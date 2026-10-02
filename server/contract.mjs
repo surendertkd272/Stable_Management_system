@@ -62,6 +62,10 @@ export const METRICS = {
   // The Live view's breathing: the last 35 s, every 10 s (meta.rolling). A
   // diagnostic — the minute's respiratory_rate_bpm stays the record, so
   // reports, trends and alerts count each minute once.
+  // Seconds of the minute with people at the stall (the colour picture's
+  // detector, once a second): visits and checks, for the report; the horse's
+  // activity leaves their movement out.
+  people_in_view_s:     { point: 5,  label: "People at the stall",  unit: "s",     source: "visible_video",  kind: "diagnostic" },
   respiratory_rate_live_bpm: { point: 4, label: "Breathing (last 35 s)", unit: "bpm", source: "thermal_video", kind: "diagnostic" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },

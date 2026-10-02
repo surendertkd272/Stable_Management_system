@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 COCO_HORSE = 17
+COCO_PERSON = 0
 DEFAULT_MODEL = Path.home() / "EquiCare-demo" / "models" / "yolox_tiny.onnx"
 
 
@@ -59,6 +60,12 @@ class HorseDetector:
     def detect(self, gray, w, h):
         """gray: bytes, w*h 8-bit. Returns horse boxes, best first:
         [{x0, y0, x1, y1 (0..1 of the frame), score}]."""
+        return self.detect_all(gray, w, h)[0]
+
+    def detect_all(self, gray, w, h, person_min=0.4):
+        """(horse boxes, person boxes) from one pass of the network — people
+        at the stall are context (a visit, a check) and must not be counted
+        as the horse moving."""
         np = self.np
         img = np.frombuffer(gray, dtype=np.uint8).reshape(h, w)
         th, tw = self.size
@@ -73,15 +80,18 @@ class HorseDetector:
         blob = np.repeat(canvas[None, None], 3, axis=1)      # grey -> 3 equal channels, BGR order irrelevant
         out = self.sess.run(None, {self.name: blob})[0][0]
         out = self._decode(out)
-        scores = out[:, 4] * out[:, 5 + COCO_HORSE]
-        keep = scores >= self.score_min
-        boxes = []
-        for (cx, cy, bw, bh), sc in zip(out[keep, :4], scores[keep]):
-            cx, cy, bw, bh = float(cx), float(cy), float(bw), float(bh)
-            x0, y0, x1, y1 = (cx - bw / 2) / r, (cy - bh / 2) / r, (cx + bw / 2) / r, (cy + bh / 2) / r
-            boxes.append({"x0": max(0.0, x0 / w), "y0": max(0.0, y0 / h), "x1": min(1.0, x1 / w), "y1": min(1.0, y1 / h),
-                          "score": float(sc)})
-        return nms(sorted(boxes, key=lambda b: -b["score"]))
+
+        def boxes_of(cls, smin):
+            scores = out[:, 4] * out[:, 5 + cls]
+            keep = scores >= smin
+            boxes = []
+            for (cx, cy, bw, bh), sc in zip(out[keep, :4], scores[keep]):
+                cx, cy, bw, bh = float(cx), float(cy), float(bw), float(bh)
+                x0, y0, x1, y1 = (cx - bw / 2) / r, (cy - bh / 2) / r, (cx + bw / 2) / r, (cy + bh / 2) / r
+                boxes.append({"x0": max(0.0, x0 / w), "y0": max(0.0, y0 / h), "x1": min(1.0, x1 / w), "y1": min(1.0, y1 / h),
+                              "score": float(sc)})
+            return nms(sorted(boxes, key=lambda b: -b["score"]))
+        return boxes_of(COCO_HORSE, self.score_min), boxes_of(COCO_PERSON, person_min)
 
 
 def iou(a, b):

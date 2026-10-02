@@ -217,7 +217,8 @@ class Feeder:
             else:
                 r = w.dev.get("rois") or {}
                 fb = w.flank_bounds(r)
-                w.vanalyzer.feed(fr, flank_bounds=fb, t=t)
+                fo, ig = w.motion_region(t)
+                w.vanalyzer.feed(fr, flank_bounds=fb, t=t, focus=fo, ignore=ig)
                 w.last_visible = (fr, t)
                 if w.detector is not None and t - self.last_detect >= w.DETECT_EVERY_S:
                     self.last_detect = t

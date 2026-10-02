@@ -136,9 +136,26 @@ class MotionMeter:
         self.envelope = len(self.idx) / 20
         self.scene_changes = 0
         self.move_x = None
+        self._sel_key, self._sel = None, None
 
-    def feed(self, frame):
-        """(activity share 0..1 or None on a scene change, warm-body x or None)."""
+    def _selection(self, focus, ignore):
+        """Which sample points count: inside `focus` (pixels; None = all) and
+        in none of `ignore` — recomputed only when the regions change."""
+        key = (focus, tuple(ignore))
+        if key != self._sel_key:
+            def inside(b, x, y):
+                return b[0] <= x <= b[2] and b[1] <= y <= b[3]
+            self._sel = [(focus is None or inside(focus, x, y)) and not any(inside(b, x, y) for b in ignore)
+                         for x, y in zip(self.xs, self.ys)]
+            self._sel_key = key
+        return self._sel
+
+    def feed(self, frame, focus=None, ignore=()):
+        """(activity share 0..1 or None on a scene change, warm-body x or None).
+        focus / ignore (pixel boxes): count only movement inside focus (the
+        horse's box) and outside ignore (people) — a person walking past the
+        camera is not the horse being active. A scene change is still judged
+        on the whole picture."""
         self.frame_no += 1
         vals = [frame[i] for i in self.idx]
         n = len(vals)
@@ -170,6 +187,10 @@ class MotionMeter:
             return None, body_x
         for k in moved_k:
             self.last_moved[k] = self.frame_no
+        if focus is not None or ignore:
+            sel = self._selection(focus, ignore)
+            moved_k = [k for k in moved_k if sel[k]]
+            moved = len(moved_k)
         self.move_x = (sum(self.xs[k] for k in moved_k) / moved / self.w) if moved >= 8 else None
         if self.mode == "thermal":
             # Share of the horse that moved, not of the frame: a horse far away
@@ -241,10 +262,10 @@ class WindowAnalyzer:
         self.scene_changes = self.motion.scene_changes
         self.sway.paired()
 
-    def feed(self, frame, nostril_bounds=None, flank_bounds=None, t=None):
+    def feed(self, frame, nostril_bounds=None, flank_bounds=None, t=None, focus=None, ignore=()):
         t = time.time() if t is None else t
         self.n_frames += 1
-        frac, cx = self.motion.feed(frame)
+        frac, cx = self.motion.feed(frame, focus, ignore)
         if frac is None:                                   # scene change: this frame says nothing
             self.sway.reset()
             return

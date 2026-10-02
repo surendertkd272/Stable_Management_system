@@ -280,6 +280,50 @@ check("a horse filling a close camera's view is still a horse", pick_horse([clos
 check("no boxes: no horse", pick_horse([], []) is None)
 
 
+# People at the stall are not the horse moving (2 Oct: a person at the rail
+# made the whole-picture activity read high while the horse ate quietly).
+def block_frames(x_of, n=300):
+    out = []
+    for i in range(n):
+        f = bytearray([90] * (W * H))
+        x = x_of(i)
+        for y in range(40, 80):
+            f[y * W + x: y * W + x + 25] = bytes([230]) * 25
+        f[0:W] = bytes([10]) * W                               # some contrast, as a real picture has
+        out.append(bytes(f))
+    return out
+
+
+walker = block_frames(lambda i: 10 + (i * 3) % 60)            # someone moving about on the left
+person, horse_area = (0, 30, 95, 90), (110, 20, 170, 120)
+a1 = WindowAnalyzer(mode="visible", w=W, h=H)
+for i, fr in enumerate(walker):
+    a1.feed(fr, t=i / 10)
+a2 = WindowAnalyzer(mode="visible", w=W, h=H)
+for i, fr in enumerate(walker):
+    a2.feed(fr, t=i / 10, focus=horse_area, ignore=(person,))
+act1, act2 = a1.summary(lambda *x, **k: None)["activity"], a2.summary(lambda *x, **k: None)["activity"]
+check("someone moving about: the whole picture reads activity", act1 > 0.2, act1)
+check("... the horse alone (its box, people left out) reads none", act2 < 0.02, act2)
+a3 = WindowAnalyzer(mode="visible", w=W, h=H)
+for i, fr in enumerate(block_frames(lambda i: 115 + (i * 3) % 40)):
+    a3.feed(fr, t=i / 10, focus=horse_area, ignore=(person,))
+check("the horse moving in its own box still counts", a3.summary(lambda *x, **k: None)["activity"] > 0.2)
+
+w, got = make_worker("visible")
+w.detector = object()                                         # a detector is running (it is not called here)
+# people_s is zeroed as the window opens: count 25 s of people during it.
+run_window(w, lambda: (feed(w.vanalyzer, weave_frames()),
+                       threading.Timer(0.3, lambda: setattr(w, "people_s", 25)).start()))
+pv = [r for r in got if r["metric"] == "people_in_view_s"]
+check("each minute says how long people were at the stall", pv and pv[0]["value"] == 25, pv)
+check("no stall vice is judged while people are there", not [r for r in got if r["metric"] == "vice_event"],
+      [r["meta"].get("kind") for r in got if r["metric"] == "vice_event"])
+act = [r for r in got if r["metric"] == "activity_index"]
+check("activity says it is the horse's own, with the people seconds", act and "the horse only" in act[0]["meta"]["method"]
+      and act[0]["meta"]["peopleS"] == 25, act[:1])
+
+
 class JitterDetector:
     """A horse standing still; its box jitters by about a pixel, as a real detector's does."""
     def __init__(self):

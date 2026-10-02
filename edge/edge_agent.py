@@ -1079,6 +1079,8 @@ class MtrpcCameraWorker(CameraWorker):
         self.posture = None
         self.auto_flank = None             # flank bounds from the detector box while the horse stands still
         self.flank_followed = False        # this window's flank breathing used auto_flank (followed the horse)
+        self.horse_focus, self.people_px, self._focus_t = None, [], None   # last detection (colour pixels)
+        self.people_s = 0                  # seconds with people at the stall, this window
         self.cfloor, self.cfloor_events = None, []
         self._lock = threading.Lock()
 
@@ -1150,8 +1152,9 @@ class MtrpcCameraWorker(CameraWorker):
             def on_visible(frame, t):
                 r = self.dev.get("rois") or {}
                 fb = self.flank_bounds(r)
+                fo, ig = self.motion_region(t)
                 with self._lock:
-                    self.vanalyzer.feed(frame, flank_bounds=fb, t=t)
+                    self.vanalyzer.feed(frame, flank_bounds=fb, t=t, focus=fo, ignore=ig)
                     self.last_visible = (frame, t)
 
             # Full HD colour when the camera is set to it: the same picture,
@@ -1196,7 +1199,10 @@ class MtrpcCameraWorker(CameraWorker):
             return True
         st["last"] = snap[1]
         try:
-            boxes = self.detector.detect(snap[0], vw, vh)
+            if hasattr(self.detector, "detect_all"):
+                boxes, persons = self.detector.detect_all(snap[0], vw, vh)
+            else:
+                boxes, persons = self.detector.detect(snap[0], vw, vh), []
         except Exception as e:                              # noqa: BLE001
             print(f"[edge] {self.name}: detector failed ({e}) — lying not measured")
             self.detector, self.detector_note = None, f"detector failed: {e}"
@@ -1207,6 +1213,16 @@ class MtrpcCameraWorker(CameraWorker):
             self.boxes_seen += 1
             self.box_widths.append(best["x1"] - best["x0"])
         t = snap[1]
+
+        def px(b, m):
+            return (max(0, int((b["x0"] - m) * vw)), max(0, int((b["y0"] - m) * vh)),
+                    min(vw - 1, int((b["x1"] + m) * vw)), min(vh - 1, int((b["y1"] + m) * vh)))
+        with self._lock:                                     # movement is counted on the horse, not on people
+            self.horse_focus = px(best, 0.05) if best else None
+            self.people_px = [px(b, 0.02) for b in persons]
+            self._focus_t = t
+            if persons:
+                self.people_s += self.DETECT_EVERY_S
         history = [(ht, hb) for ht, hb in st["history"] if t - ht <= 30] + ([(t, best)] if best else [])
         st["history"] = history
         still = bool(best) and motion < 0.1 and len(history) >= 20 and all(iou(hb, best) >= 0.85 for _, hb in history)
@@ -1262,6 +1278,14 @@ class MtrpcCameraWorker(CameraWorker):
         self.emit([dict(deviceId=self.dev["id"], metric="respiratory_rate_live_bpm", value=round(pick["bpm"], 1), unit="bpm",
                         ts=now_iso(), source="thermal_video" if pick is br else "visible_video",
                         confidence=round(min(0.95, pick["strength"]) if calibrated else 0.3, 2), meta=meta)])
+
+    def motion_region(self, t):
+        """(focus, ignore) for the colour movement at time t: the horse's box
+        and the people's, from the last look (held 3 s); (None, ()) with no
+        detector — the whole picture, as before."""
+        if self._focus_t is None or t - self._focus_t > 3:
+            return None, ()
+        return self.horse_focus, tuple(self.people_px)
 
     def flank_bounds(self, rois):
         """Where to watch the flank this frame: the horse's own flank when the
@@ -1367,6 +1391,7 @@ class MtrpcCameraWorker(CameraWorker):
                 self.vanalyzer.reset()
         self.boxes_seen, self.box_widths = 0, []
         self.flank_followed = False
+        self.people_s = 0
         pixel_window, floor_events = [], []
         calib = self.dev.get("floorCalib") or {}
         t0 = last_floor = last_live = time.time()
@@ -1494,13 +1519,18 @@ class MtrpcCameraWorker(CameraWorker):
         bsrc = "visible_video" if bsum is vsummary and vsummary else "thermal_video"
         proto = {"prototype": True, "presence": why if present else "seen in the colour view", "stream": bsrc}
         wmin = round((bsum.get("seconds") or 0) / 60, 2)
+        # People at the stall: their movement is left out of the horse's, and
+        # rhythms are not judged while they are there (handling, mucking out).
+        horse_only = bsrc == "visible_video" and self.detector is not None
+        crowded = self.people_s >= 10
         if "activity" in bsum:
             add("activity_index", bsum["activity"], "0..1", source=bsrc, conf=0.6,
-                method=f"{bsrc.replace('_', ' ')} motion", **proto)
+                method=f"{bsrc.replace('_', ' ')} motion" + (" (the horse only)" if horse_only else ""),
+                **({"peopleS": self.people_s} if horse_only else {}), **proto)
             add("inactive_minutes", bsum["inactive_min"], "min", source=bsrc, conf=0.6,
                 method="stillness (not lying-down)", windowMin=wmin, **proto)
         wv = bsum.get("weave") or {}
-        if wv.get("detected"):
+        if wv.get("detected") and not crowded:
             add("vice_event", 1, "event", source=bsrc, conf=min(0.8, wv["strength"]), kind="weaving",
                 hz=round(wv["hz"], 2), cv=round(wv["cv"], 3), windowMin=wmin,
                 method="regular side-to-side sway rhythm", **proto)
@@ -1510,7 +1540,7 @@ class MtrpcCameraWorker(CameraWorker):
         bw = bsum.get("box_walk") or {}
         widths = sorted(self.box_widths)
         fills = bsrc == "visible_video" and len(widths) >= 5 and widths[len(widths) // 2] >= self.FILLS_VIEW
-        walking = bool(bw.get("detected")) and not fills
+        walking = bool(bw.get("detected")) and not fills and not crowded
         if walking and self._walk_prev:
             add("vice_event", 1, "event", source=bsrc, conf=min(0.7, bw["strength"]), kind="box_walking",
                 hz=round(bw["hz"], 3), laps=round(bw["laps"], 1),
@@ -1520,9 +1550,12 @@ class MtrpcCameraWorker(CameraWorker):
         else:
             self._walk_prev = wmin if walking else None      # held until the next window confirms it
         ht = bsum.get("head_toss") or {}
-        if ht.get("detected"):
+        if ht.get("detected") and not crowded:
             add("vice_event", 1, "event", source=bsrc, conf=min(0.6, ht["strength"]), kind="head_tossing",
                 hz=round(ht["hz"], 2), windowMin=wmin, method="regular up-down head rhythm, in place", **proto)
+        if horse_only:
+            add("people_in_view_s", self.people_s, "s", source="visible_video", conf=1.0, windowMin=wmin,
+                method="people seen in the colour picture, once a second")
         # Posture: lying minutes and events, once this stall's model has
         # seen both standing and lying.
         if posture and posture["observed_s"] > 0 and self.posture.model:

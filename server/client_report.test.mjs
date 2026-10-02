@@ -89,6 +89,18 @@ test("an overnight review plus a live morning check: temperature from the check,
   assert.ok(clean(html));
 });
 
+test("visits: people at the stall are listed with their times, and the timeline shows them", async () => {
+  const rd = hourOf().concat(Array.from({ length: 60 }, (_, m) =>
+    R("people_in_view_s", (m >= 10 && m < 14) || m === 41 ? 40 : 0, m, { windowMin: 1 })));
+  const { html } = await clientReport({ horse, readings: rd, from, to: from + hour, tz: "Asia/Kolkata" });
+  assert.match(html, /People came to the stall 2 times \(14:40–14:44, 15:11–15:12\)\. Their movement is left out of Tara's activity\./);
+  assert.match(html, /People at the stall/);
+  const none = await clientReport({ horse, readings: hourOf().concat([R("people_in_view_s", 0, 3)]), from, to: from + hour, tz: "Asia/Kolkata" });
+  assert.match(none.html, /No one came to the stall during the session/);
+  const old = await clientReport({ horse, readings: hourOf(), from, to: from + hour, tz: "Asia/Kolkata" });
+  assert.doesNotMatch(old.html, /Visits|People at the stall/, "no people check ran: nothing said");
+});
+
 test("a rising temperature is said, with the size of the rise", async () => {
   const { html } = await clientReport({ horse, readings: hourOf({ eyeEvery: 2, rise: 1.2 }), from, to: from + hour, tz: "UTC" });
   assert.match(html, /Temperature rising/);
