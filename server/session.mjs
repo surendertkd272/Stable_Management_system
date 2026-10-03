@@ -63,7 +63,7 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
     add(1, "Body temperature", uncal === temp.length ? "uncalibrated" : "measured",
       `Eye surface ${ts.median} °C median (${ts.min}–${ts.max}), ${ts.n} readings over ${minutesCovered(temp)} of ${windowMin} min (${pct(minutesCovered(temp))} %).`,
       { stats: ts, methods, notes: [
-        "Eye infrared reads ~2 °C below rectal and is a trend for this horse, not a core temperature.",
+        "Eye infrared is a trend for this horse, not a core temperature: its offset from rectal depends on the camera, distance and conditions.",
         ...(uncal ? [`${uncal} readings were taken before the camera was aimed — shown, never used for alerts.`] : []),
         "Temperature alerts compare with the horse's own 7-day baseline, which needs ~3 days of readings.",
       ] });
