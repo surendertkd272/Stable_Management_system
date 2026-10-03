@@ -367,3 +367,19 @@ test("uncalibrated readings are shown but flagged, and kept out of charts and ba
   assert.equal(metricSeries(rd, "body_temp_c", 7).at(-1), null, "coat temperature is not charted as body temperature");
   assert.equal(buildSeries([BIO], rd).bodyTemp.at(-1), null);
 });
+
+test("horse recognition: three looks in a row at another enrolled horse -> 'Different horse in the stall?'", () => {
+  const look = (verdict, agoMin, best = "raja") => R("horse_identity", 0.55, agoMin / 60,
+    { source: "visible_video", unit: "score", meta: { verdict, best, bestName: best === "raja" ? "Raja" : best, bestScore: 0.88 } });
+  const base = [R("activity_index", 0.1, 0)];
+  assert.ok(types([...base, look("other", 10), look("other", 6), look("other", 2)]).includes("Different horse in the stall?"));
+  const a = buildAlerts([BIO], [...base, look("other", 10), look("other", 6), look("other", 2)], () => false).find((x) => x.type === "Different horse in the stall?");
+  assert.match(a.detail, /match Raja, not Testy/);
+  // one look that was the stall's horse after all, or a different "other": no alert
+  assert.ok(!types([...base, look("other", 10), look("match", 6), look("other", 2)]).includes("Different horse in the stall?"));
+  assert.ok(!types([...base, look("other", 10), look("other", 6, "noor"), look("other", 2)]).includes("Different horse in the stall?"));
+  // learning / unsure never alert
+  assert.ok(!types([...base, look("unsure", 10), look("unsure", 6), look("learning", 2)]).includes("Different horse in the stall?"));
+  // the vitals panel gets the verdict
+  assert.equal(vitalsForHorse([look("other", 2)]).horse_identity.identity.best, "Raja");
+});

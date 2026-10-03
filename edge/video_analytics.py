@@ -604,16 +604,25 @@ def local_relay(host, port, stop_evt):
     return srv.getsockname()[1]
 
 
+def grey_of(bgr):
+    """BGR bytes -> grey bytes (BT.601 luma, as ffmpeg's format=gray)."""
+    a = np.frombuffer(bgr, dtype=np.uint8).reshape(-1, 3).astype(np.uint16)
+    return ((a[:, 0] * 29 + a[:, 1] * 150 + a[:, 2] * 77) >> 8).astype(np.uint8).tobytes()
+
+
 class VideoStream(threading.Thread):
     """ffmpeg reading one of the camera's sub-streams as small grey frames, to
     a callback. /media/live/202 is thermal, /media/live/102 the colour camera
     (found via ONVIF GetStreamUri on the demo unit). A local relay carries
     RTSP because ffmpeg cannot use an IPv6 zone (fe80::…%en8) in a URL."""
 
-    def __init__(self, host, username, password, on_frame, port=554, path="/media/live/202", w=W, h=H):
+    def __init__(self, host, username, password, on_frame, port=554, path="/media/live/202", w=W, h=H, on_colour=None):
         super().__init__(daemon=True, name=f"video:{host}{path}")
         self.host, self.port, self.path, self.w, self.h = host, port, path, w, h
         self.username, self.password, self.on_frame = username, password, on_frame
+        # on_colour(bgr, t): the same frame in colour as well (needs numpy) —
+        # for the horse detector and recognition; on_frame still gets grey.
+        self.on_colour = on_colour
         self.stop_evt = threading.Event()
         self.proc = None
         self.error = None
@@ -633,19 +642,24 @@ class VideoStream(threading.Thread):
             cred = f"{urllib.parse.quote(self.username)}:{urllib.parse.quote(self.password)}"
             url = f"rtsp://{cred}@127.0.0.1:{port}{self.path}"
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "8000000",
-                   "-i", url, "-map", "0:v:0", "-an", "-vf", f"fps={FPS},scale={self.w}:{self.h},format=gray", "-f", "rawvideo", "pipe:1"]
+                   "-i", url, "-map", "0:v:0", "-an", "-vf", f"fps={FPS},scale={self.w}:{self.h},format={'bgr24' if self.on_colour else 'gray'}",
+                   "-f", "rawvideo", "pipe:1"]
             try:
                 self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             except FileNotFoundError:
                 self.error = "ffmpeg is not installed — install it to measure breathing and behaviour from video"
                 return
-            size = self.w * self.h
+            size = self.w * self.h * (3 if self.on_colour else 1)
             while not self.stop_evt.is_set():
                 chunk = self.proc.stdout.read(size)
                 if not chunk or len(chunk) < size:
                     break
                 self.frames += 1
-                self.on_frame(chunk, time.time())
+                t = time.time()
+                if self.on_colour:
+                    self.on_colour(chunk, t)
+                    chunk = grey_of(chunk)
+                self.on_frame(chunk, t)
             if self.proc.poll() is None:
                 self.proc.kill()
             err = clean_ffmpeg_error((self.proc.stderr.read() or b"").decode(errors="replace"))

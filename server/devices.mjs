@@ -701,6 +701,7 @@ export function deviceApi({ store, json, CORS }) {
 
     if (url.pathname === "/edge/config" && req.method === "GET") {
       store.update("devices", edge.id, { lastSeen: now() });
+      const horses = store.list("horses");
       const devices = list().filter((d) => d.edgeId === edge.id && d.enabled !== false).map((d) => {
         const base = { id: d.id, kind: d.kind, name: d.name, stall: d.stall, host: d.host };
         if (d.kind === "thermal_camera") {
@@ -715,6 +716,9 @@ export function deviceApi({ store, json, CORS }) {
             protocol: d.protocol || "auto",
             record: d.record === true, rtspPort: d.rtspPort,
             behaviourStream: d.behaviourStream || "visible",
+            // The horse the roster puts in this stall: recognition checks it is
+            // the one standing there, and learns its look (edge/identity.py).
+            stallHorse: (({ id, name } = {}) => (id ? { id, name } : null))(horses.find((h) => stallOf(h) && stallOf(h) === d.stall)),
             colourStream: d.colourStream || "sub",
             // Urine/manure split from the floor cooling test (null = the
             // edge agent's default guess).

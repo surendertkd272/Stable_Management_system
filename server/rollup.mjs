@@ -263,6 +263,18 @@ function evaluate(bio, rd) {
     // fall through: recent-ish data is still worth evaluating
   }
 
+  // ---- is it this horse? (edge/identity.py) -------------------------------- //
+  // Three looks in a row within the hour, all clearly another enrolled horse:
+  // the readings under this name may belong to that horse (stalls swapped).
+  const ids = rd.filter((r) => r.metric === "horse_identity").sort((a, b) => a.ts.localeCompare(b.ts)).slice(-3);
+  if (ids.length === 3 && ids.every((r) => r.meta?.verdict === "other" && r.meta?.best === ids[0].meta?.best)
+      && Date.now() - Date.parse(ids[0].ts) <= 3600000) {
+    const other = ids[2].meta?.bestName || ids[2].meta?.best;
+    push("Different horse in the stall?", "warn",
+      `The camera's last ${ids.length} looks at the horse in ${bio.name}'s stall match ${other}, not ${bio.name}. Check which horse is in the stall and update the Horses page — until then these readings may be ${other}'s.`,
+      ids[2].ts, ids[0].ts);
+  }
+
   const temp = latest(rd, "body_temp_c");
   const resp = latest(rd, "respiratory_rate_bpm");
   if (uncalibrated(temp) || uncalibrated(resp)) {
@@ -884,7 +896,9 @@ export function vitalsForHorse(rd) {
                         ...(r.metric === "breathing_check" || r.metric === "eye_check" ? { detail: r.meta?.detail ?? null } : {}),
                         // Where in the thermal view (0–10000) the eye / the breathing was found, for the Live view.
                         ...(r.meta?.where ? { where: r.meta.where } : {}), ...(r.meta?.box ? { box: r.meta.box } : {}),
-                        ...(r.meta?.method ? { method: r.meta.method } : {}) };
+                        ...(r.meta?.method ? { method: r.meta.method } : {}),
+                        ...(r.metric === "horse_identity" ? { identity: { verdict: r.meta?.verdict ?? null, samples: r.meta?.samples ?? 0,
+                          best: r.meta?.bestName ?? r.meta?.best ?? null, bestScore: r.meta?.bestScore ?? null } } : {}) };
   }
   return out;
 }

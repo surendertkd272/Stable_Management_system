@@ -1163,19 +1163,29 @@ class MtrpcCameraWorker(CameraWorker):
                     self.vanalyzer.feed(frame, flank_bounds=fb, t=t, focus=fo, ignore=ig)
                     self.last_visible = (frame, t)
 
-            # Full HD colour when the camera is set to it: the same picture,
-            # less compressed; analysed at the same small size.
-            vpath = "/media/live/101" if d.get("colourStream") == "main" else "/media/live/102"
-            self.vvideo = VideoStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_visible,
-                                      port=d.get("rtspPort", 554), path=vpath, w=vw, h=vh)
-            self.vvideo.start()
+            started_detector = False
             if self.behaviour_stream() == "visible" and self.detector is None and self.detector_note is None:
                 from detector import load  # noqa
                 self.detector, self.detector_note = load(os.environ.get("EQUICARE_DETECTOR_MODEL"))
                 if self.detector_note:
                     print(f"[edge] {self.name}: {self.detector_note} — lying is not measured")
                 else:
-                    threading.Thread(target=self._detect_loop, daemon=True, name=f"detect:{self.name}").start()
+                    started_detector = True
+
+            # The detector (and recognition) look at the colour frame itself:
+            # far better than grey for a brown horse on brown straw (2 Oct).
+            def on_colour(frame, t):
+                with self._lock:
+                    self.last_colour = (frame, t)
+            # Full HD colour when the camera is set to it: the same picture,
+            # less compressed; analysed at the same small size.
+            vpath = "/media/live/101" if d.get("colourStream") == "main" else "/media/live/102"
+            self.vvideo = VideoStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_visible,
+                                      port=d.get("rtspPort", 554), path=vpath, w=vw, h=vh,
+                                      on_colour=on_colour if self.detector is not None else None)
+            self.vvideo.start()
+            if started_detector:
+                threading.Thread(target=self._detect_loop, daemon=True, name=f"detect:{self.name}").start()
 
     def _detect_loop(self):
         """The horse's box in the colour picture, once a second, into the
@@ -1273,7 +1283,53 @@ class MtrpcCameraWorker(CameraWorker):
         if evs:
             with self._lock:
                 self.cfloor_events += evs
+        if best and look is not snap[0]:                     # recognition needs the colour frame
+            self._identity_step(look, vw, vh, best, persons, t)
         return True
+
+    IDENTITY_EVERY_S = 120.0           # a look at who the horse is, every 2 min of video
+    LEARN_UP_TO = 60                   # gallery size learned automatically for the stall's horse
+
+    def _identity_step(self, frame, w, h, best, persons, t):
+        """Is the horse in this stall the one the roster puts here? Every
+        IDENTITY_EVERY_S with a clear view (whole horse, no people): its
+        fingerprint against the enrolled horses (edge/identity.py), sent as
+        horse_identity. While the stall's horse has a small gallery, clear
+        looks that are not clearly another enrolled horse are added to it."""
+        mine = self.dev.get("stallHorse") or {}
+        if persons or best.get("edges", 0) >= 2 or (best["x1"] - best["x0"]) * (best["y1"] - best["y0"]) < 0.03:
+            return
+        if t - getattr(self, "_id_last", -1e9) < self.IDENTITY_EVERY_S or not mine.get("id"):
+            return
+        if getattr(self, "identifier", None) is None:
+            if getattr(self, "identity_note", None):
+                return
+            from identity import Gallery, load  # noqa
+            self.identifier, self.identity_note = load(os.environ.get("EQUICARE_IDENTITY_MODEL"))
+            if self.identity_note:
+                print(f"[edge] {self.name}: {self.identity_note} — horse recognition off")
+                return
+            self.gallery = Gallery(STATE_DIR / "identity.json")
+        from identity import decide  # noqa
+        import numpy as np
+        self._id_last = t
+        try:
+            vec = self.identifier.embed(np.frombuffer(frame, dtype=np.uint8).reshape(h, w, 3), best)
+        except Exception as e:                              # noqa: BLE001
+            print(f"[edge] {self.name}: horse recognition failed ({e}) — off")
+            self.identifier, self.identity_note = None, f"recognition failed: {e}"
+            return
+        if vec is None:
+            return
+        res = decide(self.gallery, vec, mine["id"])
+        names = {k: h.get("name", k) for k, h in self.gallery.data["horses"].items()}
+        if self.dev.get("identityLearn", True) and res["verdict"] != "other" and res["samples"] < self.LEARN_UP_TO:
+            if self.gallery.add(mine["id"], vec, t=t, name=mine.get("name"), src=self.dev["id"]):
+                self.gallery.save()
+                res["learned"] = True
+        res.update(assignedName=mine.get("name") or mine["id"], bestName=names.get(res["best"]) if res["best"] else None)
+        self.emit([dict(deviceId=self.dev["id"], metric="horse_identity", value=round(res["assignedScore"] or 0.0, 3),
+                        unit="score", ts=now_iso(), source="visible_video", confidence=1.0, meta=res)])
 
     def _live_breathing(self, rois):
         """The breathing rate of the last 35 s, for the Live view, sent at once

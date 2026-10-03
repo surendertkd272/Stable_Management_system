@@ -72,6 +72,11 @@ export const METRICS = {
   // meta.grid over the picture). For the report's time budget and stall map.
   time_budget:          { point: 5,  label: "Time budget",          unit: "s",     source: "visible_video",  kind: "diagnostic" },
   respiratory_rate_live_bpm: { point: 4, label: "Breathing (last 35 s)", unit: "bpm", source: "thermal_video", kind: "diagnostic" },
+  // Is the horse in the stall the one the roster puts there? (edge/identity.py,
+  // every few minutes from the colour picture). value: how alike it is to that
+  // horse's gallery (0–1); meta.verdict match / other / unsure / learning,
+  // meta.best(Name) the most alike enrolled horse.
+  horse_identity:       { point: 5,  label: "Horse recognition",    unit: "score", source: "visible_video",  kind: "diagnostic" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },
 };

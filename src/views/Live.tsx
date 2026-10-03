@@ -206,6 +206,9 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
       <div className="card" style={{ marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
         <div className="grow" style={{ minWidth: 220 }}>
           <b style={{ fontSize: 15 }}>{cam.name}</b> · stall {cam.stall}{horse ? ` · ${horse.name}` : " · no horse in this stall on the Horses page"}
+          {horse && v.horse_identity?.identity && ageS(v.horse_identity.ts) < 1800 && (
+            <IdentityPill name={horse.name} id={v.horse_identity.identity} score={v.horse_identity.value} at={v.horse_identity.ts} />
+          )}
           <div className="muted" style={{ fontSize: 12.5 }}>
             <CircleDot size={11} color={status?.state === "online" ? "var(--positive)" : "var(--warn)"} /> {status?.state ?? "?"} — {status?.detail}
             {" · "}{cam.record ? "recording video for the report" : "NOT recording (Hardware → edit camera → Record video)"}
@@ -286,4 +289,15 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
       </div>
     </>
   );
+}
+
+/** Who the camera thinks the horse in the stall is (edge/identity.py). */
+function IdentityPill({ name, id, score, at }: { name: string; id: { verdict: string | null; samples: number; best: string | null; bestScore: number | null }; score: number; at: string }) {
+  const t = new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const [cls, text] =
+    id.verdict === "match" ? ["ok", `recognised as ${name} (${score.toFixed(2)})`]
+    : id.verdict === "other" ? ["alert", `looks like ${id.best ?? "another horse"}, not ${name} — check which horse is in the stall`]
+    : id.verdict === "learning" ? ["warn", `learning ${name}'s look (${id.samples} of 12 views)`]
+    : ["warn", `not sure this is ${name} (${score.toFixed(2)})`];
+  return <span className={`pill ${cls}`} style={{ marginLeft: 8 }} title={`Horse recognition, ${t}`}>{text}</span>;
 }

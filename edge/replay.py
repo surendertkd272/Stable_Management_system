@@ -382,10 +382,14 @@ def device_from_state(state_file, dev_id):
     rois = {k: v for k, v in (d.get("rois") or {}).items() if k not in ("eye", "floor", "pushedAt", "verified", "stale")}
     if not rois.get("nostril"):
         raise SystemExit("this camera has no calibration boxes — calibrate it first (the nostril box is needed)")
+    # The horse the roster has in this stall: recognition checks the recorded
+    # horse is that one (it does not learn from old footage).
+    horse = next((h for h in s["entities"].get("horses", []) if d.get("stall") and h.get("stall") == d.get("stall")), None)
     return {"id": d["id"], "name": d.get("name") or d["id"], "kind": "thermal_camera", "rois": rois,
             "calibratedAt": (d.get("rois") or {}).get("pushedAt"),
             "calibrated": not (d.get("rois") or {}).get("stale"), "behaviourStream": d.get("behaviourStream"),
-            "colourStream": None, "floorCalib": d.get("floorCalib") or {}}
+            "colourStream": None, "floorCalib": d.get("floorCalib") or {},
+            "stallHorse": {"id": horse["id"], "name": horse.get("name") or horse["id"]} if horse else None, "identityLearn": False}
 
 
 def post(server, token, readings, batch=500):

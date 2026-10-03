@@ -183,7 +183,9 @@ export interface HorseDetail {
   /** breathing_check / eye_check (diagnostics) carry `detail`: how, or why the last minute had no reading.
    *  `where` (eye) and `box` (breathing) say where in the thermal view (0–10000) it was found. */
   vitals: Record<string, { value: number; unit: string | null; ts: string; source: string | null; confidence: number; calibrated?: boolean;
-    detail?: string | null; method?: string; where?: { x: number; y: number }; box?: { x0: number; y0: number; x1: number; y1: number } }>;
+    detail?: string | null; method?: string; where?: { x: number; y: number }; box?: { x0: number; y0: number; x1: number; y1: number };
+    /** horse_identity: is the horse in the stall this one (edge/identity.py)? */
+    identity?: { verdict: "match" | "other" | "unsure" | "learning" | null; samples: number; best: string | null; bestScore: number | null } }>;
   // null entries are days with no reading — never render them as zero.
   charts: Record<string, (number | null)[]>;
   /** Absent from a server that predates the wearable / stall sensors. */
