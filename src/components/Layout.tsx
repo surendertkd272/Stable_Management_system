@@ -39,10 +39,11 @@ import { useAuth } from "../auth";
 import { useStable, useToast, useMares } from "../store";
 import { Horse } from "../data/mock";
 import { apiConfigured } from "../data/api";
+import { FEATURES } from "../features";
 import { Modal } from "./ui";
 import { useT } from "../i18n";
 
-type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; adminOnly?: boolean; staffOnly?: boolean };
+type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; adminOnly?: boolean; staffOnly?: boolean; feature?: keyof typeof FEATURES };
 
 const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
@@ -78,8 +79,8 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
     title: "Business",
     items: [
-      { to: "/billing", label: "Billing", icon: Receipt },
-      { to: "/portal", label: "Owner Portal", icon: UserCircle },
+      { to: "/billing", label: "Billing", icon: Receipt, feature: "billing" },
+      { to: "/portal", label: "Owner Portal", icon: UserCircle, feature: "ownerPortal" },
     ],
   },
   {
@@ -101,6 +102,7 @@ function Rail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
   // Signed-in: role decides. No auth (demo / open local backend): show all.
   const canSee = (n: NavItem) =>
+    (!n.feature || FEATURES[n.feature]) &&
     (!n.adminOnly || !authRequired || user?.role === "admin") &&
     (!n.staffOnly || !authRequired || user?.role === "admin" || user?.role === "staff");
 
