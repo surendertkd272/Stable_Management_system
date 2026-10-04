@@ -279,6 +279,75 @@ class MotionMeter:
         return out
 
 
+class FreezeWatch:
+    """The thermal camera recalibrating itself (flat-field correction): its
+    picture stops — the same frame, byte for byte, apart from the painted
+    clock — for about a second, then jumps. The 13 mm unit does it every 62 s
+    and uses the scene as its blank, so afterwards the horse's last position
+    shows as a dark ghost and the contrast drops by up to two thirds (RVC,
+    1–2 Oct; the 25 mm unit never did).
+
+    Measured on six hours of that night at the analysis size (176×144, 10 fps):
+    a live picture practically never repeats a frame — even the stillest 5 %
+    of frames change 9 % of their pixels — while a recalibration repeats
+    13–15 frames, then 93–95 % of the picture changes. Rule: 5 repeated frames
+    within 2.5 s is a recalibration; it is over at the first live frame. (A
+    stream that stalls, which ffmpeg fills with repeats, counts too — rightly:
+    nothing was seen then.)
+    feed() -> (repeat, recalibrated): skip a repeat (it says nothing new);
+    `recalibrated` marks the first live frame after one."""
+
+    SAME = 0.002              # share of pixels changed at all: below this the frame is a repeat
+    WITHIN_S = 2.5
+    MIN_REPEATS = 5
+    MERGE_S = 5.0             # freezes this close together are one recalibration
+
+    def __init__(self, fs=FPS, w=W, h=H, mask=None):
+        self.fs = fs
+        mask = mask or (MASK if (w, h) == (W, H) else make_mask(w, h))
+        if np is not None:
+            self._idx = np.flatnonzero(np.array(mask, dtype=bool))
+        else:                                               # every 2nd pixel each way
+            self._idx = [y * w + x for y in range(0, h, 2) for x in range(0, w, 2) if mask[y * w + x]]
+        self.prev = None
+        self.frame_no = 0
+        self.repeats = []                   # frame numbers of recent repeats
+        self.in_freeze = False
+        self.count = 0                      # recalibrations seen
+        self.last_t = None                  # when the last one ended (the caller's clock)
+        self.frozen_frames = 0
+
+    def busy(self, t, settle_s=1.0):
+        """Is the camera recalibrating at t, or did it just finish? Pixel
+        temperatures read then are not trusted."""
+        return self.in_freeze or (self.last_t is not None and 0 <= t - self.last_t < settle_s)
+
+    def feed(self, frame, t=None):
+        self.frame_no += 1
+        if np is not None:
+            v = np.frombuffer(frame, dtype=np.uint8)[self._idx]
+            changed = 1.0 if self.prev is None else float(np.count_nonzero(v != self.prev)) / max(1, len(v))
+        else:
+            v = [frame[i] for i in self._idx]
+            changed = 1.0 if self.prev is None else sum(1 for a, b in zip(v, self.prev) if a != b) / max(1, len(v))
+        self.prev = v
+        if changed < self.SAME:
+            self.repeats = [f for f in self.repeats if self.frame_no - f <= self.WITHIN_S * self.fs] + [self.frame_no]
+            if len(self.repeats) >= self.MIN_REPEATS:
+                self.in_freeze = True
+            self.frozen_frames += 1
+            return True, False
+        if self.in_freeze:
+            self.in_freeze, self.repeats = False, []
+            t = time.time() if t is None else t
+            # one recalibration can freeze in two pieces: counted once, a break after each
+            if self.last_t is None or not (0 <= t - self.last_t < self.MERGE_S):
+                self.count += 1
+            self.last_t = t
+            return False, True
+        return False, False
+
+
 class WindowAnalyzer:
     """Feed frames; call summary() at the end of each window.
 
@@ -309,6 +378,10 @@ class WindowAnalyzer:
         self.flank_bounds = None
         self.posture = posture
         self.n_frames = 0
+        # Thermal: the camera's own recalibrations — repeated frames are left
+        # out, and each one is a break no breathing stretch may span.
+        self.freeze = FreezeWatch(fs, w, h, self.mask) if mode == "thermal" else None
+        self.roll_since = 0                 # roll samples since the last recalibration
         # The last ROLL_S seconds of the breathing signals, kept across
         # windows (reset() leaves them): the Live view's breathing every 10 s.
         self.roll = deque(maxlen=int(fs * self.ROLL_S))
@@ -321,11 +394,20 @@ class WindowAnalyzer:
         self.fracs, self.cx, self.mx, self.sx, self.sy, self.t0 = [], [], [], [], [], time.time()
         self.nostril, self.nref, self.glob, self.flank = [], [], [], []
         self.blocks = []
+        self.nostril_breaks, self.block_breaks = [], []
+        self.recal_at_reset = self.freeze.count if self.freeze else 0
+        self.frozen_at_reset = self.freeze.frozen_frames if self.freeze else 0
         self.scene_changes = self.motion.scene_changes
         self.sway.paired()
 
     def feed(self, frame, nostril_bounds=None, flank_bounds=None, t=None, focus=None, ignore=()):
         t = time.time() if t is None else t
+        if self.freeze is not None:
+            repeat, recalibrated = self.freeze.feed(frame, t)
+            if repeat:
+                return                                     # a repeated frame says nothing new
+            if recalibrated:
+                self._recalibrated()
         self.n_frames += 1
         frac, cx = self.motion.feed(frame, focus, ignore)
         if frac is None:                                   # scene change: this frame says nothing
@@ -346,6 +428,7 @@ class WindowAnalyzer:
             self.roll.append((self.nostril[-1], self.nref[-1], self.glob[-1]))
         else:
             self.roll.append((None, None, None))
+        self.roll_since += 1
         if flank_bounds:
             if self.flank_sway is None or self.flank_bounds != flank_bounds:
                 # A new region (re-aimed, or the horse moved): start a fresh
@@ -361,6 +444,27 @@ class WindowAnalyzer:
         if self.posture is not None and self.n_frames % self.POSTURE_EVERY == 0 and self.mode == "thermal":
             self.posture.feed(t, warm_blob_box(frame, self.w, self.h, self.mask), self.recent_motion())
 
+    def _recalibrated(self):
+        """The camera recalibrated: everything compared with earlier frames
+        starts again — movement against a fresh picture, and a break in the
+        breathing signals (the nostril's, and the whole-view search's)."""
+        self.motion.ring = []
+        self.sway.reset()
+        self.nostril_breaks.append(len(self.nostril))
+        self.block_breaks.append(len(self.blocks))
+        self.roll_since = 0
+
+    def _with_breaks(self, bad, breaks):
+        """`bad` with a second dropped after each recalibration."""
+        pad = int(self.fs)
+        for i in breaks:
+            for k in range(max(0, i - 1), min(len(bad), i + pad)):
+                bad[k] = True
+        return bad
+
+    def recalibrating(self, t):
+        return bool(self.freeze and self.freeze.busy(t))
+
     def breathing_recent(self, compute_resp_rate, seconds=35):
         """The breathing of the last `seconds`, across window boundaries — the
         same analysis as a window's (a 30 s still stretch, the same band and
@@ -368,7 +472,8 @@ class WindowAnalyzer:
         None, "flank": result or None}; a result is breath_analysis's."""
         n = int(self.fs * seconds)
         out = {"nostril": None, "flank": None}
-        pairs = [(a, b, g) for a, b, g in list(self.roll)[-n:] if a is not None and b is not None]
+        # only since the camera last recalibrated: a stretch must not span one
+        pairs = [(a, b, g) for a, b, g in list(self.roll)[-min(n, self.roll_since):] if a is not None and b is not None]
         if len(pairs) >= 0.9 * n:
             bad = bad_samples([b for _, b, _ in pairs], [g for _, _, g in pairs], self.fs)
             out["nostril"] = breath_analysis([a - b for a, b, _ in pairs], self.fs, compute_resp_rate, bad)
@@ -432,7 +537,7 @@ class WindowAnalyzer:
         for _, i in sorted(scored, reverse=True)[:self.SEARCH_TOP]:
             ref = [sum(f[j] for j in ring(i)) / 8 for f in self.blocks]
             sig = [f[i] - rv for f, rv in zip(self.blocks, ref)]
-            res = breath_analysis(sig, self.fs, compute_resp_rate, bad_samples(ref, glob, self.fs))
+            res = breath_analysis(sig, self.fs, compute_resp_rate, self._with_breaks(bad_samples(ref, glob, self.fs), self.block_breaks))
             if res.get("bpm") and (best is None or res["strength"] > best["strength"]):
                 c, r = i % C, i // C
                 best = dict(res, box={"x0": round(c * 10000 / C), "y0": round(r * 10000 / R),
@@ -457,6 +562,9 @@ class WindowAnalyzer:
         n = len(self.fracs)
         out = {"frames": n, "seconds": n / self.fs if self.fs else 0,
                "scene_changes": self.motion.scene_changes - self.scene_changes}
+        if self.freeze is not None:
+            out["recalibrations"] = self.freeze.count - self.recal_at_reset
+            out["frozen_s"] = round((self.freeze.frozen_frames - self.frozen_at_reset) / self.fs, 1)
         if n < self.fs * 10:
             return out
         mean_frac = sum(self.fracs) / n
@@ -519,10 +627,14 @@ class WindowAnalyzer:
                                                  and not (out.get("weave") or {}).get("detected"))}
         # Breathing from the nostril box, referenced to the skin around it
         # (cancels the palette re-ranging) and gated on head movement.
-        pairs = [(a, b, g) for a, b, g in zip(self.nostril, self.nref, self.glob) if a is not None and b is not None]
+        keep = [k for k, (a, b) in enumerate(zip(self.nostril, self.nref)) if a is not None and b is not None]
+        pairs = [(self.nostril[k], self.nref[k], self.glob[k]) for k in keep]
         if len(pairs) >= self.fs * 15:
             sig = [a - b for a, b, _ in pairs]
             bad = bad_samples([b for _, b, _ in pairs], [g for _, _, g in pairs], self.fs)
+            # the camera's recalibrations, at their place among the kept samples
+            pos = {k: j for j, k in enumerate(keep)}
+            bad = self._with_breaks(bad, [pos.get(i, next((j for j, k in enumerate(keep) if k >= i), len(keep))) for i in self.nostril_breaks])
             br = breath_analysis(sig, self.fs, compute_resp_rate, bad)
             br["swing"] = max(sig) - min(sig)
             out["breathing"] = br

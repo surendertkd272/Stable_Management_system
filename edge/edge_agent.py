@@ -1101,6 +1101,25 @@ class MtrpcCameraWorker(CameraWorker):
     def _hd_path(self):
         return "/media/live/101"
 
+    # -- the camera recalibrating itself (video_analytics.FreezeWatch) -------- #
+    def _recalibrating(self):
+        a = self.analyzer
+        return bool(self.HAS_THERMAL and a is not None and a.recalibrating(time.time()))
+
+    def _wait_recalibration(self, max_s=3.0):
+        """Temperatures are not read while the camera recalibrates, nor in the
+        second after (the 13 mm unit's picture is then re-based on the scene)."""
+        t0 = time.time()
+        while self._recalibrating() and time.time() - t0 < max_s and not self.stop_evt.is_set():
+            self.stop_evt.wait(0.2)
+
+    def _note_recalibrations(self, summary):
+        n = summary.get("recalibrations") or 0
+        if n and not getattr(self, "_recal_logged", False):
+            print(f"[edge] {self.name}: the thermal camera recalibrated itself {n}× this minute "
+                  f"(picture frozen {summary.get('frozen_s', 0)} s) — breathing and temperatures restart after each")
+            self._recal_logged = True
+
     def _require_rois(self, rois):
         if not rois or not rois.get("nostril"):
             raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
@@ -1580,7 +1599,7 @@ class MtrpcCameraWorker(CameraWorker):
                 v = self.cam.box_avg(rois["nostril"])
                 if v is not None:
                     pixel_window.append(v)
-            if tick - last_floor >= self.FLOOR_EVERY_S:
+            if tick - last_floor >= self.FLOOR_EVERY_S and not self._recalibrating():
                 lying_recent = self.posture is not None and self.posture.state == "lying"
                 floor_events += self._floor_scan(rois, calib, lying_recent)
                 last_floor = tick
@@ -1593,6 +1612,8 @@ class MtrpcCameraWorker(CameraWorker):
             posture = self.posture.drain() if self.posture else None
         if self.posture is not None:
             self._save_posture()
+        self._note_recalibrations(summary)
+        self._wait_recalibration()                           # no pixel temperatures mid-recalibration
         # The eye, if it is in view: eye-shaped, not just warm (see behaviour.eye_spot).
         from behaviour import eye_spot  # noqa
         eye, eye_why, eye_method, box_peak, eye_at, eye_where = None, "no eye box drawn", None, None, None, None
@@ -1697,6 +1718,7 @@ class MtrpcCameraWorker(CameraWorker):
         add("breathing_check", 1 if pick else 0, "0/1", source="thermal_video" if self.HAS_THERMAL else "visible_video", conf=1.0,
             reason="measured" if pick else why_not, nostril=nostril, flank=flank,
             detail=f"{method}" if pick else BREATHING_WHY[why_not],
+            **({"recalibrations": summary["recalibrations"]} if summary.get("recalibrations") else {}),
             **({"box": pick["box"]} if pick and pick.get("box") else {}),
             stillS=(summary.get("breathing") or {}).get("seconds"))
         # Behaviour — prototype heuristics, reported as such.

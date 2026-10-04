@@ -284,6 +284,9 @@ def make_worker(dev, posture_state, detector_model, clock, sink):
         def _note_eye(self, why):
             pass
 
+        def _wait_recalibration(self, max_s=3.0):         # no temperatures to protect; minutes stay on the clock
+            pass
+
         def _log_warnings(self):
             pass
 
