@@ -25,6 +25,7 @@ import { currentSettings, mergeSettings, saveSettings, activityBands } from "./s
 import { sessionReport } from "./session.mjs";
 import { clientReport, safeTimeZone } from "./client_report.mjs";
 import { insightsApi } from "./insights-api.mjs";
+import { recycleApi } from "./recycle.mjs";
 import { htmlToPdf } from "./pdf.mjs";
 import { compare as baselineCompare } from "./baseline.mjs";
 import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
@@ -62,10 +63,16 @@ let store;
 async function ready() {
   G.ready ??= (async () => {
     const s = await createStore();
-    s.seed("horses", SEED_ROSTER);
+    // The demo roster, once only: a yard that deleted every horse must not get
+    // the sample horses back on the next start.
+    if (!s.list("flags").some((f) => f.id === "horses-seeded")) {
+      s.seed("horses", SEED_ROSTER);
+      s.create("flags", { id: "horses-seeded", at: new Date().toISOString() });
+    }
     ensureAdmin(s);   // first boot only; prints a generated password once
     G.devices = deviceApi({ store: s, json, CORS });
     G.insights = insightsApi({ store: s, json, CORS, roster: () => s.list("horses") });
+    G.recycle = recycleApi({ store: s, json });
     G.devices.migrate();           // camera-only records from the first hardware version
     // A leg recording waits for the hub's own (head) recording, and the
     // pelvis sensor's when the hub has one paired.
@@ -79,6 +86,7 @@ async function ready() {
     const every = Number(process.env.EQUICARE_NOTIFY_TICK_MS ?? 60000);
     if (every > 0 && !G.notifyTimer) {
       G.notifyTimer = setInterval(() => {
+        G.recycle?.purgeExpired();                    // horses past their 30 days in the bin
         const all = s.allReadings(), horses = s.list("horses");
         const alerts = buildAlerts(horses, all, s.isAcked);
         if (G.devices?.deviceAlerts) alerts.push(...G.devices.deviceAlerts(s.isAcked));
@@ -696,6 +704,12 @@ export async function handle(req) {
     if (path === "/api/hardware/spec" && method === "GET") return json(200, SC_IT6420_HB_V2);
     if (path === "/api/devices" || path.startsWith("/api/devices/")) {
       const res = await devices.handleDevices(req, url, who, visibleRoster);
+      if (res) return res;
+    }
+
+    // ---- deleting a horse: a 30-day recycle bin (before the generic routes) -- //
+    if ((/^\/api\/horses\/[^/]+$/.test(path) && method === "DELETE") || path.startsWith("/api/bin/")) {
+      const res = await G.recycle.handle(req, url, who);
       if (res) return res;
     }
 

@@ -117,7 +117,6 @@ function EventCard({ e, ticket, open, onOpen, onReview, showHorse }: {
         {showHorse && <span className="muted" style={{ fontSize: 13 }}>{e.horseName}</span>}
         <span className="muted" style={{ fontSize: 13 }}>{time(e.at)}</span>
         {e.detail && <span className="muted" style={{ fontSize: 12.5 }}>· {e.detail}</span>}
-        {e.prototype && <span className="pill muted" title="A prototype camera measure — not yet validated on horses">prototype</span>}
         <div className="grow" />
         {e.review && <span className={`pill ${e.review.verdict === "confirmed" ? "ok" : "muted"}`}>{e.review.verdict === "confirmed" ? "confirmed" : "corrected"} · {e.review.by}</span>}
       </div>

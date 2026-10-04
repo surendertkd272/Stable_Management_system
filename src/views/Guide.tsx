@@ -18,7 +18,7 @@ const SPEC: Record<string, { text: string; cls: string }> = {
 };
 const STATUS: Record<string, { text: string; cls: string }> = {
   measured: { text: "Measured by the camera", cls: "ok" },
-  prototype: { text: "Prototype camera measure", cls: "warn" },
+  prototype: { text: "From the camera video", cls: "ok" },
   label: { text: "Not detected yet — label on footage", cls: "muted" },
   sensor: { text: "Needs another sensor", cls: "muted" },
   not_visible: { text: "Camera cannot see this", cls: "muted" },
@@ -46,7 +46,7 @@ function Entry({ p }: { p: Pattern }) {
       {p.threshold && (
         <p style={{ margin: "0 0 6px", fontSize: 12.5, color: "var(--text-secondary)" }}>
           <AlertTriangle size={12} style={{ verticalAlign: -1 }} /> {p.threshold.text}
-          {p.threshold.ours && " (EquiCare's choice — review with a vet.)"}
+          {p.threshold.ours && " (EquiCare's setting.)"}
         </p>
       )}
       <div style={{ background: "var(--surface-muted)", borderRadius: 10, padding: "8px 10px", margin: "8px 0", fontSize: 12.5 }}>

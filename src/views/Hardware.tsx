@@ -1813,7 +1813,7 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
               : mode === "nostril"
                 ? "Drag a tight box over the nostril. Breathing is read from the box's average, so keep coat and background out of it."
                 : mode === "floor"
-                  ? "Optional: drag a box over the floor where the horse stands. Fresh urine and manure show as warm patches there (prototype detector). Keep the horse's body out of it if you can."
+                  ? "Optional: drag a box over the floor where the horse stands. Fresh urine and manure show as warm patches there. Keep the horse's body out of it if you can."
                   : mode === "flank"
                     ? "Optional, on the COLOUR picture: drag a box over the horse's flank (behind the ribs). Without one, the flank is found automatically whenever the horse stands still (needs the lying detector)."
                     : "On the COLOUR picture: drag a box over the bedding the colour camera should watch — new manure piles and wet (darker) bedding are counted once the horse has moved away. This is how one camera covers urination and manure; it needs the lying detector (it masks out the horse). Without a box, the floor is not watched."}{" "}

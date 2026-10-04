@@ -531,7 +531,7 @@ export default function Dashboard() {
               <b style={{ fontSize: 15, color: "var(--ink)" }}>
                 {livePoints} of {points.size} monitoring points live
               </b>
-              {protoPoints > 0 && <span className="pill warn">{protoPoints} prototype</span>}
+              {protoPoints > 0 && <span className="pill ok">{protoPoints} from camera video</span>}
               {modelPoints > 0 && <span className="pill muted">{modelPoints} awaiting model</span>}
             </div>
             <div className="progress" style={{ height: 7, marginBottom: 16 }}>

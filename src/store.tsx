@@ -72,6 +72,10 @@ interface StableCtx {
   stallions: Stallion[];
   series: typeof seedSeries;
   addHorse: (h: NewHorse) => void;
+  /** To the recycle bin (server) and off the list here. Resolves to an error message, or null. */
+  removeHorse: (id: string) => Promise<string | null>;
+  /** After a restore: fetch the roster again. */
+  refreshHorses: () => Promise<void>;
   addDiary: (d: NewDiary) => void;
   addHealth: (t: NewHealth) => void;
   toggleHealth: (id: string) => void;
@@ -175,6 +179,17 @@ export function StableProvider({ children }: { children: ReactNode }) {
         baselineProgress: 0,
       },
     ]);
+  }, []);
+
+  const removeHorse = useCallback(async (id: string) => {
+    const r = await api.deleteHorse(id);
+    if (!r.ok) return r.error;
+    setHorses((list) => list.filter((h) => h.id !== id));
+    return null;
+  }, []);
+  const refreshHorses = useCallback(async () => {
+    const h = await api.getHorses();
+    if (h && h.length) setHorses(h);
   }, []);
 
   const addDiary = useCallback((d: NewDiary) => {
@@ -281,6 +296,8 @@ export function StableProvider({ children }: { children: ReactNode }) {
         stallions,
         series,
         addHorse,
+        removeHorse,
+        refreshHorses,
         addDiary,
         addHealth,
         toggleHealth,

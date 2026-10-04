@@ -301,7 +301,7 @@ function CameraToday({ b }: { b: api.HorseBehaviour | undefined }) {
   return (
     <div style={{ marginTop: 12, fontSize: 12, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
       <div className="muted" style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
-        Today from the camera · prototype
+        Today from the camera
       </div>
       {lines.map((l) => <div key={l}>{l}</div>)}
     </div>

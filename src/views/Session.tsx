@@ -11,7 +11,7 @@ import * as api from "../data/api";
 import { useStable } from "../store";
 
 const PILL: Record<api.SessionPoint["status"], string> = {
-  measured: "ok", prototype: "warn", learning: "muted", "none seen": "muted", "not measured": "alert", uncalibrated: "warn",
+  measured: "ok", prototype: "ok", learning: "muted", "none seen": "muted", "not measured": "alert", uncalibrated: "warn",
 };
 const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const toLocalInput = (iso: string) => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
@@ -126,7 +126,7 @@ export default function Session() {
             )}
             <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
               Temperature and breathing come from the thermal view (head); activity, lying, vices and the floor from the colour
-              picture. Behaviour measures are prototypes, not yet validated on horses — compare them with what someone watched.
+              picture.
             </p>
           </div>
 
@@ -135,7 +135,7 @@ export default function Session() {
               <div key={p.n} className="card" style={{ padding: 16 }}>
                 <div className="flex between center" style={{ marginBottom: 6 }}>
                   <b>{p.n}. {p.label}</b>
-                  <span className={`pill ${PILL[p.status]}`}>{p.status}</span>
+                  <span className={`pill ${PILL[p.status]}`}>{p.status === "prototype" ? "measured" : p.status}</span>
                 </div>
                 <p style={{ margin: "0 0 6px", fontSize: 13.5 }}>{p.summary}</p>
                 {p.series && (

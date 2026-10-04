@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { Moon, Thermometer, Wind } from "lucide-react";
 import { Status } from "../data/mock";
 import { useStable } from "../store";
+import { useAuth } from "../auth";
+import { RecycleBinButton } from "./RecycleBin";
 import { StatusPill, MonitoringPill, isBlind, riskScore, riskBand, details } from "../components/ui";
 
 const FILTERS: { key: Status | "all"; label: string }[] = [
@@ -18,6 +20,8 @@ export default function Horses() {
   const router = useRouter();
   const nav = (to: string) => router.push(to);
   const { horses } = useStable();
+  const { user, authRequired } = useAuth();
+  const isAdmin = !authRequired || user?.role === "admin";
   const [filter, setFilter] = useState<Status | "all">("all");
   const list = horses.filter((h) => filter === "all" || h.status === filter);
 
@@ -31,8 +35,11 @@ export default function Horses() {
             </button>
           ))}
         </div>
-        <span className="muted" style={{ fontSize: 13 }}>
-          {list.length} of {horses.length} horses
+        <span className="flex center" style={{ gap: 10 }}>
+          <span className="muted" style={{ fontSize: 13 }}>
+            {list.length} of {horses.length} horses
+          </span>
+          {isAdmin && <RecycleBinButton />}
         </span>
       </div>
 

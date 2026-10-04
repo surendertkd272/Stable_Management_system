@@ -612,7 +612,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
         `Trot-up checked with ${gaitCheck.meta?.tool ?? "a handheld tool"} on ${T({ day: "numeric", month: "short" }).format(Date.parse(gaitCheck.ts))}`
         + `${gaitCheck.meta?.limb ? `, ${LIMB_NAME[gaitCheck.meta.limb] ?? gaitCheck.meta.limb}` : ""}${gaitCheck.meta?.asymmetryMm !== null && gaitCheck.meta?.asymmetryMm !== undefined ? `, ${f1(gaitCheck.meta.asymmetryMm)} mm asymmetry` : ""}. Entered by the stable; a vet should confirm any lameness.`]
       : [10, "Lameness (trot)", trot || gaitV.length ? S.ok : S.no, trot ? `${f1(trot.value)} mm` : gaitV.length ? `${Math.round(med(gaitV) * 100)}%` : "—",
-      trot ? `${limb ? `${limb[0].toUpperCase()}${limb.slice(1)} favoured` : "No limb singled out"} (${plural(trots.length, "trot")}). A screening measure being validated; a vet should confirm.`
+      trot ? `${limb ? `${limb[0].toUpperCase()}${limb.slice(1)} favoured` : "No limb singled out"} (${plural(trots.length, "trot")}). A screening measure; a vet should confirm.`
         : gaitV.length ? "Gait asymmetry index; a vet should confirm." : "Not monitored in this session."],
     [11, "Watering", waterIn || waterSeen ? S.ok : S.no, waterIn ? `${f1(total(of("water_ml")) / 1000)} L` : waterSeen ? "None" : "—",
       waterIn ? `${drinks ? plural(drinks, "drink") : "Drinking measured"}${of("water_refill").length ? "; refills not counted" : ""}.` : waterSeen ? "No drinking during the session." : "Not monitored in this session."],

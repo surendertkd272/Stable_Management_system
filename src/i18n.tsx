@@ -23,7 +23,7 @@ const HI: Record<string, string> = {
   Menu: "मेनू", "Open menu": "मेनू खोलें", "Close menu": "मेनू बंद करें",
   // status
   Calm: "शांत", Watch: "नज़र रखें", Urgent: "तुरंत", calm: "शांत", watch: "नज़र रखें", urgent: "तुरंत",
-  prototype: "प्रोटोटाइप", "not measured": "मापा नहीं गया", "Not measured": "मापा नहीं गया",
+  wearable: "वियरेबल", "not measured": "मापा नहीं गया", "Not measured": "मापा नहीं गया",
   // alerts page
   "All clear": "सब ठीक है", "No behavioural alerts": "कोई व्यवहार अलर्ट नहीं", Acknowledge: "देख लिया",
   Acknowledged: "देख लिया गया", "Needs attention": "ध्यान दें", Open: "खुले", All: "सभी",
@@ -43,7 +43,7 @@ const HI: Record<string, string> = {
   "Device error": "उपकरण में खराबी", "Device not reporting": "उपकरण रिपोर्ट नहीं कर रहा", "Edge box offline": "एज बॉक्स बंद",
   // horse page
   "Live vitals": "लाइव जाँच", "Body temperature": "शरीर का तापमान", "Respiratory rate": "साँस की दर",
-  Activity: "गतिविधि", "Activity · prototype": "गतिविधि · प्रोटोटाइप", "Daily rest": "रोज़ का आराम",
+  Activity: "गतिविधि",  "Daily rest": "रोज़ का आराम",
   "Behaviour from the camera": "कैमरे से व्यवहार", "What this may mean": "इसका क्या मतलब हो सकता है",
   "Respiration pattern": "साँस का पैटर्न", "Resting (still)": "आराम (स्थिर)", "Lying down": "लेटना",
   Urination: "पेशाब", Excretion: "लीद", Weaving: "झूलना (वीविंग)", "Box walking": "बॉक्स में चक्कर",
@@ -51,7 +51,7 @@ const HI: Record<string, string> = {
   "Camera reference": "कैमरा दृश्य", "Generate vet report": "पशु-चिकित्सक रिपोर्ट बनाएं", "Add diary note": "डायरी नोट जोड़ें",
   "read just now": "अभी पढ़ा", "last read": "आख़िरी बार पढ़ा", read: "पढ़ा", ago: "पहले", min: "मिनट", h: "घंटे", d: "दिन",
   camera: "कैमरा", "Body temperature · uncalibrated": "शरीर का तापमान · कैलिब्रेट नहीं",
-  "Respiratory rate · uncalibrated": "साँस की दर · कैलिब्रेट नहीं", "Daily rest · camera prototype": "रोज़ का आराम · कैमरा प्रोटोटाइप",
+  "Respiratory rate · uncalibrated": "साँस की दर · कैलिब्रेट नहीं", "Daily rest · camera": "रोज़ का आराम · कैमरा",
   "Water intake": "पानी", "Time outside box": "बॉक्स के बाहर समय",
   // horse page — wearable (leg tag, halter hub, pelvis) and stall sensors (water, feeder, hay)
   "Steps and lameness": "कदम और लंगड़ापन", "Steps today": "आज के कदम", Steps: "कदम", "Last 7 days": "पिछले 7 दिन",

@@ -118,6 +118,14 @@ function makeJsonStore() {
     },
     allReadings: () => state.readings,
     readingsForHorse: (id) => state.readings.filter((r) => r.horseId === id),
+    /** A horse deleted for good: its readings go too. Returns how many. */
+    removeReadingsForHorse(id) {
+      const before = state.readings.length;
+      state.readings = state.readings.filter((r) => (r.horseId === id ? (forget(r), false) : true));
+      const n = before - state.readings.length;
+      if (n) save();
+      return n;
+    },
     isAcked: (k) => !!state.acks[k],
     ackAlert(k) { state.acks[k] = true; save(); },
 

@@ -185,7 +185,7 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
         sessions.length && `${plural(sessions.length, "exercise session")}, ${exMin} min in all`].filter(Boolean).join("; ") + ".",
       { steps: nSteps, exercise: sessions.map((r) => ({ at: r.meta?.start ?? r.ts, minutes: Math.round(r.value), steps: r.meta?.steps ?? null,
         distanceM: r.meta?.distanceM ?? null })),
-        notes: ["Steps are the tagged leg's hoof strikes × 4 (all four legs) — a prototype wearable measure, not yet validated."] });
+        notes: ["Steps are the tagged leg's hoof strikes × 4 (all four legs), from the wearable."] });
   } else add(9, "Steps / locomotion", "not measured", "No step counts in this window — no leg sensor (wearable) reporting.");
 
   // 10 · lameness / limb-favouring (leg tag + head and/or pelvis sensor at the trot)
@@ -200,7 +200,7 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
       (vs.flagged ? " Flagged for a trot-up." : ""),
       { trots: trots.map((r) => ({ at: r.ts, valueMm: r1(r.value), limb: r.meta?.limb ?? null, strides: r.meta?.strides ?? null })),
         baselineMm: r1(vs.baselineMm), flagged: vs.flagged, notes: [
-          "Head and pelvis movement at the trot, from the wearable — a prototype measure, not yet validated; confirm with a trot-up and a vet.",
+          "Head and pelvis movement at the trot, from the wearable; confirm with a trot-up and a vet.",
           ...(vs.baselineMm === null ? ["Compared with this horse's own normal once it has 3 trots in 14 days."] : []),
         ] });
   } else if (gait.length) {
@@ -259,7 +259,7 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
     verify: [
       ...(timeline.length ? [`Check the ${timeline.length} timeline moments against the recorded video (Footage & labels → To label).`] : []),
       "Compare with what the person at the stall wrote down (lying, manure, urination, weaving, breaths counted).",
-      "Label what you see on the footage — that is how these prototype detectors become validated ones.",
+      "Label what you see on the footage — it teaches the detectors.",
     ],
   };
 }

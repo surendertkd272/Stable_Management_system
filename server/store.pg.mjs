@@ -93,6 +93,13 @@ export async function makePgStore(url, { RETENTION_MS, MAX_READINGS, normalize, 
     },
     allReadings: () => readings,
     readingsForHorse: (id) => readings.filter((r) => r.horseId === id),
+    /** A horse deleted for good: its readings go too (memory and the table). */
+    removeReadingsForHorse(id) {
+      const before = readings.length;
+      readings = readings.filter((r) => (r.horseId === id ? (forget(r), false) : true));
+      pool.query(`DELETE FROM readings WHERE horse_id = $1`, [id]).catch((e) => console.error("[pg] readings delete failed:", e.message));
+      return before - readings.length;
+    },
     isAcked: (k) => acks.has(k),
     ackAlert(k) {
       acks.add(k);

@@ -253,7 +253,7 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
       </p>
 
       <div className="card" style={{ marginTop: 14 }}>
-        <div className="card-head"><h3>What the system reads now</h3><span className="pill warn">behaviour: prototype</span></div>
+        <div className="card-head"><h3>What the system reads now</h3></div>
         {!horse ? <p className="muted">Give a horse this camera&apos;s stall ({cam.stall}) on the Horses page to see its readings here.</p> : (
           <div className="hw-facts">
             <div><span><Thermometer size={13} /> Eye temperature</span><b>

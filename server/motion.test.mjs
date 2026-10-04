@@ -135,7 +135,7 @@ test("trot lameness vs own normal: +6 mm, or 12 mm with no normal -> a prototype
   const a = find([...camera(), ...history, trot(14, ago(1))], /^Possible lameness — /);
   assert.equal(a.type, "Possible lameness — left fore");
   assert.equal(a.severity, "warn");
-  assert.match(a.detail, /^Prototype trot measure: 14\.0 mm asymmetry \(left fore\), \+7\.0 mm on its usual 7\.0 mm — from the wearable, not yet validated/);
+  assert.match(a.detail, /^Trot measure: 14\.0 mm asymmetry \(left fore\), \+7\.0 mm on its usual 7\.0 mm — from the wearable; trot the horse up/);
   assert.equal(find([...camera(), ...history, trot(11, ago(1))], /^Possible lameness — /), undefined, "+4 mm");
   assert.match(find([...camera(), trot(13, ago(1), "RH")], /^Possible lameness — /).detail, /no earlier trots to compare with/);
   assert.equal(find([...camera(), trot(10, ago(1))], /^Possible lameness — /), undefined, "10 mm without a normal");
@@ -155,7 +155,7 @@ test("wearable lying and activity are prototype: worded so, and never a colic al
   for (let h = 0; h < 4; h++) rd.push(R("activity_index", 0.85, ago(h), { sensor: "leg", prototype: true }), R("rest_minutes", 2, ago(h), { sensor: "leg", prototype: true }));
   const types = alerts(rd).map((a) => a.type);
   assert.ok(!types.includes("Abnormal activity — colic pattern"), "prototype activity must not raise the colic alarm");
-  assert.match(find(rd, /^Low lying-down time$/).detail, /Prototype wearable measure, not yet validated/);
+  assert.match(find(rd, /^Low lying-down time$/).detail, /From the wearable — worth a look/);
 });
 
 // ---- points 9–10 in the session report ------------------------------------------ //
@@ -204,7 +204,7 @@ test("client report: steps and trot rows from the wearable; camera coverage excl
   assert.deepEqual(cell(html, "Steps / locomotion").slice(1), ["840", "ok", "One leg's hoof strikes × 4."]);
   const [, val, st, note] = cell(html, "Lameness (trot)");
   assert.deepEqual([val, st], ["18.4 mm", "ok"]);
-  assert.match(note, /^Left fore favoured \(1 trot\)\. A screening measure being validated; a vet should confirm\.$/);
+  assert.match(note, /^Left fore favoured \(1 trot\)\. A screening measure; a vet should confirm\.$/);
   assert.match(html, /with data in 0% of the session/, "the wearable is not the camera");
   assert.equal((html.match(/Page \d of 5/g) || []).length, 5);
 });

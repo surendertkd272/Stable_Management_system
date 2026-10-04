@@ -8,6 +8,7 @@ import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, 
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { NormalCard, GaitCheckButton } from "./HorseNormal";
+import { DeleteHorseButton } from "./RecycleBin";
 import { useAuth } from "../auth";
 import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour, type HorseMotion, type HorseIntake } from "../data/api";
 import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand, details } from "../components/ui";
@@ -224,7 +225,7 @@ export default function HorseDetail() {
             {live.vitals.activity_index && (
               <MetricCard
                 icon={<Activity size={18} />}
-                label={PROTOTYPE_SOURCES.has(live.vitals.activity_index.source ?? "") ? "Activity · prototype" : "Activity"}
+                label="Activity"
                 value={live.vitals.activity_index.value.toFixed(2)}
                 note={readAt(live.vitals.activity_index.ts)}
                 delta={trend(live.charts.activity_index)}
@@ -246,7 +247,7 @@ export default function HorseDetail() {
           // No lying sensor, but the camera measures lying (prototype).
           <MetricCard
             icon={<Moon size={18} />}
-            label="Daily rest · camera prototype"
+            label="Daily rest · camera"
             value={hmm(live.behaviour.resting.lyingTodayMin)}
             delta={null}
             spark={live.charts.lying_hours ?? []}
@@ -302,6 +303,7 @@ export default function HorseDetail() {
         <div className="flex" style={{ gap: 8, marginTop: -12, marginBottom: 24 }}>
           <GaitCheckButton horseId={horse.id} name={horse.name} />
           <Link className="btn-ghost" href={`/events?horse=${encodeURIComponent(horse.id)}`}>Events &amp; clips</Link>
+          {(!user || user.role === "admin") && <DeleteHorseButton id={horse.id} name={horse.name} />}
         </div>
       )}
 
@@ -622,13 +624,12 @@ function MetricCard({
 }
 
 // --------------------------------------------------------------------------- //
-// What the camera tells us beyond the vitals. Every line here comes from a
-// prototype heuristic (thermal video / floor warm patches) and says so; a part
-// with no readings says "not measured here" rather than showing zero.
+// What the camera tells us beyond the vitals (thermal video, floor warm
+// patches); a part with no readings says "not measured here" rather than
+// showing zero.
 // --------------------------------------------------------------------------- //
 const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const hmm = (min: number) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, "0")}m`;
-const PROTOTYPE_SOURCES = new Set(["thermal_video", "visible_video"]);
 /** "read 12 min ago"; stale (amber) from 2 h — the head may have left the thermal view. */
 function readAt(iso: string) {
   const min = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
@@ -687,13 +688,13 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
     "Fast breathing at rest. Heat, pain, fever or excitement raise it; 40–50+ breaths/min that does not settle at rest points to heat stress." });
   if (b.excretion && b.excretion.count24h < 4) meaning.push({ id: "manure_frequency", text:
     `${b.excretion.count24h} ${b.excretion.count24h === 1 ? "manure event" : "manure events"} seen in 24 h; normal is 4–13 a day and fewer droppings is a colic sign. ` +
-    "The floor detector is a prototype and can miss droppings — check the stall." });
+    "Droppings hidden under bedding can be missed — check the stall." });
   return (
     <div className="card" style={{ marginBottom: 24 }}>
       <div className="card-head">
         <h3>{t("Behaviour from the camera")}</h3>
-        <span className="pill warn" title="Produced today by heuristics whose thresholds are not yet validated on horses">
-          <FlaskConical size={12} /> prototype
+        <span className="pill ok">
+          <FlaskConical size={12} /> camera
         </span>
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 12 }}>
@@ -895,8 +896,8 @@ function MotionCard({ m }: { m: HorseMotion | null }) {
     <div className="card">
       <div className="card-head" style={{ gap: 8 }}>
         <h3 className="flex center gap-sm"><Footprints size={16} /> {t("Steps and lameness")}</h3>
-        <span className="pill warn" title="Steps, exercise and the trot check come from methods not yet validated on horses">
-          <FlaskConical size={12} /> {t("prototype")}
+        <span className="pill ok">
+          <FlaskConical size={12} /> {t("wearable")}
         </span>
       </div>
       <div className="hw-facts">

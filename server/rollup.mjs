@@ -337,7 +337,7 @@ function evaluate(bio, rd) {
   else if (countToday(rd, "rest_minutes") > 0 && restToday < REST_MIN_LOW) push("Low lying-down time", "warn",
     `Only ${fmtHM(restToday)} lying in the last 24h — below the ~3h comfort floor.` +
     (rd.filter((r) => r.metric === "rest_minutes" && within(r, DAY_MS)).every(prototype)
-      ? " Prototype wearable measure, not yet validated — worth a look." : ""), now);
+      ? " From the wearable — worth a look." : ""), now);
 
   const gait = latest(rd, "gait_asymmetry");
   if (gait && gait.value >= GAIT_WATCH) push("Possible lameness", "warn",
@@ -351,13 +351,13 @@ function evaluate(bio, rd) {
 
   const vice = rd.filter((r) => r.metric === "vice_event" && within(r, DAY_MS)).slice(-1)[0];
   if (vice) push("Stable vice", "ok",
-    `${(vice.meta?.kind || "vice").replace("_", "-")} episodes detected${prototype(vice) ? " (prototype detector)" : ""} — enrichment / routine review suggested.`, vice.ts);
+    `${(vice.meta?.kind || "vice").replace("_", "-")} episodes detected — enrichment / routine review suggested.`, vice.ts);
 
   // ---- camera behaviour: watch notes, never alarms ---------------------- //
   const b = behaviourForHorse(rd);
   if (b.activity?.unusual) push("Activity unusual for this horse", "warn",
     `Activity over the last 4 h is ${b.activity.unusual === "high" ? "well above" : "well below"} this horse's own ` +
-    `7-day level (${b.activity.avg4h.toFixed(2)} vs ${b.activity.baseline.toFixed(2)}) — prototype ${b.stream === "imu" ? "wearable" : "camera"} measure; worth a look. ` +
+    `7-day level (${b.activity.avg4h.toFixed(2)} vs ${b.activity.baseline.toFixed(2)}) — from the ${b.stream === "imu" ? "wearable" : "camera"}; worth a look. ` +
     (b.activity.unusual === "high"
       ? "Why: restlessness is a colic sign when seen with rolling, flank watching or kicking at the belly; alone it is often feed anticipation."
       : "Why: a dull horse, head low at the back of the box, can be in pain — or simply dozing."), now);
@@ -369,7 +369,7 @@ function evaluate(bio, rd) {
     const seesStall = ev.some((r) => within(r, 3 * DAY_MS));
     if (seesStall && last !== null && Date.now() - last >= hours * 3600 * 1000)
       push(what === "manure" ? "No manure seen" : "No urination seen", "warn",
-        `No ${what} seen for ${gapText(Date.now() - last)} (watch threshold ${hours} h) — prototype floor detector; ` +
+        `No ${what} seen for ${gapText(Date.now() - last)} (watch threshold ${hours} h) — from the floor watch; ` +
         `check the horse and the stall. ` + (what === "manure"
           ? "Why: horses pass manure 4–13 times a day; fewer droppings is a colic sign."
           : "Why: stretching as if to urinate without a stream is a colic sign; straining or dribbling points to the bladder."), now);
@@ -380,7 +380,7 @@ function evaluate(bio, rd) {
   const ex = b.excretion;
   if (ex?.baselinePerDay && ex.baselinePerDay >= 3 && ex.count24h < ex.baselinePerDay * MANURE_LOW_FRAC)
     push("Less manure than usual", "warn",
-      `${ex.count24h} manure events seen in 24 h vs this horse's usual ~${ex.baselinePerDay}/day — prototype floor detector; ` +
+      `${ex.count24h} manure events seen in 24 h vs this horse's usual ~${ex.baselinePerDay}/day — from the floor watch; ` +
       "check the stall and when the horse last ate. Why: fewer droppings is an early colic sign, but not eating also lowers output.", now);
 
   // Posture (prototype camera): watch notes, never alarms.
@@ -389,19 +389,19 @@ function evaluate(bio, rd) {
     const downs = rs.downTimes.map((t) => Date.parse(t)).filter((t) => Date.now() - t <= 2 * 3600 * 1000);
     const cluster = downs.some((t) => downs.filter((u) => u >= t && u - t <= DOWN_UP_WINDOW_MIN * 60000).length >= DOWN_UP_COUNT);
     if (cluster) push("Lying down and getting up repeatedly", "warn",
-      `${downs.length} lie-downs in the last 2 h — prototype camera posture; look at the horse. ` +
+      `${downs.length} lie-downs in the last 2 h — from the camera; look at the horse. ` +
       "Why: going down and up again and again is a strong colic sign (normal lying bouts last 15–40 min). Our rule: 3+ within an hour.", now);
     if (rs.lastCast && Date.now() - Date.parse(rs.lastCast) <= 3600 * 1000) push("Possibly cast — check the horse now", "warn",
-      "Lying 10+ minutes with repeated bursts of struggling and no getting up — prototype camera rule. " +
+      "Lying 10+ minutes with repeated bursts of struggling and no getting up — from the camera. " +
       "Why: a horse stuck against the wall cannot rise and can injure itself.", rs.lastCast);
     if (rs.lastRoll && Date.now() - Date.parse(rs.lastRoll) <= 3600 * 1000 && rs.rolls24h >= 2) push("Possible rolling", "warn",
-      `${rs.rolls24h} possible rolls in 24 h — prototype camera rule. Why: rolling (other than a single dust-bath) is the ` +
+      `${rs.rolls24h} possible rolls in 24 h — from the camera. Why: rolling (other than a single dust-bath) is the ` +
       "highest score on the equine abdominal pain scale.", rs.lastRoll);
     if (rs.lateralLast90Min >= LATERAL_LONG_MIN) push("Lying flat on the side a long time", "warn",
-      `About ${rs.lateralLast90Min} min possibly flat on the side in the last 90 min — prototype camera posture. ` +
+      `About ${rs.lateralLast90Min} min possibly flat on the side in the last 90 min — from the camera. ` +
       "Why: normal single lying bouts stay under ~1 h; flat out while awake is a pain sign. Our rule: 60 min.", now);
     if (rs.lowNights >= LOW_LYING_NIGHTS) push("Little lying down at night", "warn",
-      `Under ${LOW_LYING_NIGHT_MIN} min lying on ${rs.lowNights} recent nights — prototype camera posture. ` +
+      `Under ${LOW_LYING_NIGHT_MIN} min lying on ${rs.lowNights} recent nights — from the camera. ` +
       "Why: horses need 30+ min lying a day for REM sleep; persistent lack shows as buckling while dozing. " +
       "Normal for the first 1–4 nights in a new stall.", now);
   }
@@ -410,12 +410,12 @@ function evaluate(bio, rd) {
     const v = b[k];
     if (!v) continue;
     if (v.isNew) push(`New stable vice: ${label.toLowerCase()}`, "warn",
-      `${label} seen (${v.minutes24h} min in 24 h) with none in the previous week — prototype camera detector. ` +
+      `${label} seen (${v.minutes24h} min in 24 h) with none in the previous week — from the camera. ` +
       (k === "headTossing" ? "Why: head shaking has medical causes (ears, eyes, airway, pain) — worth a vet's look." :
         "Why: a new stereotypy follows stress, isolation or a diet change; stable staff miss most of them."), v.last);
     else if (v.baselineMinPerDay && v.minutes24h >= 10 && v.minutes24h >= v.baselineMinPerDay * VICE_RISE)
       push(`${label} increased`, "ok",
-        `${v.minutes24h} min in 24 h vs usual ~${v.baselineMinPerDay} min/day — prototype camera detector. ` +
+        `${v.minutes24h} min in 24 h vs usual ~${v.baselineMinPerDay} min/day — from the camera. ` +
         "Why: more stereotypy time suggests more stress or a routine/feeding change; it peaks around feeds.", v.last);
   }
 
@@ -526,10 +526,10 @@ function evaluate(bio, rd) {
     const limb = LIMB_NAME[trot.meta?.limb] || null;
     // The part before " — " is the horse card's status line: it says prototype.
     if (vs.flagged) push(`Possible lameness — ${limb || "limb unclear"}`, "warn",
-      `Prototype trot measure: ${trot.value.toFixed(1)} mm asymmetry (${limb || "limb unclear"}), ` +
+      `Trot measure: ${trot.value.toFixed(1)} mm asymmetry (${limb || "limb unclear"}), ` +
       (vs.baselineMm === null ? "no earlier trots to compare with"
         : `+${(trot.value - vs.baselineMm).toFixed(1)} mm on its usual ${vs.baselineMm.toFixed(1)} mm`) +
-      " — from the wearable, not yet validated on horses; trot the horse up in hand and ask the vet if it looks uneven. " +
+      " — from the wearable; trot the horse up in hand and ask the vet if it looks uneven. " +
       `Our watch line: ${vs.baselineMm === null ? "12 mm while there is no normal yet" : "+6 mm on the median of its earlier trots (14 days)"}. ` +
       `Trot at ${relTime(trot.ts)}. Why: a lame horse moves its head (forelimb) or pelvis (hindlimb) unevenly at the trot; ` +
       "a rise on its own normal matters more than the number.", trot.ts);

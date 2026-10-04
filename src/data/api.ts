@@ -257,6 +257,15 @@ export const createEntity = <T,>(kind: Kind, body: unknown) =>
 export const patchEntity = <T,>(kind: Kind, id: string, patch: unknown) =>
   send<T>("PATCH", `/api/${kindPath(kind)}/${encodeURIComponent(id)}`, patch);
 
+// ---- deleting a horse: the 30-day recycle bin (server/recycle.mjs) -------------- //
+export interface BinHorse { id: string; horseId: string; name: string; stall: string | null; photo: string | null;
+  deletedAt: string; deletedBy: string; purgeAt: string; daysLeft: number; readings: number }
+export const deleteHorse = (id: string) => call<{ ok: true; bin: BinHorse }>("DELETE", `/api/horses/${encodeURIComponent(id)}`);
+export const listBin = () => call<BinHorse[]>("GET", "/api/bin/horses");
+export const restoreHorse = (binId: string) =>
+  call<{ ok: true; horse: { id: string; name: string }; stallFreed: { stall: string; nowWith: string } | null }>("POST", `/api/bin/horses/${encodeURIComponent(binId)}/restore`);
+export const purgeHorse = (binId: string) => call<{ ok: true; deletedReadings: number }>("DELETE", `/api/bin/horses/${encodeURIComponent(binId)}`);
+
 export const deleteEntity = (kind: Kind, id: string) =>
   send<{ ok: boolean }>("DELETE", `/api/${kindPath(kind)}/${encodeURIComponent(id)}`);
 

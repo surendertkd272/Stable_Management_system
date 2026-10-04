@@ -153,7 +153,7 @@ export default function SettingsPage() {
         {st && ([
           ["temperature", "Temperature", "Eye temperature against the horse's own baseline.", readiness("thermal_camera", "thermal camera")],
           ["breathing", "Breathing", "Resting breathing rate from the nostril or flank.", readiness("thermal_camera", "thermal camera")],
-          ["casting", "Possibly cast", "Down with repeated struggling and not getting up (camera prototype).", readiness("visible_video", "camera")],
+          ["casting", "Possibly cast", "Down with repeated struggling and not getting up (from the camera).", readiness("visible_video", "camera")],
           ["colic", "Colic signs", "Repeated lying down/up, rolling, long flat lying, less manure (camera watch notes; the colic alarm itself needs the IMU tag).", readiness("visible_video", "camera")],
           ["activity", "Activity unusual", "Well above or below this horse's own normal.", readiness("visible_video", "camera")],
           ["vices", "Stable vices", "New or increased weaving, box walking, head tossing (crib-biting not detected yet).", readiness("visible_video", "camera")],
@@ -178,7 +178,7 @@ export default function SettingsPage() {
           <div className="info" style={{ marginBottom: 12 }}>
             <b>Activity sensitivity — {sens}%</b>
             <span>
-              Moves only the prototype &quot;Activity unusual&quot; watch note: at {sens}% it fires above ×{activityBand(sens).hi} or
+              Moves only the &quot;Activity unusual&quot; watch note: at {sens}% it fires above ×{activityBand(sens).hi} or
               below ×{activityBand(sens).lo} of the horse&apos;s own normal. Clinical thresholds (temperature, breathing) never move with a slider.
             </span>
           </div>
@@ -317,15 +317,14 @@ function CoverageCard() {
         <h3>Monitoring coverage</h3>
         <span className="pill accent">
           {liveCount} of {ordered.length} points sourced
-          {protoCount > 0 && ` · ${protoCount} prototype`}
+          {protoCount > 0 && ` · ${protoCount} from camera video`}
           {modelCount > 0 && ` · ${modelCount} awaiting model`}
         </span>
       </div>
       <p className="muted" style={{ fontSize: 13, marginTop: -4, marginBottom: 14 }}>
         Which of the 12 monitoring points have a live data source today. "Model" means the
         camera is installed but the vision model for that point still needs labelled footage;
-        "prototype" means the camera produces it today with a heuristic still to be validated
-        on real horses; "pending" means the sensor itself is not procured yet. The software already carries
+        "from camera video" means the camera produces it today from its video; "pending" means the sensor itself is not procured yet. The software already carries
         the data for all of them.
       </p>
       <div className="grid cols-2" style={{ gap: 10 }}>
@@ -337,14 +336,14 @@ function CoverageCard() {
               </b>
               <span>{[...p.sources].join(", ")}</span>
             </div>
-            <span className={`pill ${p.available ? "ok" : p.prototype ? "warn" : "muted"}`}>
+            <span className={`pill ${p.available || p.prototype ? "ok" : "muted"}`}>
               {p.available ? (
                 <>
                   <CheckCircle2 size={13} /> live
                 </>
               ) : p.prototype ? (
                 <>
-                  <CheckCircle2 size={13} /> prototype
+                  <CheckCircle2 size={13} /> from video
                 </>
               ) : p.modelPending ? (
                 <>
