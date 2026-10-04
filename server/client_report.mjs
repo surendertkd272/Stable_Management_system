@@ -12,9 +12,9 @@
 // shown whole — the camera's view is narrow and the head is often at its edge.
 
 import { isDiagnostic } from "./contract.mjs";
+import { peopleMinutes, floorAlone, eyeSetAside } from "./reading-rules.mjs";
 import { LIMB_NAME, leftOf, mealsOf, offCamera, stepsTotal } from "./rollup.mjs";
 
-const EYE_MIN = 33;                            // below: coat or wall, not an eye (readings from before the eye-shape check)
 const LEVELS = [["none", "No activity", 0, 0.05], ["low", "Low", 0.05, 0.2], ["moderate", "Moderate", 0.2, 0.6], ["high", "High", 0.6, 1.01]];
 const NICE = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480];
 const MAX_NOTES = 1400;
@@ -79,7 +79,9 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const of = (m) => rd.filter((r) => r.metric === m);
   const minuteOf = (r) => Math.max(0, Math.min(minutes - 1, Math.floor((Date.parse(r.ts) - from) / 60000)));
   const inAway = (ms) => away.some(([a, b]) => ms >= a && ms <= b);
-  const eye = of("body_temp_c").filter((r) => r.value >= EYE_MIN && !inAway(Date.parse(r.ts)));
+  // the same rules as every report (server/reading-rules.mjs): an eye 33–39.5 °C, no person at the stall
+  const people = peopleMinutes(rd);
+  const eye = of("body_temp_c").filter((r) => !eyeSetAside(r, people) && !inAway(Date.parse(r.ts)));
   const eyeV = eye.map((r) => r.value);
   // Minutes reviewed afterwards from recorded footage (edge/replay.py) hold no
   // temperatures: the eye there was not "out of view", it was not measurable.
@@ -165,8 +167,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   // come within 10 minutes of another are the bedding being moved — the horse
   // lying down, getting up or turning in the straw (2 Oct's night: four
   // 'droppings' in two minutes as he lay down). Left out, not counted.
-  const patches = [...of("urination_event"), ...of("excretion_event")].map((r) => Date.parse(r.ts));
-  const alone = (r) => patches.filter((t) => Math.abs(t - Date.parse(r.ts)) <= 600000).length === 1;
+  const alone = floorAlone(rd);
   const floorEv = { urination: of("urination_event").filter(alone), excretion: of("excretion_event").filter(alone) };
   const floorOk = floorWatched !== false && actV.length > 0;
 

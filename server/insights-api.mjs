@@ -3,7 +3,7 @@
 // confirm, the accuracy kit, gait checks done elsewhere, and the report as a
 // PDF. app.mjs hands requests here after login and role checks.
 import { compare, validateBaseline } from "./baseline.mjs";
-import { buildEvents, cutClip, validateReview, labelFor, sampleMoments, validateCheck, systemValue, agreement } from "./events.mjs";
+import { buildEvents, cutClip, cutTimelapse, validateReview, labelFor, sampleMoments, validateCheck, systemValue, agreement } from "./events.mjs";
 import { listClips, serveFile } from "./footage.mjs";
 import { buildAlerts } from "./rollup.mjs";
 import { safeTimeZone } from "./client_report.mjs";
@@ -46,6 +46,33 @@ export function insightsApi({ store, json, CORS, roster }) {
         crop: stream === "visible" && stall ? cropFor(camera, stall) : null, mark, slow: url.searchParams.get("slow") === "1" });
       if (!file) return json(404, { error: "nothing was recorded then" });
       return serveFile(req, file, "video/mp4", CORS);
+    } catch (e) {
+      return json(502, { error: e.message });
+    }
+  }
+
+  /** GET /api/timelapse?vt=&horse=&from=&to= — the horse's stall through a night, in about a minute. */
+  async function timelapse(req, url, tickets) {
+    const t = tickets?.get(url.searchParams.get("vt") || "");
+    if (!t || t.exp < Date.now()) return json(401, { error: "video ticket missing or expired — reload the page" });
+    const h = roster().find((x) => x.id === url.searchParams.get("horse"));
+    if (!h) return json(400, { error: "choose a horse" });
+    const toMs = Date.parse(url.searchParams.get("to") || "") || Date.now();
+    const fromMs = Date.parse(url.searchParams.get("from") || "") || toMs - 12 * 3600e3;
+    if (!(fromMs < toMs) || toMs - fromMs > 24 * 3600e3) return json(400, { error: "a time-lapse covers up to 24 hours" });
+    // the camera that watched this horse most in the window
+    const seen = new Map();
+    for (const r of store.readingsForHorse(h.id)) {
+      const ms = Date.parse(r.ts), cam = r.meta?.deviceId;
+      if (cam && ms >= fromMs && ms <= toMs) seen.set(cam, (seen.get(cam) ?? 0) + 1);
+    }
+    const cams = [...seen].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+    try {
+      for (const camera of cams) {
+        const file = await cutTimelapse({ camera, fromMs, toMs, crop: h.stall ? cropFor(camera, h.stall) : null });
+        if (file) return serveFile(req, file, "video/mp4", CORS);
+      }
+      return json(404, { error: "nothing was recorded then" });
     } catch (e) {
       return json(502, { error: e.message });
     }
@@ -193,5 +220,5 @@ export function insightsApi({ store, json, CORS, roster }) {
     return null;
   }
 
-  return { handle, clip };
+  return { handle, clip, timelapse };
 }

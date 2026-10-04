@@ -1,132 +1,103 @@
 "use client";
-
-import { useEffect, useState } from "react";
+// Reports: a horse over a window (the last hour, last night, a day, a week, a
+// month) — built by the same server code as the session report (/api/session),
+// so the Live page's "Last hour report" and this page always agree for the
+// same window. The PDF is the same designed client report.
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import {
-  FileText,
-  Download,
-  Share2,
-  Moon,
-  Droplet,
-  Activity,
-  Sun,
-  Table,
-  Thermometer,
-  Wind,
-} from "lucide-react";
+import Link from "next/link";
+import { FileText, Download, Share2, Table, Loader2, ExternalLink } from "lucide-react";
 import { useStable, useToast } from "../store";
-import { getSeries, exportReadingsCsv } from "../data/api";
-import { Sparkline, details } from "../components/ui";
+import * as api from "../data/api";
+import { exportReadingsCsv, listDailyReports, downloadDailyReport, type DailyReports } from "../data/api";
+import { useAuth } from "../auth";
+import { details } from "../components/ui";
+import { SessionBody, readNotes } from "./Session";
 
-// "average of 5 days with data" — how much of the range a figure rests on.
-const daysNote = (xs: (number | null)[] | undefined, range: string) => {
-  const n = (xs ?? []).filter((v) => v !== null && v !== undefined).length;
-  return n ? `average of ${n} of ${range} days with data` : `no data in the last ${range} days`;
-};
+type Range = "hour" | "night" | "day" | "week" | "month";
+const RANGES: { key: Range; label: string }[] = [
+  { key: "hour", label: "Last hour" },
+  { key: "night", label: "Last night" },
+  { key: "day", label: "24 hours" },
+  { key: "week", label: "7 days" },
+  { key: "month", label: "30 days" },
+];
+const H = 3600e3;
+/** The window for a range, ending now (the night: 18:00–06:00, or so far before 06:00). */
+function windowOf(range: Range): { from: string; to: string } {
+  const now = new Date();
+  if (range === "night") {
+    const morning = new Date(now); morning.setHours(6, 0, 0, 0);
+    const to = now < morning ? now : morning;
+    const from = new Date(morning); from.setDate(from.getDate() - 1); from.setHours(18, 0, 0, 0);
+    return { from: from.toISOString(), to: to.toISOString() };
+  }
+  const span = { hour: H, day: 24 * H, week: 7 * 24 * H, month: 30 * 24 * H }[range];
+  return { from: new Date(now.getTime() - span).toISOString(), to: now.toISOString() };
+}
 
 export default function Reports() {
-  const { horses, alerts, series: storeSeries } = useStable();
+  const { horses } = useStable();
   const notify = useToast();
   const params = useSearchParams();
-  const [range, setRange] = useState<"7" | "30">("7");
-  // A horse that has reported at least once, rather than the first in the list.
+  const [range, setRange] = useState<Range>((params.get("range") as Range) || "week");
   const [horseId, setHorseId] = useState(
-    params.get("horse") ?? (horses.find((h) => h.monitoring && h.monitoring !== "no-data") ?? horses[0]).id);
+    params.get("horse") ?? (horses.find((h) => h.monitoring && h.monitoring !== "no-data") ?? horses[0])?.id ?? "");
   const horse = horses.find((h) => h.id === horseId) ?? horses[0];
+  const [stamp, setStamp] = useState(0);                    // "Refresh" rebuilds the window up to now
+  const win = useMemo(() => windowOf(range), [range, stamp]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [rep, setRep] = useState<api.SessionReport | null>(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState<"" | "pdf" | "open">("");
 
-  // This horse's own daily series for the range (the yard's averages used to
-  // stand in, so every horse showed the same trend lines). Demo mode, with no
-  // backend, keeps the bundled series.
-  const [ranged, setRanged] = useState<Record<string, (number | null)[]> | null>(null);
   useEffect(() => {
+    if (!horse) return;
     let stop = false;
-    setRanged(null);
-    getSeries(Number(range), horse.id).then((s) => {
-      if (!stop && s) setRanged(s);
-    });
-    return () => {
-      stop = true;
-    };
-  }, [range, horse.id]);
-  const series: Record<string, (number | null)[]> = ranged ?? storeSeries;
+    setRep(null); setErr("");
+    api.getSession(horse.id, win.from, win.to).then((r) => { if (!stop) (r.ok ? setRep(r.data) : setErr(r.error)); });
+    return () => { stop = true; };
+  }, [horse?.id, win]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Behaviour flags (vices, possible rolls) — only when the camera watched
-  // behaviour in this range; otherwise not measured, never "0".
-  const behaviourMeasured = (series.activity ?? []).some((v) => v !== null);
-  const flags = behaviourMeasured ? (series.flags ?? []).reduce<number>((a, v) => a + (v ?? 0), 0) : null;
-  const openAlerts = alerts.filter((a) => a.horse === horse.name && !a.acknowledged);
-  const unsensed = [horse.rest === null && "rest", horse.water === null && "water visits", horse.outside === null && "time outside"].filter(Boolean);
+  if (!horse) {
+    return <div className="card muted">No horses yet — add one with “Add horse”.</div>;
+  }
+  const label = RANGES.find((r) => r.key === range)!.label.toLowerCase();
 
-  // What the vet summary says — every sentence from the data above.
-  const facts = [
-    horse.vitals?.bodyTempC != null
-      ? `Latest eye-surface temperature ${horse.vitals.bodyTempC.toFixed(1)} °C${horse.vitals.calibrated === false ? " (camera not aimed — not used for alerts)" : ""}.`
-      : "Body temperature was not measured.",
-    horse.vitals?.respRateBpm != null ? `Latest respiratory rate ${Math.round(horse.vitals.respRateBpm)} breaths/min.` : "Respiratory rate was not measured.",
-    flags === null ? `Behaviour was not measured by the camera in the last ${range} days.`
-      : flags ? `${flags} behaviour flag${flags === 1 ? "" : "s"} (weaving, box walking, head tossing or a possible roll) in the last ${range} days — check them on the recording.`
-        : `No behaviour flags in the last ${range} days.`,
-    openAlerts.length ? `Open alerts: ${openAlerts.map((a) => a.type).join("; ")}.` : "No open alerts.",
-    ...(unsensed.length ? [`No sensor for ${unsensed.join(", ")} on this install — not reported.`] : []),
-  ];
+  const summaryText = () => !rep ? "" : [
+    `${horse.name} — EquiCare report, ${label}`,
+    details(horse.breed, horse.sex, `Stall ${horse.stall}`),
+    `${new Date(rep.window.from).toLocaleString("en-GB")} – ${new Date(rep.window.to).toLocaleString("en-GB")}; camera data in ${rep.coverage.minutesWithData} of ${rep.window.minutes} minutes.`,
+    "",
+    ...rep.points.map((p) => `${p.n}. ${p.label}: ${p.summary}`),
+    "",
+    rep.alerts.length ? `Open alerts: ${rep.alerts.map((a) => a.type).join("; ")}.` : "No open alerts.",
+    "",
+    "A screening summary from the stall camera, to support — not replace — veterinary judgement.",
+  ].join("\n");
 
-  const summaryText = () =>
-    [
-      `${horse.name} — ${range}-day vet-ready report`,
-      details(horse.breed, horse.sex, `Stall ${horse.stall}`, `Owner: ${horse.owner}`),
-      ``,
-      `Avg rest / night:        ${horse.rest ?? "not measured (no sensor)"}`,
-      `Avg water visits / day:  ${horse.water ?? "not measured (no sensor)"}`,
-      `Avg time outside box:    ${horse.outside ?? "not measured (no sensor)"}`,
-      `Behaviour flags (${range}d):   ${flags ?? "not measured"}`,
-      ``,
-      ...facts,
-      ``,
-      "This summary reflects camera-observed behaviour only and is intended to support, not replace, veterinary judgement.",
-    ].join("\n");
-
-  const exportPdf = () => {
-    const w = window.open("", "_blank", "width=760,height=920");
-    if (!w) {
-      notify("Allow pop-ups to export the report");
-      return;
-    }
-    w.document.write(
-      `<html><head><title>${horse.name} – EquiCare report</title>` +
-        `<style>body{font-family:system-ui,-apple-system,sans-serif;padding:48px;color:#1c1b29;line-height:1.7}` +
-        `h1{font-size:22px;margin:0 0 4px}small{color:#6b6980}pre{white-space:pre-wrap;font-family:inherit;font-size:14px;margin-top:24px}</style>` +
-        `</head><body><h1>BSV EquiCare</h1><small>${range}-day behavioural report</small>` +
-        `<pre>${summaryText()}</pre>` +
-        `<script>window.onload=function(){window.print()}<\/script></body></html>`
-    );
-    w.document.close();
-    notify("Opening print dialog…");
+  const pdf = async () => {
+    setBusy("pdf");
+    const e = await api.downloadClientReportPdf(horse.id, win.from, win.to, readNotes(horse.id));
+    setBusy("");
+    if (e) notify(e);
   };
-
-  const exportCsv = async () => {
-    const ok = await exportReadingsCsv(horse.id, Number(range));
-    notify(ok
-      ? `Exported ${range} days of ${horse.name}'s readings`
-      : "Raw data export needs the backend — not available in demo mode");
+  const open = async () => {
+    setBusy("open");
+    const e = await api.openClientReport(horse.id, win.from, win.to, readNotes(horse.id));
+    setBusy("");
+    if (e) notify(e);
   };
-
-  const shareToVet = async () => {
+  const csv = async () => {
+    const days = Math.max(1, Math.ceil((Date.parse(win.to) - Date.parse(win.from)) / (24 * H)));
+    notify((await exportReadingsCsv(horse.id, days)) ? `Exported ${horse.name}'s readings` : "Could not export the readings");
+  };
+  const share = async () => {
     const text = summaryText();
-    const navAny = navigator as Navigator & { share?: (d: { title: string; text: string }) => Promise<void> };
-    if (navAny.share) {
-      try {
-        await navAny.share({ title: `${horse.name} — EquiCare report`, text });
-        notify("Report shared");
-      } catch {
-        /* user cancelled the share sheet */
-      }
+    const nav = navigator as Navigator & { share?: (d: { title: string; text: string }) => Promise<void> };
+    if (nav.share) {
+      try { await nav.share({ title: `${horse.name} — EquiCare report`, text }); } catch { /* cancelled */ }
     } else {
-      try {
-        await navigator.clipboard.writeText(text);
-        notify("Report summary copied to clipboard");
-      } catch {
-        notify("Could not copy summary");
-      }
+      try { await navigator.clipboard.writeText(text); notify("Report summary copied — paste it to the vet"); } catch { notify("Could not copy the summary"); }
     }
   };
 
@@ -134,151 +105,79 @@ export default function Reports() {
     <>
       <div className="flex between center wrap" style={{ marginBottom: 18, gap: 12 }}>
         <div className="tabs">
-          <button className={range === "7" ? "on" : ""} onClick={() => setRange("7")}>
-            7-day
-          </button>
-          <button className={range === "30" ? "on" : ""} onClick={() => setRange("30")}>
-            30-day
-          </button>
+          {RANGES.map((r) => (
+            <button key={r.key} className={range === r.key ? "on" : ""} onClick={() => { setRange(r.key); setStamp((n) => n + 1); }}>{r.label}</button>
+          ))}
         </div>
         <div className="flex gap-sm wrap">
           {horses.map((h) => (
-            <button
-              key={h.id}
-              className={horseId === h.id ? "btn-ghost accent" : "btn-ghost"}
-              onClick={() => setHorseId(h.id)}
-            >
-              {h.name}
-            </button>
+            <button key={h.id} className={horseId === h.id ? "btn-ghost accent" : "btn-ghost"} onClick={() => setHorseId(h.id)}>{h.name}</button>
           ))}
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card" style={{ marginBottom: 14 }}>
         <div className="flex between center wrap" style={{ gap: 12 }}>
           <div className="flex gap-md center">
-            <div className="chip">
-              <FileText size={20} />
-            </div>
+            <div className="chip"><FileText size={20} /></div>
             <div>
-              <b style={{ fontSize: 17, color: "var(--ink)", fontFamily: "var(--font-display)" }}>
-                {horse.name} — {range}-day vet-ready report
-              </b>
-              <p className="muted" style={{ fontSize: 13 }}>
-                {details(horse.breed, horse.sex, `Stall ${horse.stall}`, `generated for ${horse.owner}`)}
-              </p>
+              <b style={{ fontSize: 17, color: "var(--ink)", fontFamily: "var(--font-display)" }}>{horse.name} — {label}</b>
+              <p className="muted" style={{ fontSize: 13 }}>{details(horse.breed, horse.sex, `Stall ${horse.stall}`, `for ${horse.owner}`)}</p>
             </div>
           </div>
-          <div className="flex gap-sm">
-            <button className="btn-ghost" onClick={shareToVet}>
-              <Share2 size={15} /> Share to vet
+          <div className="flex gap-sm wrap">
+            <button className="btn-ghost" disabled={!rep} onClick={share}><Share2 size={15} /> Share to vet</button>
+            <button className="btn-ghost" onClick={csv} title="Raw readings a vet can re-analyse"><Table size={15} /> Export CSV</button>
+            <button className="btn-ghost" disabled={!rep || !!busy} onClick={open}>
+              {busy === "open" ? <Loader2 className="spin" size={15} /> : <ExternalLink size={15} />} Client report
             </button>
-            <button className="btn-ghost" onClick={exportCsv} title="Raw readings a vet can re-analyse">
-              <Table size={15} /> Export CSV
-            </button>
-            <button className="btn-primary" onClick={exportPdf}>
-              <Download size={16} /> Export PDF
+            <button className="btn-primary" disabled={!rep || !!busy} onClick={pdf}>
+              {busy === "pdf" ? <Loader2 className="spin" size={15} /> : <Download size={16} />} Export PDF
             </button>
           </div>
         </div>
-      </div>
-
-      {/* The camera-derived vitals lead: on a camera-only install these are the
-          only clinically useful numbers in the report, and burying them under
-          three "not measured" panels made the report look emptier than it is. */}
-      <div className="grid cols-2" style={{ marginBottom: 24 }}>
-        <ReportMetric
-          icon={<Thermometer size={18} />}
-          label="Body temperature"
-          value={horse.vitals?.bodyTempC == null ? null : horse.vitals.bodyTempC.toFixed(1) + " °C"}
-          note="Eye-surface thermal, latest reading · ±2 °C absolute"
-          spark={series.bodyTemp ?? []}
-        />
-        <ReportMetric
-          icon={<Wind size={18} />}
-          label="Respiratory rate"
-          value={horse.vitals?.respRateBpm == null ? null : Math.round(horse.vitals.respRateBpm) + " bpm"}
-          note={
-            horse.vitals?.respConfidence == null
-              ? "Nostril thermal oscillation"
-              : `Nostril thermal · rhythm confidence ${Math.round(horse.vitals.respConfidence * 100)}%`
-          }
-          spark={series.respRate ?? []}
-          color="var(--accent-strong)"
-        />
-        <ReportMetric icon={<Moon size={18} />} label="Avg rest / night" value={horse.rest} note={daysNote(series.rest, range)} spark={series.rest ?? []} />
-        <ReportMetric icon={<Droplet size={18} />} label="Avg water visits / day" value={horse.water === null ? null : String(horse.water)} note={daysNote(series.water, range)} spark={series.water ?? []} type="bar" />
-        <ReportMetric icon={<Sun size={18} />} label="Avg time outside box" value={horse.outside} note={daysNote(series.outside, range)} spark={series.outside ?? []} />
-        <ReportMetric icon={<Activity size={18} />} label="Behaviour flags" value={flags === null ? null : String(flags)}
-          note={`${range}-day total · weaving, box walking, head tossing, possible rolls — check on the recording`}
-          missing="no camera behaviour data in this period" spark={series.flags ?? []} type="bar" color="var(--alert)" />
-      </div>
-
-      <div className="card">
-        <div className="card-head">
-          <h3>Summary for your vet</h3>
-          <span className="pill muted">Context, not diagnosis</span>
-        </div>
-        <p style={{ fontSize: 14, lineHeight: 1.7, color: "var(--ink-soft)" }}>
-          {facts.join(" ")}{" "}
-          This summary reflects camera-observed behaviour only and is intended to support, not replace, veterinary judgement.
+        <p className="muted" style={{ fontSize: 12, margin: "10px 0 0" }}>
+          The same report as the session report (<Link href={`/session?horse=${encodeURIComponent(horse.id)}&from=${encodeURIComponent(win.from)}&to=${encodeURIComponent(win.to)}`} style={{ color: "var(--accent)" }}>open this window there</Link>) — one set of measurements, whichever page you read it on.
         </p>
       </div>
+
+      {err && <div className="card">Could not build the report: {err}</div>}
+      {!rep && !err && <div className="card"><Loader2 className="spin" size={18} /></div>}
+      {rep && <SessionBody rep={rep} title="Report" />}
+      <NightlyReports />
     </>
   );
 }
 
-function ReportMetric({
-  icon,
-  label,
-  value,
-  note,
-  spark,
-  type = "line",
-  color,
-  missing = "no sensor for this point yet",
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string | null;
-  note: string;
-  missing?: string;
-  spark: (number | null)[];
-  type?: "line" | "bar";
-  color?: string;
-}) {
+/** The PDFs made each morning of the night before (Settings → Nightly reports). */
+function NightlyReports() {
+  const { user, authRequired } = useAuth();
+  const notify = useToast();
+  const [d, setD] = useState<DailyReports | null>(null);
+  const staff = !authRequired || user?.role === "admin" || user?.role === "staff";
+  useEffect(() => { if (staff) listDailyReports().then((r) => r.ok && setD(r.data)); }, [staff]);
+  if (!staff || !d) return null;
+  const day = (s: string) => new Date(`${s}T12:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
   return (
-    <div className="card">
-      <div className="flex between center">
-        <div className="flex gap-sm center">
-          <div className="chip sm">{icon}</div>
-          <span className="label" style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
-            {label}
-          </span>
+    <div className="card" style={{ marginTop: 24 }}>
+      <div className="card-head">
+        <h3>Nightly reports</h3>
+        <span className="sub">each morning, the night 18:00–06:00</span>
+      </div>
+      {!d.reports.length ? (
+        <p className="muted" style={{ fontSize: 13 }}>
+          None yet. Turn on <Link href="/settings" style={{ color: "var(--accent)" }}>Settings → Nightly reports</Link> and a PDF for each horse watched in the night is saved every morning.
+        </p>
+      ) : d.reports.slice(0, 14).map((r) => (
+        <div key={r.day} className="flex center wrap" style={{ gap: 8, padding: "8px 0", borderTop: "1px solid var(--border)" }}>
+          <b style={{ minWidth: 110, fontSize: 13 }}>{day(r.day)}</b>
+          {r.files.map((f) => (
+            <button key={f.name} className="btn-ghost" onClick={async () => { if (!(await downloadDailyReport(r.day, f.name))) notify("Could not download the report"); }}>
+              <Download size={14} /> {f.name.replace(/\.pdf$/, "")}
+            </button>
+          ))}
         </div>
-        {/* Plot only real points, and only when there are at least two. One
-            reading drawn as a line invents a trend out of a single sample. */}
-        {(() => {
-          const pts = spark.filter((n): n is number => n !== null);
-          return value !== null && pts.length > 1 ? (
-            <Sparkline data={pts} type={type} color={color} w={80} h={30} />
-          ) : null;
-        })()}
-      </div>
-      <div
-        style={{
-          fontFamily: "var(--font-display)",
-          fontSize: value === null ? 18 : 32,
-          fontWeight: 700,
-          color: value === null ? "var(--text-secondary)" : "var(--ink)",
-          marginTop: 14,
-        }}
-      >
-        {value ?? "Not measured"}
-      </div>
-      <span className="muted" style={{ fontSize: 12.5 }}>
-        {value === null ? missing : note}
-      </span>
+      ))}
     </div>
   );
 }

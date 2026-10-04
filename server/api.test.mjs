@@ -15,6 +15,7 @@ const DATA = mkdtempSync(join(tmpdir(), "equicare-test-"));
 let createStore, buildSeries;
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   delete process.env.DATABASE_URL;              // force the JSON store
   ({ createStore } = await import("./store.mjs"));
   ({ buildSeries } = await import("./rollup.mjs"));

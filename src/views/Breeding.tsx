@@ -14,8 +14,8 @@ import {
   CalendarClock,
   Minus,
 } from "lucide-react";
-import { breedingMares, Covering } from "../data/mock";
-import { useStable, useToast } from "../store";
+import { Covering } from "../data/mock";
+import { useStable, useToast, useMares } from "../store";
 import { Modal, SampleNote } from "../components/ui";
 import { apiConfigured } from "../data/api";
 
@@ -57,6 +57,7 @@ export default function Breeding() {
 
 /* ---------------- Foaling watch (existing) ---------------- */
 function Foaling() {
+  const breedingMares = useMares();
   const labourMare = breedingMares.find((m) => m.status === "labour");
   // Nearest to foaling is the one worth showing the protocol for.
   const focusMare = [...breedingMares].sort((a, b) => a.daysToDue - b.daysToDue)[0];
@@ -64,6 +65,11 @@ function Foaling() {
   return (
     <>
       <h3 className="section-title">Foaling watch</h3>
+      {!breedingMares.length && (
+        <div className="card muted" style={{ marginBottom: 28, fontSize: 13 }}>
+          No mares in foal. Open a mare&apos;s page and set her due date (the Foaling card) — the camera then watches for signs of labour in her last 30 days.
+        </div>
+      )}
       <div className="grid cols-3" style={{ marginBottom: 28 }}>
         {breedingMares.map((m) => {
           const labour = m.status === "labour";
@@ -89,9 +95,11 @@ function Foaling() {
                 {m.note}
               </p>
               <div className="flex gap-sm" style={{ marginTop: 14 }}>
-                <span className="pill accent">
-                  <Heart size={12} /> by {m.stallion}
-                </span>
+                {m.stallion !== "—" && (
+                  <span className="pill accent">
+                    <Heart size={12} /> by {m.stallion}
+                  </span>
+                )}
                 {labour && <span className="pill muted">Due per records</span>}
               </div>
             </div>

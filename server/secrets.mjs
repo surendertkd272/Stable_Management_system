@@ -10,7 +10,7 @@
 // its own; someone with the whole data directory has both halves, as with any
 // local keyfile. For stronger separation set CAMERA_SECRET_KEY from a secret
 // manager.
-import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "node:crypto";
+import { randomBytes, createCipheriv, createDecipheriv, scryptSync, createHmac } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { dataDir } from "./store.mjs";
@@ -34,6 +34,11 @@ function key() {
     }
   }
   return G.key;
+}
+
+/** A short signature for a link (an alert's "acknowledge" link in a text message). */
+export function sign(text) {
+  return createHmac("sha256", key()).update(`link:${text}`).digest("base64url").slice(0, 22);
 }
 
 /** Encrypt a secret. Output: "v1:<iv>:<tag>:<ciphertext>", base64 parts. */

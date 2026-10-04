@@ -104,15 +104,17 @@ export default function SettingsPage() {
         <h3 style={{ marginBottom: 4 }}>{t("Alert delivery")}</h3>
         {loadError ? <p className="muted" style={{ fontSize: 12.5 }}>{loadError}</p> : !st ? <p className="muted">Loading…</p> : (
           <>
-            {st.notify.transport === "log-only" && (
+            {st.notify.phones === "not connected" && st.notify.transport === "log-only" && (
               <div className="row watch" style={{ padding: "8px 12px", marginBottom: 10 }}>
-                <span style={{ fontSize: 12 }}>No webhook is configured on the server, so alerts are logged, not sent. Set
-                  NOTIFY_WEBHOOK_URL to a WhatsApp gateway, Slack or n8n; the recipients below go with each message.</span>
+                <span style={{ fontSize: 12 }}>Phone calls, SMS and WhatsApp go out once the stable&apos;s Twilio or Exotel account is
+                  added on the server (or a webhook, NOTIFY_WEBHOOK_URL). Until then each alert is written to the server log.</span>
               </div>
             )}
             {!isAdmin && <p className="muted" style={{ fontSize: 12 }}>Only an administrator can change these.</p>}
-            <Row label="Instant alerts" desc="Each new alert, once, to the manager (WhatsApp or other gateway, through the webhook)."
+            <Row label="Instant alerts" desc={`Each urgent alert, once, to ${d!.chain[0]?.name || d!.chain[0]?.role || "the first person"} below — a phone call, SMS or WhatsApp, with a link to say "seen".`}
               on={d!.instant} flip={() => !off && save({ delivery: { instant: !d!.instant } })} />
+            <Row label="Watch notes by text" desc={`Watch-level notes (a person at the stall at night, a hot stall) as a text to ${d!.chain[0]?.name || d!.chain[0]?.role || "the first person"} — never a call, never passed on.`}
+              on={d!.warnToStaff} flip={() => !off && save({ delivery: { warnToStaff: !d!.warnToStaff } })} />
             <Row label="Daily digest" desc={`Every horse's status and open alerts, each morning at ${String(d!.digestHour).padStart(2, "0")}:00.`}
               on={d!.digest} flip={() => !off && save({ delivery: { digest: !d!.digest } })} />
             {d!.digest && (
@@ -124,7 +126,7 @@ export default function SettingsPage() {
               </div>
             )}
             <Row label="Auto-escalation"
-              desc={`An urgent alert nobody acknowledges goes to the on-call person after ${d!.escalateAfterMin} min, and to the vet after ${2 * d!.escalateAfterMin} min.`}
+              desc={`An urgent alert nobody acknowledges goes to ${d!.chain[1]?.name || d!.chain[1]?.role || "the second person"} after ${d!.escalateAfterMin} min, and to ${d!.chain[2]?.name || d!.chain[2]?.role || "the third"} after ${2 * d!.escalateAfterMin} min.`}
               on={d!.escalation} flip={() => !off && save({ delivery: { escalation: !d!.escalation } })} />
             {d!.escalation && (
               <div className="field" style={{ maxWidth: 200 }}>
@@ -134,11 +136,55 @@ export default function SettingsPage() {
                 </select>
               </div>
             )}
-            <Recipients value={d!.recipients} disabled={off} onSave={(recipients) => save({ delivery: { recipients } }, "Recipients saved")} />
+            <CallChain value={d!.chain} legacy={d!.recipients} disabled={off} onSave={(chain) => save({ delivery: { chain } }, "Call chain saved")} />
+            <div className="field" style={{ maxWidth: 260, marginTop: 6 }}>
+              <label>Ring one number at most</label>
+              <select disabled={off} value={d!.callAtMostEveryMin} onChange={(e) => save({ delivery: { callAtMostEveryMin: Number(e.target.value) } })}>
+                {[15, 30, 60, 120, 240].map((m) => <option key={m} value={m}>once every {m < 60 ? `${m} min` : `${m / 60} h`} (texts after)</option>)}
+              </select>
+            </div>
             <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
-              Sent so far: {st.notify.notified} alerts, {st.notify.escalated} escalations, {st.notify.digests} digests
-              {st.notify.failed ? ` · ${st.notify.failed} failed` : ""}.
+              Sent so far: {st.notify.notified} alerts, {st.notify.escalated} escalations, {st.notify.calls} calls, {st.notify.texts} texts, {st.notify.digests} digests
+              {st.notify.failed + st.notify.phoneFailed ? ` · ${st.notify.failed + st.notify.phoneFailed} failed` : ""}.
             </p>
+          </>
+        )}
+      </div>
+
+      {/* security and nightly reports */}
+      <div className="card">
+        <h3 style={{ marginBottom: 4 }}>{t("Night security")}</h3>
+        {!st ? <p className="muted">Loading…</p> : (
+          <>
+            <Row label="Person at the stall at night" desc={`Someone seen at a stall between ${String(st.security.quietFrom).padStart(2, "0")}:00 and ${String(st.security.quietTo).padStart(2, "0")}:00 — a watch note, from cameras whose people-detection is trusted.`}
+              on={st.security.nightVisitors} flip={() => !off && save({ security: { nightVisitors: !st.security.nightVisitors } })} />
+            {st.security.nightVisitors && (
+              <div className="field-row">
+                <div className="field">
+                  <label>Quiet hours from</label>
+                  <select disabled={off} value={st.security.quietFrom} onChange={(e) => save({ security: { quietFrom: Number(e.target.value) } })}>
+                    {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>to</label>
+                  <select disabled={off} value={st.security.quietTo} onChange={(e) => save({ security: { quietTo: Number(e.target.value) } })}>
+                    {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
+            <h3 style={{ margin: "18px 0 4px" }}>{t("Nightly reports")}</h3>
+            <Row label="A PDF for each horse every morning" desc={`The night 18:00–06:00, made at ${String(st.reports.hour).padStart(2, "0")}:00 for every horse watched — on the Reports page.`}
+              on={st.reports.daily} flip={() => !off && save({ reports: { daily: !st.reports.daily } })} />
+            {st.reports.daily && (
+              <div className="field" style={{ maxWidth: 200 }}>
+                <label>Made at</label>
+                <select disabled={off} value={st.reports.hour} onChange={(e) => save({ reports: { hour: Number(e.target.value) } })}>
+                  {Array.from({ length: 12 }, (_, i) => i + 6).map((h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
+                </select>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -154,13 +200,16 @@ export default function SettingsPage() {
           ["temperature", "Temperature", "Eye temperature against the horse's own baseline.", readiness("thermal_camera", "thermal camera")],
           ["breathing", "Breathing", "Resting breathing rate from the nostril or flank.", readiness("thermal_camera", "thermal camera")],
           ["casting", "Possibly cast", "Down with repeated struggling and not getting up (from the camera).", readiness("visible_video", "camera")],
-          ["colic", "Colic signs", "Repeated lying down/up, rolling, long flat lying, less manure (camera watch notes; the colic alarm itself needs the IMU tag).", readiness("visible_video", "camera")],
+          ["colic", "Colic", "Possible colic when two signs come together — lying down and getting up again and again, rolling, long flat lying, eating less, no droppings, restlessness.", readiness("visible_video", "camera")],
+          ["foaling", "Foaling", "A mare in her foaling window showing signs of labour (set the due date on her page).", readiness("visible_video", "camera")],
           ["activity", "Activity unusual", "Well above or below this horse's own normal.", readiness("visible_video", "camera")],
           ["vices", "Stable vices", "New or increased weaving, box walking, head tossing (crib-biting not detected yet).", readiness("visible_video", "camera")],
           ["sleep", "Sleep / lying", "Little lying at night; low lying time.", readiness("visible_video", "camera")],
           ["elimination", "Urination", "No urination seen for a long time.", readiness("visible_video", "camera")],
           ["lameness", "Gait & lameness", "Movement asymmetry.", readiness("imu_optical", "IMU tag")],
           ["water", "Low water intake", "Below this horse's own normal.", readiness("flow_meter", "flow meter")],
+          ["security", "Person at night", "Someone at a stall in the quiet hours (Night security).", readiness("visible_video", "camera")],
+          ["heat", "Stall heat", "The stall's heat index (temperature + humidity) at 130 watch, 150 danger.", undefined],
           ["monitoring", "Monitoring & devices", "A camera not aimed, a device or edge box not reporting.", undefined],
         ] as const).map(([k, label, desc, blocked]) => (
           <Row key={k} label={label} desc={desc} on={st.send[k]} blocked={blocked}
@@ -249,23 +298,42 @@ function activityBand(s: number) {
   return { hi: Math.round(hi * 100) / 100, lo: Math.round(lo * 100) / 100 };
 }
 
-function Recipients({ value, disabled, onSave }: {
-  value: api.SiteSettings["delivery"]["recipients"]; disabled: boolean; onSave: (v: api.SiteSettings["delivery"]["recipients"]) => void;
+/** Who is called, in order: stall staff first, then the duty vet, then the officer in charge. */
+function CallChain({ value, legacy, disabled, onSave }: {
+  value: api.ChainPerson[]; legacy: api.SiteSettings["delivery"]["recipients"]; disabled: boolean; onSave: (v: api.ChainPerson[]) => void;
 }) {
-  const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
+  // numbers saved before the chain existed fill its empty places
+  const start = () => value.map((p, i) => ({ ...p, phone: p.phone || [legacy.manager, legacy.onCall, legacy.vet][i] || "" }));
+  const [v, setV] = useState(start);
+  useEffect(() => setV(start()), [value, legacy]); // eslint-disable-line react-hooks/exhaustive-deps
   const dirty = JSON.stringify(v) !== JSON.stringify(value);
+  const bad = (p: string) => p !== "" && !/^\+[1-9]\d{7,14}$/.test(p.replace(/[\s-]/g, ""));
+  const set = (i: number, patch: Partial<api.ChainPerson>) => setV(v.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   return (
     <div style={{ marginTop: 10 }}>
-      <div className="field-row">
-        {([["manager", "Manager"], ["onCall", "On-call"], ["vet", "Vet"]] as const).map(([k, label]) => (
-          <div className="field" key={k} style={{ marginBottom: 8 }}>
-            <label>{label}</label>
-            <input disabled={disabled} value={v[k]} placeholder="+91 …" onChange={(e) => setV({ ...v, [k]: e.target.value })} />
+      <b style={{ fontSize: 13 }}>Call chain</b>
+      {v.map((p, i) => (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) 120px", gap: 8, alignItems: "end" }}>
+          <div className="field" style={{ marginBottom: 8 }}>
+            <label>{i + 1}. {p.role}</label>
+            <input disabled={disabled} value={p.name} placeholder="Name" onChange={(e) => set(i, { name: e.target.value })} />
           </div>
-        ))}
-      </div>
-      {dirty && <button className="btn-primary" onClick={() => onSave(v)}>Save recipients</button>}
+          <div className="field" style={{ marginBottom: 8 }}>
+            <label>Phone{bad(p.phone) && <span style={{ color: "var(--alert)" }}> — as +91 98765 43210</span>}</label>
+            <input disabled={disabled} value={p.phone} placeholder="+91 98765 43210" inputMode="tel" onChange={(e) => set(i, { phone: e.target.value })} />
+          </div>
+          <div className="field" style={{ marginBottom: 8 }}>
+            <label>By</label>
+            <select disabled={disabled} value={p.channel} onChange={(e) => set(i, { channel: e.target.value as api.ChainPerson["channel"] })}>
+              <option value="call">Phone call</option>
+              <option value="sms">SMS</option>
+              <option value="whatsapp">WhatsApp</option>
+            </select>
+          </div>
+        </div>
+      ))}
+      <p className="muted" style={{ fontSize: 11.5, margin: "0 0 8px" }}>A call is always followed by a text with the link to acknowledge — acknowledging stops the chain.</p>
+      {dirty && <button className="btn-primary" disabled={v.some((p) => bad(p.phone))} onClick={() => onSave(v)}>Save call chain</button>}
     </div>
   );
 }

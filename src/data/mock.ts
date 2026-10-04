@@ -38,6 +38,12 @@ export interface Horse {
   // present when served by the backend; absent on mock data (treated as "live")
   monitoring?: Monitoring;
   lastSeen?: string | null;
+  /** 0–10, how far the latest day is from the horse's own normal; null while learning */
+  unusual?: { score: number | null; learning: boolean; reasons: string[] };
+  /** foaling: the due date, and when she foaled (mare-and-foal mode for 90 days) */
+  foalingDue?: string | null;
+  foaledAt?: string | null;
+  mareAndFoal?: boolean;
 }
 
 const img = (seed: string) =>

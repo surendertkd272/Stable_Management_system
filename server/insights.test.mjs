@@ -137,6 +137,9 @@ test("setup check: passes with the horse and eye in their boxes, and says what i
   const lamp = judge({ grid, eyeGrid: Array(144).fill(55), eyeCols: 12, nostril: { avgC: 31 }, eye: { x0: 0, y0: 0, x1: 900, y1: 900 }, nostrilBox: { x0: 500, y0: 500, x1: 1500, y1: 1500 } });
   assert.match(lamp.items.find((i) => i.key === "eye_warm").detail, /too hot for an eye/);
   assert.equal(lamp.items.find((i) => i.key === "apart").ok, false);
+  assert.equal(ok.items.find((i) => i.key === "sun").ok, true);
+  const sun = judge({ grid: [...grid.slice(0, 60), 52, 51, 50, 49], eyeGrid, eyeCols: 12, nostril: { avgC: 31 }, eye: { x0: 4000, y0: 3000, x1: 4800, y1: 3600 }, nostrilBox: { x0: 4500, y0: 7000, x1: 5500, y1: 8000 } });
+  assert.match(sun.items.find((i) => i.key === "sun").detail, /direct sun/);
 });
 
 // ---- through the server ---------------------------------------------------------- //
@@ -153,6 +156,7 @@ const call = async (method, path, { token = tokens.admin, body } = {}) => {
 };
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   process.env.EQUICARE_RECORDINGS_DIR = join(DATA, "recordings");
   delete process.env.DATABASE_URL; delete process.env.VERCEL; delete process.env.AUTH_INGEST_TOKEN;

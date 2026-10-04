@@ -15,10 +15,27 @@ export const DEFAULTS = {
     escalation: false,          // unacknowledged alerts go up the chain
     escalateAfterMin: 15,
     recipients: { manager: "", onCall: "", vet: "" },   // numbers / addresses the gateway sends to
+    // The call chain (server/notify.mjs): a new alert goes to the first
+    // person; unacknowledged, to the next after escalateAfterMin, then the
+    // third. Each by call, SMS or WhatsApp; a number is called at most once
+    // per callAtMostEveryMin (texted instead).
+    chain: [
+      { role: "Stall staff", name: "", phone: "", channel: "call" },
+      { role: "Duty vet", name: "", phone: "", channel: "call" },
+      { role: "Officer in charge", name: "", phone: "", channel: "call" },
+    ],
+    callAtMostEveryMin: 60,
+    warnToStaff: true,          // watch-level alerts (e.g. a person at night) go to the first person, no further
   },
+  // Security: people at the stall in the quiet hours (cameras whose
+  // people-detection is trusted).
+  security: { nightVisitors: true, quietFrom: 22, quietTo: 5 },
+  // A PDF report for each horse every morning, of the night before.
+  reports: { daily: false, hour: 7 },
   send: {                       // which alert groups are sent
     temperature: true, breathing: true, colic: true, casting: true, activity: true,
     vices: true, sleep: true, elimination: true, lameness: true, water: true, monitoring: true,
+    foaling: true, security: true, heat: true,
   },
   sensitivity: 50,              // 0 calm … 50 balanced … 100 sensitive
   privacy: { consentAt: null, consentBy: null },
@@ -37,6 +54,9 @@ const GROUPS = [
   ["elimination", /urination/i],
   ["lameness", /lameness/i],
   ["water", /water/i],
+  ["foaling", /foaling/i],
+  ["security", /person at the stall/i],
+  ["heat", /heat in the stall|hot, humid/i],
   ["monitoring", /monitoring|device|camera not aimed|not reporting|edge box/i],
 ];
 
@@ -46,6 +66,7 @@ export function groupOf(type) {
 
 const clampInt = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.max(lo, Math.min(hi, Math.round(Number(v)))) : dflt);
 const str = (v) => (typeof v === "string" ? v.trim().slice(0, 120) : "");
+const PHONE = /^\+[1-9]\d{7,14}$/;
 
 /** Merge a PATCH into the current settings, validating every field. */
 export function mergeSettings(cur, body, who) {
@@ -57,6 +78,27 @@ export function mergeSettings(cur, body, who) {
     if (d.escalateAfterMin !== undefined) s.delivery.escalateAfterMin = clampInt(d.escalateAfterMin, 5, 240, s.delivery.escalateAfterMin);
     if (d.recipients && typeof d.recipients === "object")
       for (const k of ["manager", "onCall", "vet"]) if (d.recipients[k] !== undefined) s.delivery.recipients[k] = str(d.recipients[k]);
+    if (Array.isArray(d.chain))
+      s.delivery.chain = d.chain.slice(0, 3).map((p, i) => ({
+        role: str(p?.role) || DEFAULTS.delivery.chain[i]?.role || `Step ${i + 1}`,
+        name: str(p?.name),
+        // international form (+91…) or empty — anything else is not a number a phone network accepts
+        phone: PHONE.test(String(p?.phone ?? "").replace(/[\s-]/g, "")) ? String(p.phone).replace(/[\s-]/g, "") : "",
+        channel: ["call", "sms", "whatsapp"].includes(p?.channel) ? p.channel : "call",
+      }));
+    if (d.callAtMostEveryMin !== undefined) s.delivery.callAtMostEveryMin = clampInt(d.callAtMostEveryMin, 10, 720, s.delivery.callAtMostEveryMin);
+    if (typeof d.warnToStaff === "boolean") s.delivery.warnToStaff = d.warnToStaff;
+  }
+  const sec = body?.security;
+  if (sec && typeof sec === "object") {
+    if (typeof sec.nightVisitors === "boolean") s.security.nightVisitors = sec.nightVisitors;
+    if (sec.quietFrom !== undefined) s.security.quietFrom = clampInt(sec.quietFrom, 0, 23, s.security.quietFrom);
+    if (sec.quietTo !== undefined) s.security.quietTo = clampInt(sec.quietTo, 0, 23, s.security.quietTo);
+  }
+  const rep = body?.reports;
+  if (rep && typeof rep === "object") {
+    if (typeof rep.daily === "boolean") s.reports.daily = rep.daily;
+    if (rep.hour !== undefined) s.reports.hour = clampInt(rep.hour, 0, 23, s.reports.hour);
   }
   if (body?.send && typeof body.send === "object")
     for (const k of Object.keys(DEFAULTS.send)) if (typeof body.send[k] === "boolean") s.send[k] = body.send[k];
@@ -72,7 +114,10 @@ export function currentSettings(store) {
   if (!row) return structuredClone(DEFAULTS);
   return {
     ...structuredClone(DEFAULTS), ...row,
-    delivery: { ...DEFAULTS.delivery, ...row.delivery, recipients: { ...DEFAULTS.delivery.recipients, ...row.delivery?.recipients } },
+    delivery: { ...DEFAULTS.delivery, ...row.delivery, recipients: { ...DEFAULTS.delivery.recipients, ...row.delivery?.recipients },
+      chain: DEFAULTS.delivery.chain.map((d, i) => ({ ...d, ...(row.delivery?.chain?.[i] ?? {}) })) },
+    security: { ...DEFAULTS.security, ...row.security },
+    reports: { ...DEFAULTS.reports, ...row.reports },
     send: { ...DEFAULTS.send, ...row.send },
     privacy: { ...DEFAULTS.privacy, ...row.privacy },
   };

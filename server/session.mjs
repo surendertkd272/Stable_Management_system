@@ -5,6 +5,7 @@
 // covers, and a point with nothing measured says so instead of showing zero.
 
 import { BREATHING_WHY, isDiagnostic } from "./contract.mjs";
+import { splitEye, floorAlone, setAsideNote } from "./reading-rules.mjs";
 import { LIMB_NAME, lamenessVsNormal, leftOf, mealsOf, offCamera, stepsTotal } from "./rollup.mjs";
 
 const MIN = 60000;
@@ -55,19 +56,25 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
   const add = (n, label, status, summary, extra = {}) => points.push({ n, label, status, summary, ...extra });
 
   // 1 · body temperature
-  const temp = of("body_temp_c");
+  // the same rules as every report (server/reading-rules.mjs)
+  const { used: temp, setAside: eyeAside } = splitEye(win);
   const ts = stats(temp);
+  const asideNote = setAsideNote(eyeAside);
   if (ts) {
     const uncal = temp.filter((r) => r.meta?.calibrated === false).length;
     const methods = countBy(temp, (r) => (String(r.meta?.method || "").startsWith("eye box") ? "eye box" : r.meta?.method ? "head found elsewhere in view" : "—"));
     add(1, "Body temperature", uncal === temp.length ? "uncalibrated" : "measured",
-      `Eye surface ${ts.median} °C median (${ts.min}–${ts.max}), ${ts.n} readings over ${minutesCovered(temp)} of ${windowMin} min (${pct(minutesCovered(temp))} %).`,
+      `Eye surface ${ts.n === 1 ? `${ts.median} °C, 1 reading` : `${ts.median} °C median (${ts.min}–${ts.max}), ${ts.n} readings`} over ${minutesCovered(temp)} of ${windowMin} min (${pct(minutesCovered(temp))} %).`,
       { stats: ts, methods, notes: [
         "Eye infrared is a trend for this horse, not a core temperature: its offset from rectal depends on the camera, distance and conditions.",
         ...(uncal ? [`${uncal} readings were taken before the camera was aimed — shown, never used for alerts.`] : []),
+        ...(asideNote ? [asideNote] : []),
         "Temperature alerts compare with the horse's own 7-day baseline, which needs ~3 days of readings.",
       ] });
-  } else add(1, "Body temperature", "not measured", "No eye temperature in this window — the head was never in the thermal view (or the camera was not aimed).");
+  } else add(1, "Body temperature", "not measured", eyeAside.length
+    ? "No eye temperature that counts in this window."
+    : "No eye temperature in this window — the head was never in the thermal view (or the camera was not aimed).",
+    asideNote ? { notes: [asideNote] } : {});
 
   // 2 · respiration pattern, 3 · respiratory rate
   const resp = of("respiratory_rate_bpm");
@@ -153,8 +160,10 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
     { byKind, notes: ["Crib-biting is not detected yet."] });
 
   // 7 · urination, 8 · excretion — "none seen" only if the floor was watched.
+  const alone = floorAlone(win);
   for (const [n, metric, label] of [[7, "urination_event", "Urination"], [8, "excretion_event", "Excretion"]]) {
-    const ev = of(metric);
+    const all = of(metric), ev = all.filter(alone);
+    const moved = all.length - ev.length;
     const watched = as && floorWatched !== false;
     add(n, label, ev.length ? "prototype" : watched ? "none seen" : "not measured",
       ev.length ? `${ev.length} seen: ` + ev.map((r) => `${hhmm(r.ts)} (${r.meta?.tier ?? "?"}, confidence ${Math.round((r.confidence ?? 0) * 100)} %)`).join(", ") + "."
@@ -162,7 +171,9 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
           : floorWatched === false ? "Not measured — no floor area is marked on this camera (calibrator: Floor), so the bedding was not watched."
             : "Not measured — the floor is watched in the video, which was not running.",
       { events: ev.map((r) => ({ at: r.ts, tier: r.meta?.tier ?? null, confidence: r.confidence, source: r.source })),
-        notes: ["Urine shows well on shavings, poorly on straw. Deposits outside the colour picture are missed."] });
+        notes: [
+          ...(moved ? [`${moved} more floor change${moved === 1 ? "" : "s"} set aside: within 10 minutes of another, the bedding being moved (lying down, getting up, turning).`] : []),
+          "Urine shows well on shavings, poorly on straw. Deposits outside the colour picture are missed."] });
   }
 
   // 9–12 · the wearable and the stall sensors. A sensor that never reported
@@ -242,8 +253,8 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
   const timeline = [
     ...pev.map((r) => ({ at: r.ts, what: { lie_down: "Lay down", get_up: "Got up", possible_roll: "Possible roll", possible_cast: "Possibly cast" }[r.meta?.kind] || r.meta?.kind })),
     ...vices.map((r) => ({ at: r.ts, what: `${(r.meta?.kind || "weaving").replace("_", " ")} (1 min window)` })),
-    ...of("urination_event").map((r) => ({ at: r.ts, what: "Urination (floor)" })),
-    ...of("excretion_event").map((r) => ({ at: r.ts, what: "Manure (floor)" })),
+    ...of("urination_event").filter(alone).map((r) => ({ at: r.ts, what: "Urination (floor)" })),
+    ...of("excretion_event").filter(alone).map((r) => ({ at: r.ts, what: "Manure (floor)" })),
   ].sort((a, b) => a.at.localeCompare(b.at));
   const inWin = clips.filter((c) => Date.parse(c.end) >= from && Date.parse(c.at) <= to);
   const bytes = inWin.reduce((a, c) => a + (c.thermal?.bytes || 0) + (c.visible?.bytes || 0), 0);

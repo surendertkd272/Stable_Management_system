@@ -17,7 +17,7 @@ const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digi
 const toLocalInput = (iso: string) => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 // The notes are kept in this browser only, per horse, until the next report.
 const notesKey = (horse: string) => `equicare.reportNotes.${horse}`;
-const readNotes = (horse: string) => { try { return localStorage.getItem(notesKey(horse)) || ""; } catch { return ""; } };
+export const readNotes = (horse: string) => { try { return localStorage.getItem(notesKey(horse)) || ""; } catch { return ""; } };
 const keepNotes = (horse: string, v: string) => { try { localStorage.setItem(notesKey(horse), v); } catch { /* not kept */ } };
 
 export default function Session() {
@@ -112,70 +112,79 @@ export default function Session() {
       {!rep && !err && <div className="card"><Loader2 className="spin" size={18} /></div>}
       {rep && (
         <>
-          <div className="card" style={{ marginBottom: 14 }}>
-            <h3 style={{ marginTop: 0 }}>Session report · {rep.horse?.name} · stall {rep.horse?.stall}</h3>
-            <p style={{ margin: "4px 0", fontSize: 13.5 }}>
-              {new Date(rep.window.from).toLocaleString()} → {hm(rep.window.to)} ({rep.window.minutes} min). Camera data in{" "}
-              <b>{rep.coverage.minutesWithData} of {rep.window.minutes} minutes ({rep.coverage.percent} %)</b>, {rep.coverage.readings} readings.
-              {" "}{rep.footage.clips ? <>Video recorded: {rep.footage.clips} clips, {rep.footage.megabytes} MB.</> : <>No video recorded in this window.</>}
-            </p>
-            {rep.coverage.gaps.length > 0 && (
-              <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
-                Gaps with no camera data: {rep.coverage.gaps.map((g) => `${hm(g.from)}–${hm(g.to)} (${g.minutes} min)`).join(", ")} — the horse out of view, or the camera/edge agent not running.
-              </p>
-            )}
-            <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
-              Temperature and breathing come from the thermal view (head); activity, lying, vices and the floor from the colour
-              picture.
-            </p>
-          </div>
-
-          <div className="grid cols-2" style={{ gap: 12, marginBottom: 14 }}>
-            {rep.points.map((p) => (
-              <div key={p.n} className="card" style={{ padding: 16 }}>
-                <div className="flex between center" style={{ marginBottom: 6 }}>
-                  <b>{p.n}. {p.label}</b>
-                  <span className={`pill ${PILL[p.status]}`}>{p.status === "prototype" ? "measured" : p.status}</span>
-                </div>
-                <p style={{ margin: "0 0 6px", fontSize: 13.5 }}>{p.summary}</p>
-                {p.series && (
-                  <div style={{ display: "flex", alignItems: "end", gap: 2, height: 36, margin: "6px 0" }} aria-label="activity per 5 minutes">
-                    {p.series.map((s) => (
-                      <div key={s.at} title={`${hm(s.at)}: ${s.avg ?? "no data"}`}
-                        style={{ flex: 1, height: s.avg === null ? 2 : `${Math.max(4, Math.round(s.avg * 100))}%`, background: s.avg === null ? "var(--border)" : "var(--accent)", borderRadius: 2 }} />
-                    ))}
-                  </div>
-                )}
-                {p.methods && <p className="muted" style={{ fontSize: 11.5, margin: "0 0 4px" }}>How: {Object.entries(p.methods).map(([k, n]) => `${k} (${n})`).join(", ")}</p>}
-                {p.notes?.map((n) => <p key={n} className="muted" style={{ fontSize: 11.5, margin: "0 0 2px" }}>{n}</p>)}
-              </div>
-            ))}
-          </div>
-
-          <div className="grid cols-2" style={{ gap: 12, alignItems: "start" }}>
-            <div className="card">
-              <h3 style={{ marginTop: 0 }}>Timeline</h3>
-              {rep.timeline.length === 0 ? <p className="muted" style={{ fontSize: 13 }}>No posture changes, vices or floor events detected.</p>
-                : rep.timeline.map((e, i) => <div key={i} style={{ fontSize: 13, padding: "3px 0" }}><b>{hm(e.at)}</b> · {e.what}</div>)}
-              {rep.footage.clips > 0 && (
-                <p style={{ fontSize: 12.5, marginBottom: 0 }} className="no-print"><Film size={13} /> <Link href="/footage">Watch and label the recorded video</Link></p>
-              )}
-            </div>
-            <div className="card">
-              <h3 style={{ marginTop: 0 }}>Alerts and watch notes</h3>
-              {rep.alerts.length === 0 ? <p className="muted" style={{ fontSize: 13 }}><CheckCircle2 size={13} /> None open.</p>
-                : rep.alerts.map((a, i) => (
-                  <div key={i} style={{ fontSize: 13, padding: "4px 0" }}>
-                    <AlertTriangle size={12} color={a.severity === "alert" ? "var(--alert)" : "var(--warn)"} /> <b>{a.type}</b>
-                    <div className="muted" style={{ fontSize: 12 }}>{a.detail}</div>
-                  </div>
-                ))}
-              <h3>To verify</h3>
-              <ul style={{ fontSize: 13, paddingLeft: 18, margin: 0 }}>{rep.verify.map((v) => <li key={v}>{v}</li>)}</ul>
-            </div>
-          </div>
+          <SessionBody rep={rep} title="Session report" />
         </>
       )}
     </div>
+  );
+}
+
+/** The report itself — the same on the Session page and the Reports page, from the same /api/session. */
+export function SessionBody({ rep, title }: { rep: api.SessionReport; title: string }) {
+  return (
+    <>
+      <div className="card" style={{ marginBottom: 14 }}>
+        <h3 style={{ marginTop: 0 }}>{title} · {rep.horse?.name} · stall {rep.horse?.stall}</h3>
+        <p style={{ margin: "4px 0", fontSize: 13.5 }}>
+          {new Date(rep.window.from).toLocaleString()} → {rep.window.minutes > 24 * 60 ? new Date(rep.window.to).toLocaleString() : hm(rep.window.to)} ({rep.window.minutes > 24 * 60 ? `${Math.round(rep.window.minutes / 1440)} days` : rep.window.minutes > 120 ? `${Math.round(rep.window.minutes / 60)} h` : `${rep.window.minutes} min`}). Camera data in{" "}
+          <b>{rep.coverage.minutesWithData} of {rep.window.minutes} minutes ({rep.coverage.percent} %)</b>, {rep.coverage.readings} readings.
+          {" "}{rep.footage.clips ? <>Video recorded: {rep.footage.clips} clips, {rep.footage.megabytes} MB.</> : <>No video recorded in this window.</>}
+        </p>
+        {rep.coverage.gaps.length > 0 && (
+          <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
+            Gaps with no camera data: {rep.coverage.gaps.map((g) => `${hm(g.from)}–${hm(g.to)} (${g.minutes} min)`).join(", ")} — the horse out of view, or the camera/edge agent not running.
+          </p>
+        )}
+        <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
+          Temperature and breathing come from the thermal view (head); activity, lying, vices and the floor from the colour
+          picture.
+        </p>
+      </div>
+
+      <div className="grid cols-2" style={{ gap: 12, marginBottom: 14 }}>
+        {rep.points.map((p) => (
+          <div key={p.n} className="card" style={{ padding: 16 }}>
+            <div className="flex between center" style={{ marginBottom: 6 }}>
+              <b>{p.n}. {p.label}</b>
+              <span className={`pill ${PILL[p.status]}`}>{p.status === "prototype" ? "measured" : p.status}</span>
+            </div>
+            <p style={{ margin: "0 0 6px", fontSize: 13.5 }}>{p.summary}</p>
+            {p.series && (
+              <div style={{ display: "flex", alignItems: "end", gap: 2, height: 36, margin: "6px 0" }} aria-label="activity per 5 minutes">
+                {p.series.map((s) => (
+                  <div key={s.at} title={`${hm(s.at)}: ${s.avg ?? "no data"}`}
+                    style={{ flex: 1, height: s.avg === null ? 2 : `${Math.max(4, Math.round(s.avg * 100))}%`, background: s.avg === null ? "var(--border)" : "var(--accent)", borderRadius: 2 }} />
+                ))}
+              </div>
+            )}
+            {p.methods && <p className="muted" style={{ fontSize: 11.5, margin: "0 0 4px" }}>How: {Object.entries(p.methods).map(([k, n]) => `${k} (${n})`).join(", ")}</p>}
+            {p.notes?.map((n) => <p key={n} className="muted" style={{ fontSize: 11.5, margin: "0 0 2px" }}>{n}</p>)}
+          </div>
+        ))}
+      </div>
+
+      <div className="grid cols-2" style={{ gap: 12, alignItems: "start" }}>
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>Timeline</h3>
+          {rep.timeline.length === 0 ? <p className="muted" style={{ fontSize: 13 }}>No posture changes, vices or floor events detected.</p>
+            : rep.timeline.map((e, i) => <div key={i} style={{ fontSize: 13, padding: "3px 0" }}><b>{hm(e.at)}</b> · {e.what}</div>)}
+          {rep.footage.clips > 0 && (
+            <p style={{ fontSize: 12.5, marginBottom: 0 }} className="no-print"><Film size={13} /> <Link href="/footage">Watch and label the recorded video</Link></p>
+          )}
+        </div>
+        <div className="card">
+          <h3 style={{ marginTop: 0 }}>Alerts and watch notes</h3>
+          {rep.alerts.length === 0 ? <p className="muted" style={{ fontSize: 13 }}><CheckCircle2 size={13} /> None open.</p>
+            : rep.alerts.map((a, i) => (
+              <div key={i} style={{ fontSize: 13, padding: "4px 0" }}>
+                <AlertTriangle size={12} color={a.severity === "alert" ? "var(--alert)" : "var(--warn)"} /> <b>{a.type}</b>
+                <div className="muted" style={{ fontSize: 12 }}>{a.detail}</div>
+              </div>
+            ))}
+          <h3>To verify</h3>
+          <ul style={{ fontSize: 13, paddingLeft: 18, margin: 0 }}>{rep.verify.map((v) => <li key={v}>{v}</li>)}</ul>
+        </div>
+      </div>
+    </>
   );
 }

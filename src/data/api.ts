@@ -637,6 +637,9 @@ export const listEvents = (p: { horse?: string; from?: string; to?: string }) =>
 export const reviewEvent = (e: HorseEvent, verdict: "confirmed" | "wrong", note: string) =>
   call<{ review: unknown; trainingLabel: boolean }>("POST", `/api/events/${encodeURIComponent(e.id)}/review?${tzq()}`, { horse: e.horse, at: e.at, verdict, note });
 /** A short clip a <video> can play (ticket, not the session). */
+/** The horse's stall through a window (up to 24 h) in about a minute; <video> src. */
+export const timelapseUrl = (ticket: string, horse: string, from: string, to: string) =>
+  `${BASE}/api/timelapse?${new URLSearchParams({ vt: ticket, horse, from, to })}`;
 export const clipUrl = (ticket: string, p: { camera: string; at: string; stream?: "visible" | "thermal"; stall?: string | null;
   mark?: RoiBox | { x: number; y: number } | null; slow?: boolean; before?: number; after?: number }) =>
   `${BASE}/api/clip?${new URLSearchParams({ vt: ticket, camera: p.camera, at: p.at, stream: p.stream ?? "visible",
@@ -739,13 +742,37 @@ export interface SiteSettings {
   delivery: {
     instant: boolean; digest: boolean; digestHour: number; escalation: boolean; escalateAfterMin: number;
     recipients: { manager: string; onCall: string; vet: string };
+    chain: ChainPerson[]; callAtMostEveryMin: number; warnToStaff: boolean;
   };
-  send: Record<"temperature" | "breathing" | "colic" | "casting" | "activity" | "vices" | "sleep" | "elimination" | "lameness" | "water" | "monitoring", boolean>;
+  security: { nightVisitors: boolean; quietFrom: number; quietTo: number };
+  reports: { daily: boolean; hour: number };
+  send: Record<"temperature" | "breathing" | "colic" | "casting" | "activity" | "vices" | "sleep" | "elimination" | "lameness" | "water" | "monitoring" | "foaling" | "security" | "heat", boolean>;
   sensitivity: number;
   privacy: { consentAt: string | null; consentBy: string | null };
-  notify: { transport: "webhook" | "log-only"; minSeverity: string; disabled: boolean; notified: number; escalated: number; digests: number; failed: number };
+  notify: { transport: "webhook" | "log-only"; minSeverity: string; disabled: boolean; notified: number; escalated: number; digests: number; failed: number;
+    phones: "twilio" | "exotel" | "not connected"; publicUrl: string | null; calls: number; texts: number; phoneFailed: number };
 }
+export interface ChainPerson { role: string; name: string; phone: string; channel: "call" | "sms" | "whatsapp" }
 export const getSettings = () => call<SiteSettings>("GET", "/api/settings");
+
+// ---- nightly reports: one PDF per horse each morning (server/daily-reports.mjs) -- //
+export interface DailyReports { reports: { day: string; files: { name: string; bytes: number }[] }[];
+  status: { made: number; failed: number; lastDay: string | null; lastError: string | null } }
+export const listDailyReports = () => call<DailyReports>("GET", "/api/reports/daily");
+/** Download one saved report (a login header is needed, so fetch, then save). */
+export async function downloadDailyReport(day: string, name: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/api/reports/daily/${encodeURIComponent(day)}/${encodeURIComponent(name)}`, { headers: authHeaders() });
+    if (!res.ok) return false;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = `${name.replace(/\.pdf$/, "")} - night to ${day}.pdf`;
+    a.click();
+    return true;
+  } catch {
+    return false;
+  }
+}
 export const patchSettings = (patch: unknown) => call<SiteSettings>("PATCH", "/api/settings", patch);
 
 // ---- session report (the 8 points over a window) -------------------------- //

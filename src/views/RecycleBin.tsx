@@ -22,6 +22,7 @@ export function DeleteHorseButton({ id, name }: { id: string; name: string }) {
     setBusy(false);
     if (err) { notify(err); return; }
     notify(`${name} moved to the recycle bin — restorable for 30 days`);
+    setOpen(false);
     router.push("/horses");
   };
   return (

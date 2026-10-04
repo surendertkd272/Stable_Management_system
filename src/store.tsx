@@ -4,7 +4,7 @@
 // when one is reachable and writes user-authored records through to it; falls
 // back entirely to mock seeds + localStorage when no backend is configured, so
 // the standalone prototype keeps working unchanged.
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from "react";
 import * as api from "./data/api";
 import {
   horses as seedHorses,
@@ -24,6 +24,8 @@ import {
   Invoice,
   Covering,
   Stallion,
+  Mare,
+  breedingMares as seedMares,
 } from "./data/mock";
 
 const DEFAULT_PHOTO =
@@ -93,8 +95,11 @@ interface StableCtx {
 const Ctx = createContext<StableCtx | null>(null);
 
 export function StableProvider({ children }: { children: ReactNode }) {
-  const [horses, setHorses] = useState<Horse[]>(() => load("horses", seedHorses));
-  const [alerts, setAlerts] = useState<Alert[]>(() => load("alerts", seedAlerts));
+  // With a backend, horses and alerts are the server's: never the sample ones
+  // (an old browser cache may still hold them). The last server list is kept
+  // under its own key so a reload does not flash "horse not found".
+  const [horses, setHorses] = useState<Horse[]>(() => (api.apiConfigured ? load("horses-server", []) : load("horses", seedHorses)));
+  const [alerts, setAlerts] = useState<Alert[]>(() => (api.apiConfigured ? [] : load("alerts", seedAlerts)));
   // With a backend, a stable's records are its own — none until someone adds
   // them. The sample records (and a browser cache that may still hold them)
   // are only for the standalone demo.
@@ -107,7 +112,7 @@ export function StableProvider({ children }: { children: ReactNode }) {
   const [stallions, setStallions] = useState<Stallion[]>(() => own("stallions", seedStallions));
   const [series, setSeries] = useState<typeof seedSeries>(seedSeries);
 
-  useEffect(() => persist("horses", horses), [horses]);
+  useEffect(() => persist(api.apiConfigured ? "horses-server" : "horses", horses), [horses]);
   useEffect(() => persist("alerts", alerts), [alerts]);
 
   // Live data: when the edge/cloud backend is reachable, sensor-derived horses
@@ -140,7 +145,8 @@ export function StableProvider({ children }: { children: ReactNode }) {
     const poll = async () => {
       const [h, a, s] = await Promise.all([api.getHorses(), api.getAlerts(), api.getSeries()]);
       if (stop) return;
-      if (h && h.length) setHorses(h);
+      // an empty list is an answer (no horses yet); null = no answer
+      if (Array.isArray(h)) setHorses(h);
       if (a) setAlerts(a);
       if (s) setSeries((prev) => ({ ...prev, ...s }));
     };
@@ -189,7 +195,7 @@ export function StableProvider({ children }: { children: ReactNode }) {
   }, []);
   const refreshHorses = useCallback(async () => {
     const h = await api.getHorses();
-    if (h && h.length) setHorses(h);
+    if (Array.isArray(h)) setHorses(h);
   }, []);
 
   const addDiary = useCallback((d: NewDiary) => {
@@ -349,3 +355,31 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 export const useToast = () => useContext(ToastCtx);
+
+// ---- mares in foal --------------------------------------------------------- //
+/** With a backend: the stable's own mares — horses with a foaling due date that
+ *  have not foaled — with "labour" only when the camera raised "Foaling may be
+ *  starting". The sample mares only in the standalone demo. */
+export function useMares(): Mare[] {
+  const { horses, alerts, coverings } = useStable();
+  return useMemo(() => {
+    if (!api.apiConfigured) return seedMares;
+    const DAY = 24 * 3600 * 1000, now = Date.now();
+    const day = (ms: number) => new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    return horses.filter((h) => h.foalingDue && !h.foaledAt && Number.isFinite(Date.parse(h.foalingDue)))
+      .map((h): Mare => {
+        const due = Date.parse(h.foalingDue!), days = Math.ceil((due - now) / DAY);
+        const labour = alerts.some((a) => a.horse === h.name && !a.acknowledged && /foaling may be starting/i.test(a.type));
+        const cov = [...coverings].filter((c) => c.mare === h.name).sort((a, b) => a.date.localeCompare(b.date)).at(-1);
+        const covered = cov ? Date.parse(cov.date) : NaN;
+        return {
+          id: h.id, name: h.name, daysToDue: days, stallion: cov?.stallion ?? "—",
+          stage: Number.isFinite(covered) ? `Day ${Math.floor((now - covered) / DAY)} of gestation · due ${day(due)}` : `Due ${day(due)}`,
+          status: labour ? "labour" : days <= 30 ? "watch" : "tracking",
+          note: labour ? "Signs of labour on the camera — check the mare now (from outside the box)"
+            : days <= 30 ? "Foaling watch on — the camera looks for restlessness, lying down and getting up, rolling and eating less"
+            : `Foaling watch starts ${day(due - 30 * DAY)}`,
+        };
+      }).sort((a, b) => a.daysToDue - b.daysToDue);
+  }, [horses, alerts, coverings]);
+}

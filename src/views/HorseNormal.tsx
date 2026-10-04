@@ -41,6 +41,10 @@ export function NormalCard({ horseId, name, canEdit }: { horseId: string; name: 
       {err && <p className="muted">{err}</p>}
       {c && (c.learning ? (
         <p className="muted" style={{ fontSize: 13 }}>Learning {name}&apos;s normal — it needs a day with at least 4 hours watched.</p>
+      ) : !c.window?.set && c.baselineDays < 3 && !c.comparedDays ? (
+        <p className="muted" style={{ fontSize: 13 }}>
+          Learning {name}&apos;s normal: day {c.baselineDays} of 3. From day 4 each day is compared with these first days.
+        </p>
       ) : (
         <>
           <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>

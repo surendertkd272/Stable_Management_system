@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Check, X, Info, Loader2, Download, Turtle } from "lucide-react";
+import { Check, X, Info, Loader2, Download, Turtle, Film } from "lucide-react";
 import * as api from "../data/api";
 import type { HorseEvent } from "../data/api";
 import { useStable, useToast } from "../store";
@@ -31,6 +31,19 @@ export default function Events() {
   const [err, setErr] = useState("");
   const [ticket, setTicket] = useState("");
   const [open, setOpen] = useState<string | null>(null);
+  const [lapse, setLapse] = useState<{ src: string; label: string } | null>(null);
+  const [lapseState, setLapseState] = useState<"" | "making" | "error">("");
+  // The last night, 18:00 to 06:00 — or, before 06:00, the night so far.
+  const showLapse = () => {
+    if (!horse || !ticket) return;
+    const now = new Date(), morning = new Date(now); morning.setHours(6, 0, 0, 0);
+    const to = now < morning ? now : morning;
+    const from = new Date(morning); from.setDate(from.getDate() - 1); from.setHours(18, 0, 0, 0);
+    const name = horses.find((h) => h.id === horse)?.name ?? "";
+    setLapseState("making");
+    setLapse({ src: api.timelapseUrl(ticket, horse, from.toISOString(), to.toISOString()),
+      label: `${name}: ${time(from.toISOString())} – ${time(to.toISOString())}` });
+  };
 
   const load = useCallback(async () => {
     setErr("");
@@ -76,6 +89,9 @@ export default function Events() {
           <button className={show === "all" ? "on" : ""} onClick={() => setShow("all")}>All ({(events ?? []).length})</button>
         </div>
         <div className="grow" />
+        <button className="btn-ghost" disabled={!horse || !ticket} title={horse ? "The last night in about a minute" : "Choose a horse first"} onClick={showLapse}>
+          <Film size={15} /> Night time-lapse
+        </button>
         <a className="btn-ghost" href={api.eventReviewsCsvUrl()} onClick={async (ev) => {
           ev.preventDefault();
           const res = await fetch(api.eventReviewsCsvUrl(), { headers: { Authorization: `Bearer ${api.getToken() ?? ""}` } });
@@ -83,6 +99,18 @@ export default function Events() {
         }}><Download size={15} /> Reviews (CSV)</a>
       </div>
 
+      {lapse && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="card-head">
+            <h3 className="flex center gap-sm"><Film size={16} /> {lapse.label}</h3>
+            <button className="btn-ghost" onClick={() => { setLapse(null); setLapseState(""); }}><X size={15} /></button>
+          </div>
+          {lapseState === "making" && <p className="muted" style={{ fontSize: 13 }}><Loader2 className="spin" size={14} /> Making the time-lapse — up to a minute for a whole night.</p>}
+          {lapseState === "error" && <p className="muted" style={{ fontSize: 13 }}>Nothing was recorded for this horse in that window.</p>}
+          <video key={lapse.src} src={lapse.src} controls autoPlay muted playsInline style={{ width: "100%", maxHeight: 480, background: "#000", borderRadius: 10, display: lapseState === "error" ? "none" : "block" }}
+            onLoadedData={() => setLapseState("")} onError={() => setLapseState("error")} />
+        </div>
+      )}
       {err && <div className="card">Could not load the events: {err}</div>}
       {!events && !err && <div className="card muted"><Loader2 className="spin" size={15} /> Loading…</div>}
       {events && !shown.length && (

@@ -20,7 +20,8 @@
 
 import { isKnownMetric, coverage, dedupKey } from "./contract.mjs";
 import { createStore, dataDir } from "./store.mjs";
-import { dispatch, notifyStatus, tick } from "./notify.mjs";
+import { dispatch, notifyStatus, tick, ackValid } from "./notify.mjs";
+import { dailyTick, listDaily, dailyPath, dailyStatus } from "./daily-reports.mjs";
 import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
 import { sessionReport } from "./session.mjs";
 import { clientReport, safeTimeZone } from "./client_report.mjs";
@@ -63,10 +64,11 @@ let store;
 async function ready() {
   G.ready ??= (async () => {
     const s = await createStore();
-    // The demo roster, once only: a yard that deleted every horse must not get
-    // the sample horses back on the next start.
+    // A stable starts with no horses: it adds its own. The sample roster only
+    // when asked for (EQUICARE_SAMPLE_HORSES=1 — the tests), and once only: a
+    // yard that deleted every horse must not get them back on the next start.
     if (!s.list("flags").some((f) => f.id === "horses-seeded")) {
-      s.seed("horses", SEED_ROSTER);
+      if (process.env.EQUICARE_SAMPLE_HORSES === "1") s.seed("horses", SEED_ROSTER);
       s.create("flags", { id: "horses-seeded", at: new Date().toISOString() });
     }
     ensureAdmin(s);   // first boot only; prints a generated password once
@@ -80,18 +82,23 @@ async function ready() {
       const hub = s.list("devices").find((d) => d.id === sess.deviceId);
       return ["head", ...(hub?.sensors?.pelvis?.length ? ["pelvis"] : [])];
     } });
-    configureRollup({ activity: activityBands(currentSettings(s).sensitivity) });
+    configureRollup(rollupConfig(s));
     // Escalation and the daily digest must run with nobody's browser open:
     // a server tick, once a minute (EQUICARE_NOTIFY_TICK_MS=0 turns it off).
     const every = Number(process.env.EQUICARE_NOTIFY_TICK_MS ?? 60000);
     if (every > 0 && !G.notifyTimer) {
       G.notifyTimer = setInterval(() => {
         G.recycle?.purgeExpired();                    // horses past their 30 days in the bin
+        configureRollup(rollupConfig(s));             // cameras' people-detection switches may have changed
         const all = s.allReadings(), horses = s.list("horses");
         const alerts = buildAlerts(horses, all, s.isAcked);
         if (G.devices?.deviceAlerts) alerts.push(...G.devices.deviceAlerts(s.isAcked));
         tick({ alerts, horses: horses.map((h) => ({ name: h.name, ...summarizeHorse(h, all) })), settings: currentSettings(s) })
           .catch((e) => console.error("[notify]", e.message));
+        // the night's PDF for each horse, once each morning (Settings → Nightly reports)
+        dailyTick({ settings: currentSettings(s), horses, readingsFor: (id) => s.readingsForHorse(id),
+          build: (h, from, to) => reportHtml(s, h, from, to), pdf: htmlToPdf })
+          .catch((e) => console.error("[reports]", e.message));
       }, every);
       G.notifyTimer.unref?.();
     }
@@ -149,6 +156,31 @@ const json = (code, body) =>
         status: code,
         headers: { "Content-Type": "application/json", ...CORS },
       });
+/** The designed A4 client report for one horse over [from, to] (HTML). */
+async function reportHtml(s, bio, from, to, { notes = "", tz } = {}) {
+  const rd = s.readingsForHorse(bio.id);
+  const cams = new Set(rd.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; }).map((r) => r.meta?.deviceId).filter(Boolean));
+  const camDevs = s.list("devices").filter((d) => cams.has(d.id));
+  const cam = camDevs[0] || s.list("devices").find((d) => d.kind === "thermal_camera" && d.stall === bio.stall) || null;
+  const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
+  const { html } = await clientReport({
+    horse: { id: bio.id, name: bio.name, stall: bio.stall }, readings: rd, from, to,
+    floorWatched: camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : cam ? Boolean(cam.rois?.floor || cam.rois?.colourFloor) : null,
+    notes, tz,
+    grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
+    clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
+    baseline: baselineCompare(bio, rd, { tz: safeTimeZone(tz), from, to }),
+    autoVisits: camDevs.every((d) => d.peopleTrusted !== false),
+  });
+  return html;
+}
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+/** The rollup's settings: activity bands, quiet hours, cameras whose people-detection is not trusted. */
+const rollupConfig = (s) => {
+  const cur = currentSettings(s);
+  return { activity: activityBands(cur.sensitivity),
+    named: { ...cur.security, untrusted: s.list("devices").filter((d) => d.peopleTrusted === false).map((d) => d.id) } };
+};
 const bearer = (req) => (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
 const authed = (req, token) => !token || bearer(req) === token;   // machine tokens (edge ingest)
 
@@ -490,8 +522,33 @@ export async function handle(req) {
       }
     }
 
+    // ---- "acknowledge" from a text message ----------------------------- //
+    // The link in an alert text is signed for that alert, so it works without
+    // signing in. GET shows a button and only POST acknowledges: messaging apps
+    // open links themselves to draw a preview, and that must not stop the chain.
+    const ak = path.match(/^\/api\/ack\/([^/]+)$/);
+    if (ak && (method === "GET" || method === "POST")) {
+      const id = decodeURIComponent(ak[1]), sig = url.searchParams.get("s");
+      const page = (title, body) => new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
+<style>body{font:17px/1.5 system-ui,sans-serif;margin:0;padding:24px 16px;background:#f6f7f5;color:#1d2420}main{max-width:460px;margin:auto;background:#fff;border-radius:14px;padding:22px;box-shadow:0 1px 3px #0002}
+h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%;padding:14px;border:0;border-radius:10px;background:#1f6f4a;color:#fff;margin-top:14px}.m{color:#5b6660;font-size:15px}</style></head>
+<body><main>${body}</main></body></html>`, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+      if (!ackValid(id, sig)) return page("Link not valid", "<h1>This link is not valid</h1><p class=m>Open EquiCare and acknowledge the alert there.</p>");
+      const [horseId, type] = id.split(":");
+      const horse = store.list("horses").find((h) => h.id === horseId)?.name ?? "";
+      if (method === "POST") {
+        store.ackAlert(id);
+        return page("Acknowledged", `<h1>Acknowledged — thank you</h1><p>${esc(horse)}: ${esc(type ?? "")}</p><p class=m>Nobody else will be called about this alert.</p>`);
+      }
+      const done = store.isAcked(id);
+      return page(done ? "Acknowledged" : "Acknowledge alert", done
+        ? `<h1>Already acknowledged</h1><p>${esc(horse)}: ${esc(type ?? "")}</p>`
+        : `<h1>${esc(horse)}</h1><p>${esc(type ?? "")}</p><form method=post><button>I have seen it — stop calling others</button></form>`);
+    }
+
     // A short clip around a moment (events, accuracy checks): <video> again, so a ticket.
     if (path === "/api/clip" && method === "GET") return G.insights.clip(req, url, G.videoTickets);
+    if (path === "/api/timelapse" && method === "GET") return G.insights.timelapse(req, url, G.videoTickets);
 
     // ---- query (SPA -> cloud) -------------------------------------------- //
     const who = principal(req);
@@ -584,17 +641,30 @@ export async function handle(req) {
       return json(200, buildSeries(roster(), store.allReadings(), days));
     }
 
+    // ---- nightly reports (server/daily-reports.mjs) ------------------------ //
+    if (path === "/api/reports/daily" && method === "GET") {
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      return json(200, { reports: listDaily(), status: dailyStatus() });
+    }
+    const dr = path.match(/^\/api\/reports\/daily\/([^/]+)\/([^/]+)$/);
+    if (dr && method === "GET") {
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      const file = dailyPath(decodeURIComponent(dr[1]), decodeURIComponent(dr[2]));
+      if (!file) return json(404, { error: "no such report" });
+      return serveFile(req, file, "application/pdf", { ...CORS, "Content-Disposition": `attachment; filename="${decodeURIComponent(dr[2])}"` });
+    }
+
     if (path === "/api/notify/status" && method === "GET")
       return json(200, notifyStatus());
 
     // ---- session report: the 8 points over a window (a practice demo, a night) --- //
     if (path === "/api/session" && method === "GET") {
-      if (who?.role === "owner") return json(404, { error: "not found" });
-      const bio = roster().find((h) => h.id === url.searchParams.get("horse"));
-      if (!bio) return json(400, { error: "choose a horse" });
+      // An owner sees reports for their own horses only (the Reports page).
+      const bio = visibleRoster().find((h) => h.id === url.searchParams.get("horse"));
+      if (!bio) return json(who?.role === "owner" ? 404 : 400, { error: who?.role === "owner" ? "not found" : "choose a horse" });
       const to = Date.parse(url.searchParams.get("to") || "") || Date.now();
       const from = Date.parse(url.searchParams.get("from") || "") || to - 60 * 60000;
-      if (!(from < to) || to - from > 7 * 24 * 3600 * 1000) return json(400, { error: "the window must be between a minute and 7 days" });
+      if (!(from < to) || to - from > 31 * 24 * 3600 * 1000) return json(400, { error: "the window must be between a minute and 31 days" });
       const rd = store.readingsForHorse(bio.id);
       const cams = new Set(rd.map((r) => r.meta?.deviceId).filter(Boolean));
       const clips = listClips().filter((c) => cams.has(c.camera));
@@ -608,28 +678,14 @@ export async function handle(req) {
     // ---- client report: the designed A4 report for a horse's owner or vet --- //
     // POST { horse, from, to, notes, tz } -> text/html (print it to save a PDF).
     if (path === "/api/session/report" && method === "POST") {
-      if (who?.role === "owner") return json(404, { error: "not found" });
       let body;
       try { body = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
-      const bio = roster().find((h) => h.id === body.horse);
-      if (!bio) return json(400, { error: "choose a horse" });
+      const bio = visibleRoster().find((h) => h.id === body.horse);
+      if (!bio) return json(who?.role === "owner" ? 404 : 400, { error: who?.role === "owner" ? "not found" : "choose a horse" });
       const to = Math.min(Date.parse(body.to || "") || Date.now(), Date.now());
       const from = Date.parse(body.from || "") || to - 60 * 60000;
-      if (!(from < to) || to - from > 7 * 24 * 3600 * 1000) return json(400, { error: "the window must be between a minute and 7 days" });
-      const rd = store.readingsForHorse(bio.id);
-      const cams = new Set(rd.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; }).map((r) => r.meta?.deviceId).filter(Boolean));
-      const camDevs = store.list("devices").filter((d) => cams.has(d.id));
-      const cam = camDevs[0] || store.list("devices").find((d) => d.kind === "thermal_camera" && d.stall === bio.stall) || null;
-      const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
-      const { html } = await clientReport({
-        horse: { id: bio.id, name: bio.name, stall: bio.stall }, readings: rd, from, to,
-        floorWatched: camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : cam ? Boolean(cam.rois?.floor || cam.rois?.colourFloor) : null,
-        notes: typeof body.notes === "string" ? body.notes : "", tz: body.tz,
-        grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
-        clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
-        baseline: baselineCompare(bio, rd, { tz: safeTimeZone(body.tz), from, to }),
-        autoVisits: camDevs.every((d) => d.peopleTrusted !== false),
-      });
+      if (!(from < to) || to - from > 31 * 24 * 3600 * 1000) return json(400, { error: "the window must be between a minute and 31 days" });
+      const html = await reportHtml(store, bio, from, to, { notes: typeof body.notes === "string" ? body.notes : "", tz: body.tz });
       if (url.searchParams.get("format") === "pdf") {
         try {
           const pdf = await htmlToPdf(html);
@@ -653,7 +709,7 @@ export async function handle(req) {
         let body;
         try { body = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
         const next = saveSettings(store, mergeSettings(currentSettings(store), body, who?.name || who?.username));
-        configureRollup({ activity: activityBands(next.sensitivity) });
+        configureRollup(rollupConfig(store));
         return json(200, { ...next, notify: notifyStatus() });
       }
       return json(405, { error: "method not allowed" });

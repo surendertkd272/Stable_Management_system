@@ -8,6 +8,7 @@ import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, 
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { NormalCard, GaitCheckButton } from "./HorseNormal";
+import { UnusualCard, FoalingCard } from "./HorseCare";
 import { DeleteHorseButton } from "./RecycleBin";
 import { useAuth } from "../auth";
 import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour, type HorseMotion, type HorseIntake } from "../data/api";
@@ -175,6 +176,7 @@ export default function HorseDetail() {
               <button className="btn-ghost" onClick={() => setNoteOpen(true)}>
                 {t("Add diary note")}
               </button>
+              {(!user || user.role === "admin") && <DeleteHorseButton id={horse.id} name={horse.name} />}
             </div>
           </div>
         </div>
@@ -303,7 +305,13 @@ export default function HorseDetail() {
         <div className="flex" style={{ gap: 8, marginTop: -12, marginBottom: 24 }}>
           <GaitCheckButton horseId={horse.id} name={horse.name} />
           <Link className="btn-ghost" href={`/events?horse=${encodeURIComponent(horse.id)}`}>Events &amp; clips</Link>
-          {(!user || user.role === "admin") && <DeleteHorseButton id={horse.id} name={horse.name} />}
+        </div>
+      )}
+
+      {horse && (horse.unusual || horse.sex === "Mare" || horse.foalingDue) && (
+        <div className="grid cols-2" style={{ marginBottom: 24 }}>
+          <UnusualCard horse={horse} />
+          <FoalingCard horse={horse} canEdit={!user || user.role !== "owner"} />
         </div>
       )}
 

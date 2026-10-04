@@ -34,6 +34,7 @@ function clip(cam, stream, start, bytes = 1000) {
 
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.EQUICARE_RECORDINGS_DIR = REC;
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   delete process.env.DATABASE_URL;

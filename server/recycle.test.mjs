@@ -19,6 +19,7 @@ const call = async (method, path, { token = tokens.admin, body } = {}) => {
 };
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   delete process.env.DATABASE_URL; delete process.env.VERCEL; delete process.env.AUTH_INGEST_TOKEN;
   ({ handle } = await import("./app.mjs"));

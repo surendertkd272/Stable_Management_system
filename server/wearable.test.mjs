@@ -34,6 +34,7 @@ const of = (horse, metric) => store.readingsForHorse(horse).filter((r) => r.metr
 
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   process.env.AUTH_INGEST_TOKEN = LEGACY;
   process.env.EQUICARE_SENSOR_TICK_MS = "0";
@@ -311,6 +312,7 @@ test("the JSON store records readings dropped at its cap, and says to switch to 
   const dir = mkdtempSync(join(tmpdir(), "equicare-cap-"));
   const prev = process.env.EQUICARE_DATA_DIR;
   process.env.EQUICARE_DATA_DIR = dir; process.env.EQUICARE_MAX_READINGS = "5";
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   try {
     const { createStore } = await import("./store.mjs");
     const s = await createStore();
@@ -328,6 +330,7 @@ test("the JSON store records readings dropped at its cap, and says to switch to 
     assert.equal(s.appendReadings(rs(0, 1)), 1);
   } finally {
     process.env.EQUICARE_DATA_DIR = prev; delete process.env.EQUICARE_MAX_READINGS;
+    process.env.EQUICARE_SAMPLE_HORSES = "1";
     await new Promise((r) => setTimeout(r, 300));          // let the debounced save land before removing
     rmSync(dir, { recursive: true, force: true });
   }

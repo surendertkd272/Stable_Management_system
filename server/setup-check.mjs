@@ -9,11 +9,14 @@
 //      inside the box, not one running off its edge)
 //   4. the nostril box is on the head (warmer than the background)
 //   5. the nostril box is not the eye box
+//   6. nothing sun-hot in view (a sunlit wall or roof over 45 °C pulls the
+//      readings — what the second RVC session showed)
 // plus the optional colour boxes (flank, hay, floor) — noted, not required.
 import { gridPoints } from "./mtrpc.mjs";
 
 const PRESENT_CONTRAST_C = 2.5, PRESENT_EYE_C = 32.0;      // as edge/video_analytics.horse_present
 const EYE_MIN_C = 33.0, EYE_MAX_C = 41.0;                   // as edge/behaviour.py
+const SUN_HOT_C = 45.0;                                     // no part of a horse is this hot: sun or a lamp
 const pct = (v, p) => { const s = [...v].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.max(0, Math.round(p * (s.length - 1))))]; };
 const overlap = (a, b) => a && b && Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0)) > 0;
 
@@ -27,6 +30,11 @@ export function judge({ grid = [], eyeGrid = null, eyeCols = 0, nostril = null, 
   add("camera", "The camera answers temperature reads", g.length >= 32, true,
     g.length >= 32 ? `${g.length} of ${grid.length} points read` : "too few temperature reads — check the camera's connection");
   const hi = g.length ? pct(g, 0.95) : null, lo = g.length ? pct(g, 0.1) : null;
+  if (g.length) {
+    const max = Math.max(...g);
+    add("sun", "Nothing sun-hot in view", max < SUN_HOT_C, false,
+      max < SUN_HOT_C ? `hottest point ${max.toFixed(1)} °C` : `a ${max.toFixed(1)} °C surface — direct sun or a lamp in view; move or shade the camera so the sun does not fall in the picture`);
+  }
   const ev = eyeGrid ? eyeGrid.filter((v) => v !== null) : [];
   const peak = ev.length ? Math.max(...ev) : null;
   const present = g.length >= 8 && (hi - lo >= PRESENT_CONTRAST_C || (peak !== null && peak >= PRESENT_EYE_C));

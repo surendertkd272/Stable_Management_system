@@ -27,6 +27,7 @@ const admin = (m, p, body) => call(m, p, { token: tokens.admin, body });
 
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   delete process.env.DATABASE_URL;
   delete process.env.VERCEL;

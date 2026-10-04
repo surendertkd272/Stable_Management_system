@@ -31,11 +31,12 @@ import {
   LucideIcon,
   Clapperboard,
   Gauge,
+  LayoutGrid,
 } from "lucide-react";
 import { useTheme } from "../theme";
 import { useAuth } from "../auth";
-import { useStable, useToast } from "../store";
-import { breedingMares, Horse } from "../data/mock";
+import { useStable, useToast, useMares } from "../store";
+import { Horse } from "../data/mock";
 import { apiConfigured } from "../data/api";
 import { Modal } from "./ui";
 import { useT } from "../i18n";
@@ -49,6 +50,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
       { to: "/live", label: "Live view", icon: Video, adminOnly: true },
       { to: "/horses", label: "Horses", icon: Heart },
+      { to: "/board", label: "Stable board", icon: LayoutGrid },
       { to: "/alerts", label: "Alerts", icon: Bell },
       { to: "/events", label: "Events & clips", icon: Clapperboard, staffOnly: true },
       { to: "/yard", label: "Yard View", icon: Map },
@@ -218,6 +220,7 @@ function TopBar() {
 
   const openAlerts = alerts.filter((a) => !a.acknowledged).length;
   const needAttention = horses.filter((h) => h.status === "urgent").length;
+  const breedingMares = useMares();
   const inLabour = breedingMares.filter((m) => m.status === "labour").length;
   const todayIso = new Date().toISOString().slice(0, 10);
   const overdueHealth = health.filter((t) => !t.done && t.due < todayIso).length;
@@ -249,9 +252,8 @@ function TopBar() {
     },
     "/alerts": { h1: "Alerts", p: `${openAlerts} unacknowledged` },
     "/yard": { h1: "Yard View", p: "Ranked by who needs attention first" },
-    "/breeding": { h1: "Breeding", p: apiConfigured ? "Sample records — breeding is not connected to this stable's data yet"
-      : `${breedingMares.length} mares in foal · ${inLabour} in active labour` },
-    "/reports": { h1: "Reports", p: "Vet-ready 7 & 30-day summaries" },
+    "/breeding": { h1: "Breeding", p: `${breedingMares.length} ${breedingMares.length === 1 ? "mare" : "mares"} in foal · ${inLabour} showing signs of labour` },
+    "/reports": { h1: "Reports", p: "A horse over the last hour, night, day, week or month — the same measurements as the session report" },
     // Matches the corrected line on the Care Diary card itself — the rule
     // engine does not read diary entries, so this used to promise the same
     // thing in two places that the code does not do.
@@ -271,6 +273,7 @@ function TopBar() {
     "/footage": { h1: "Footage & labels", p: "Recorded camera video — mark what the horse does, for training" },
     "/events": { h1: "Events & clips", p: "What happened, with a clip, a verdict and what to do — confirm or correct each one" },
     "/validation": { h1: "Accuracy checks", p: "People count, the system measures — how closely they agree" },
+    "/board": { h1: "Stable board", p: "Every stall at a glance — for the office screen" },
   };
 
   const base = "/" + (pathname.split("/")[1] || "");

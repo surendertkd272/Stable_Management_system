@@ -18,8 +18,8 @@ import {
   Sun,
 } from "lucide-react";
 import { StatCard, RadialGauge, Sparkline, statusColor, Modal, riskScore, riskBand, details } from "../components/ui";
-import { yardSlots, breedingMares, highlight } from "../data/mock";
-import { useStable } from "../store";
+import { yardSlots, highlight } from "../data/mock";
+import { useStable, useMares } from "../store";
 import { getCoverage, apiConfigured, type CoverageRow } from "../data/api";
 
 /** One yard-wide average. Says "needs <sensor>" rather than showing a zero. */
@@ -68,6 +68,7 @@ export default function Dashboard() {
   const router = useRouter();
   const nav = (to: string) => router.push(to);
   const { horses, series, alerts } = useStable();
+  const breedingMares = useMares();
   // Lead with whoever actually needs attention, not whoever happens to be first.
   const rank = { urgent: 0, watch: 1, calm: 2 } as Record<string, number>;
   const focus = [...horses].sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9))[0];

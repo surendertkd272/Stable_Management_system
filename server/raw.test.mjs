@@ -234,6 +234,7 @@ const upload = (token, sensor, startMs, body, extra = {}) => call("POST", "/inge
 
 before(async () => {
   process.env.EQUICARE_DATA_DIR = join(DATA, "app");
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   process.env.EQUICARE_SENSOR_TICK_MS = "0";
   process.env.EQUICARE_NOTIFY_TICK_MS = "0";

@@ -48,6 +48,10 @@ export const METRICS = {
   // Sleip) or a vet's trot-up. value 0 sound, 1 mild, 2 moderate, 3 severe;
   // meta.tool, meta.limb, meta.asymmetryMm.
   gait_check:           { point: 7,  label: "Gait check (trot-up)", unit: "grade", source: "manual",         kind: "event" },
+  // The stall's air, from a temperature/humidity sensor (Modbus or push): the
+  // vets' heat index (°F + % humidity) — 130 watch, 150 danger.
+  stall_temp_c:         { point: 0,  label: "Stall temperature",    unit: "°C",    source: "sensor",         kind: "sample" },
+  stall_humidity_pct:   { point: 0,  label: "Stall humidity",       unit: "%",     source: "sensor",         kind: "sample" },
   // value = minutes; meta { start, end, steps, distanceM|null, trotMin, prototype }.
   exercise_session:     { point: 5,  label: "Exercise session",     unit: "min",   source: "imu",            kind: "event" },
   // value = battery %; meta { sensor, hardwareId, signalDbm|null, attached|null, firmware|null }.

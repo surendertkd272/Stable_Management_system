@@ -17,6 +17,11 @@ test("alert types map to the Settings groups; unknown types are sent (fail open)
   assert.equal(groupOf("Lying down and getting up repeatedly"), "colic");
   assert.equal(groupOf("New stable vice: weaving"), "vices");
   assert.equal(groupOf("Monitoring offline"), "monitoring");
+  assert.equal(groupOf("Possible colic — look at the horse now"), "colic");
+  assert.equal(groupOf("Foaling may be starting — check the mare now"), "foaling");
+  assert.equal(groupOf("Person at the stall at night"), "security");
+  assert.equal(groupOf("Dangerous heat in the stall"), "heat");
+  assert.equal(groupOf("Hot, humid stall"), "heat");
   assert.equal(groupOf("Something new"), null);
 });
 
@@ -114,6 +119,7 @@ async function call(method, path, { token, body } = {}) {
 }
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   process.env.EQUICARE_NOTIFY_TICK_MS = "0";
   delete process.env.DATABASE_URL;
@@ -139,4 +145,31 @@ test("settings persist on the server; staff read them, only admins change them, 
   assert.equal(again.body.send.vices, false);
   assert.equal(again.body.delivery.digest, true);
   assert.equal(again.body.send.temperature, true, "untouched groups keep their value");
+});
+
+test("the acknowledge link in a text: opening it changes nothing, the button acknowledges, a wrong signature is refused", async () => {
+  const { sign } = await import("./secrets.mjs");
+  const id = "h9:Possible colic — look at the horse now:2026-10-04";
+  const path = `/api/ack/${encodeURIComponent(id)}`;
+  const page = async (method, s) => {
+    const res = await handle(new Request(`http://local${path}?s=${s}`, { method }));
+    return { status: res.status, text: await res.text() };
+  };
+  const g = await page("GET", sign(id));
+  assert.equal(g.status, 200);
+  assert.match(g.text, /I have seen it/);
+  const alerts = async () => (await call("GET", "/api/alerts", { token: tokens.admin })).body;
+  assert.match((await page("GET", "wrong")).text, /not valid/);
+  assert.match((await page("POST", "wrong")).text, /not valid/);
+  const p = await page("POST", sign(id));
+  assert.match(p.text, /Acknowledged — thank you/);
+  assert.match((await page("GET", sign(id))).text, /Already acknowledged/);
+  assert.ok(Array.isArray(await alerts()));
+});
+
+test("reports: an owner gets reports for their own horses only", async () => {
+  await call("POST", "/api/horses", { token: tokens.admin, body: { id: "own-1", name: "Owned", owner: "o1", stall: "Z-1" } });
+  assert.equal((await call("GET", "/api/session?horse=own-1", { token: tokens.owner })).status, 200);
+  assert.equal((await call("GET", "/api/session?horse=zarina", { token: tokens.owner })).status, 404, "another owner's horse");
+  assert.equal((await call("GET", "/api/session?horse=zarina", { token: tokens.staff })).status, 200);
 });

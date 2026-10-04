@@ -18,6 +18,7 @@ const call = async (method, path, body) => {
 
 before(async () => {
   process.env.EQUICARE_DATA_DIR = DATA;
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   ({ handle } = await import("./app.mjs"));
   token = (await call("POST", "/auth/login", { username: "admin", password: "test-admin-pw" })).body.token;

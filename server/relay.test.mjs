@@ -33,6 +33,7 @@ before(async () => {
   relay = createRelay({ dataDir: join(DATA, "relay"), key: KEY, log: quiet });
   base = `http://127.0.0.1:${await relay.listen(0)}`;
   process.env.EQUICARE_DATA_DIR = join(DATA, "site");
+  process.env.EQUICARE_SAMPLE_HORSES = "1";
   process.env.ADMIN_PASSWORD = "test-admin-pw";
   process.env.EQUICARE_SENSOR_TICK_MS = "0";
   process.env.EQUICARE_NOTIFY_TICK_MS = "0";

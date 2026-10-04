@@ -4,6 +4,7 @@
 // screening-grade (the camera is +-2 C), tune with vet input + learned baselines.
 
 import { METRICS, SOURCE_STATUS } from "./contract.mjs";
+import { namedAlerts, suppressed, unusualScore, configureNamedAlerts } from "./named-alerts.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 const BASELINE_TARGET_DAYS = 14;
@@ -30,9 +31,10 @@ const NO_URINE_H = 8, NO_MANURE_H = 12;             // hours without an event
 let ACT_UNUSUAL_HI = 2.0, ACT_UNUSUAL_LO = 0.4;     // x the horse's own 7-day activity (Settings sensitivity moves these)
 
 /** Site settings that tune prototype watch notes (never clinical thresholds). */
-export function configureRollup({ activity } = {}) {
+export function configureRollup({ activity, named } = {}) {
   if (activity?.hi) ACT_UNUSUAL_HI = activity.hi;
   if (activity?.lo) ACT_UNUSUAL_LO = activity.lo;
+  if (named) configureNamedAlerts(named);            // quiet hours, untrusted people-detection
 }
 const ACT_BASELINE_DAYS = 3;                        // days of activity needed before judging
 // Posture and vices from the camera (prototype). No published thresholds
@@ -383,15 +385,17 @@ function evaluate(bio, rd) {
       `${ex.count24h} manure events seen in 24 h vs this horse's usual ~${ex.baselinePerDay}/day — from the floor watch; ` +
       "check the stall and when the horse last ate. Why: fewer droppings is an early colic sign, but not eating also lowers output.", now);
 
-  // Posture (prototype camera): watch notes, never alarms.
-  const rs = b.resting;
+  // Posture (camera): watch notes — the named alerts below combine them. A
+  // mare with her foal puts two animals in view: these notes are paused.
+  const rs = suppressed(bio) ? null : b.resting;
   if (rs) {
     const downs = rs.downTimes.map((t) => Date.parse(t)).filter((t) => Date.now() - t <= 2 * 3600 * 1000);
     const cluster = downs.some((t) => downs.filter((u) => u >= t && u - t <= DOWN_UP_WINDOW_MIN * 60000).length >= DOWN_UP_COUNT);
     if (cluster) push("Lying down and getting up repeatedly", "warn",
       `${downs.length} lie-downs in the last 2 h — from the camera; look at the horse. ` +
       "Why: going down and up again and again is a strong colic sign (normal lying bouts last 15–40 min). Our rule: 3+ within an hour.", now);
-    if (rs.lastCast && Date.now() - Date.parse(rs.lastCast) <= 3600 * 1000) push("Possibly cast — check the horse now", "warn",
+    // A cast horse cannot rise and can injure itself: this one goes up the call chain.
+    if (rs.lastCast && Date.now() - Date.parse(rs.lastCast) <= 3600 * 1000) push("Possibly cast — check the horse now", "alert",
       "Lying 10+ minutes with repeated bursts of struggling and no getting up — from the camera. " +
       "Why: a horse stuck against the wall cannot rise and can injure itself.", rs.lastCast);
     if (rs.lastRoll && Date.now() - Date.parse(rs.lastRoll) <= 3600 * 1000 && rs.rolls24h >= 2) push("Possible rolling", "warn",
@@ -405,6 +409,9 @@ function evaluate(bio, rd) {
       "Why: horses need 30+ min lying a day for REM sleep; persistent lack shows as buckling while dozing. " +
       "Normal for the first 1–4 nights in a new stall.", now);
   }
+  // Named alerts: colic (signs together), foaling, people at night, stall heat.
+  for (const a of namedAlerts(bio, rd, b)) push(a.type, a.severity, a.detail, a.ts);
+
   // Vices: a new one is worth a look; a rise is information.
   for (const [k, label] of [["weaving", "Weaving"], ["boxWalking", "Box walking"], ["headTossing", "Head tossing"]]) {
     const v = b[k];
@@ -628,6 +635,9 @@ export function summarizeHorse(bio, allReadings) {
     // what the UI should render as "not measured" rather than as a value
     uninstrumented: [...gaps].sort(),
     baselineProgress: Math.min(100, Math.round((distinctDays(rd.filter((r) => !uncalibrated(r))) / BASELINE_TARGET_DAYS) * 100)),
+    // 0–10, how far the latest day is from this horse's own normal (null while learning)
+    unusual: unusualScore(bio, rd),
+    mareAndFoal: suppressed(bio),
     // data-freshness (extra fields; the SPA's Horse type ignores unknown keys)
     lastSeen: seen === null ? null : new Date(seen).toISOString(),
     monitoring: seen === null ? "no-data"

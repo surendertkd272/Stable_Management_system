@@ -17,6 +17,18 @@ export function SetupChecklist({ items, busy = false, onRun, at, title = "Setup 
         <div className="grow" />
         {onRun && <button className="btn-ghost" disabled={busy} onClick={onRun}>{busy ? <Loader2 className="spin" size={14} /> : null} {items ? "Check again" : "Check setup"}</button>}
       </div>
+      {!items && onRun && (
+        <details style={{ marginTop: 8, fontSize: 12.5 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>Mounting the camera</summary>
+          <ul style={{ margin: "6px 0 0 18px", padding: 0, lineHeight: 1.6 }}>
+            <li>In a front corner of the stall, looking across it to the far corner — the whole stall in the picture, the hay and the floor included.</li>
+            <li>3.5–4.5 m up, out of reach of the horse&apos;s head and tail, tilted down about 30°.</li>
+            <li>Out of direct sun at every hour: a sunlit wall or doorway in view makes heat readings unreliable.</li>
+            <li>Not facing a lamp or a bright doorway — the night picture needs the stall darker than the camera&apos;s light.</li>
+            <li>Wired power and network; the cable out of the horse&apos;s reach.</li>
+          </ul>
+        </details>
+      )}
       {items && (
         <div style={{ display: "grid", gap: 4, marginTop: 8 }}>
           {items.map((i) => (

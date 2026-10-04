@@ -97,9 +97,9 @@ test("lying down and getting up 3 times within an hour: a watch note, never an a
   assert.ok(!types(calm).some((t) => t.includes("repeatedly")));
 });
 
-test("possible cast in the last hour: 'check the horse now' (watch level)", () => {
+test("possible cast in the last hour: 'check the horse now' — goes up the call chain (alert)", () => {
   const rd = [...vit(1), posture("lie_down", 30), posture("possible_cast", 5)];
-  assert.ok(types(rd).includes("warn:Possibly cast — check the horse now"), types(rd).join());
+  assert.ok(types(rd).includes("alert:Possibly cast — check the horse now"), types(rd).join());
 });
 
 test("an hour flat on the side in the last 90 min is noted; chest lying is not", () => {

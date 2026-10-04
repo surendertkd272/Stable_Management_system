@@ -8,7 +8,7 @@
 // studies do (bias and limits of agreement, per reading and per night).
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, renameSync, unlinkSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { listClips, clipPath, LABELS } from "./footage.mjs";
@@ -168,6 +168,63 @@ export async function cutClip({ camera, stream = "visible", atMs, beforeS = 10, 
     }).finally(() => making.delete(out)));
   }
   return making.get(out);
+}
+
+/** A night in a minute: one frame every `stepS` from every recording between
+ *  fromMs and toMs, played at 24 frames a second (cached). Only key frames are
+ *  decoded, so ten hours take seconds, not the night. Resolves to a file path,
+ *  or null when nothing was recorded then. */
+export async function cutTimelapse({ camera, stream = "visible", fromMs, toMs, crop = null, root, maxFrames = 1500 }) {
+  const recs = listClips(root).filter((c) => c.camera === camera && c[stream] && Date.parse(c[stream].at) < toMs && Date.parse(c.end) > fromMs)
+    .sort((a, b) => a[stream].at.localeCompare(b[stream].at));
+  if (!recs.length) return null;
+  const stepS = Math.max(10, Math.ceil((toMs - fromMs) / 1000 / maxFrames));
+  const vf = clipFilters({ crop, width: 640 });
+  const dir = clipsDir();
+  mkdirSync(dir, { recursive: true });
+  const parts = recs.map((c) => {
+    const path = clipPath(camera, stream, c[stream].start, root);
+    const at = Date.parse(c[stream].at), end = Date.parse(c.end);
+    const ss = Math.max(0, (fromMs - at) / 1000), t = (Math.min(toMs, end) - Math.max(fromMs, at)) / 1000;
+    return { path, ss, t };
+  }).filter((p) => p.path && p.t > 0);
+  if (!parts.length) return null;
+  const key = id(...parts.map((p) => `${p.path}@${p.ss.toFixed(0)}+${p.t.toFixed(0)}`), stepS, vf, "timelapse");
+  const out = join(dir, `${key}.mp4`);
+  if (existsSync(out) && statSync(out).size > 0) return out;
+  if (making.has(out)) return making.get(out);
+  const run = (args) => new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+    let err = "";
+    ff.stderr.on("data", (d) => (err += d));
+    ff.on("error", (e) => reject(e.code === "ENOENT" ? new Error("ffmpeg is not installed on the site server") : e));
+    ff.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`time-lapse failed: ${err.slice(-200)}`))));
+  });
+  const job = (async () => {
+    const frames = join(dir, `${key}.frames-${process.pid}`);
+    mkdirSync(frames, { recursive: true });
+    try {
+      // four recordings at a time
+      const queue = [...parts.entries()];
+      await Promise.all([0, 1, 2, 3].map(async () => {
+        for (let next = queue.shift(); next; next = queue.shift()) {
+          const [i, p] = next;
+          await run(["-skip_frame", "nokey", "-ss", p.ss.toFixed(1), "-t", p.t.toFixed(1), "-i", p.path,
+            "-vf", `fps=1/${stepS},${vf},format=yuvj420p`, "-q:v", "5", join(frames, `p${String(i).padStart(4, "0")}-%05d.jpg`)]);
+        }
+      }));
+      if (!readdirSync(frames).length) return null;
+      const tmp = `${out}.part-${process.pid}.mp4`;
+      await run(["-framerate", "24", "-pattern_type", "glob", "-i", join(frames, "*.jpg"),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp]);
+      renameSync(tmp, out);
+      return out;
+    } finally {
+      rmSync(frames, { recursive: true, force: true });
+    }
+  })().finally(() => making.delete(out));
+  making.set(out, job);
+  return job;
 }
 
 // --------------------------------------------------------------------------- //

@@ -7,6 +7,7 @@ import { Status } from "../data/mock";
 import { useStable } from "../store";
 import { useAuth } from "../auth";
 import { RecycleBinButton } from "./RecycleBin";
+import { unusualColor, unusualWord } from "./HorseCare";
 import { StatusPill, MonitoringPill, isBlind, riskScore, riskBand, details } from "../components/ui";
 
 const FILTERS: { key: Status | "all"; label: string }[] = [
@@ -23,7 +24,13 @@ export default function Horses() {
   const { user, authRequired } = useAuth();
   const isAdmin = !authRequired || user?.role === "admin";
   const [filter, setFilter] = useState<Status | "all">("all");
-  const list = horses.filter((h) => filter === "all" || h.status === filter);
+  const [sort, setSort] = useState<"attention" | "stall" | "name">("attention");
+  // Attention: urgent, then watch, then the most unusual against its own normal.
+  const RANK: Record<Status, number> = { urgent: 0, watch: 1, calm: 2 };
+  const list = horses.filter((h) => filter === "all" || h.status === filter).sort((a, b) =>
+    sort === "name" ? a.name.localeCompare(b.name)
+    : sort === "stall" ? a.stall.localeCompare(b.stall, undefined, { numeric: true })
+    : RANK[a.status] - RANK[b.status] || (b.unusual?.score ?? -1) - (a.unusual?.score ?? -1) || a.name.localeCompare(b.name));
 
   return (
     <>
@@ -39,6 +46,13 @@ export default function Horses() {
           <span className="muted" style={{ fontSize: 13 }}>
             {list.length} of {horses.length} horses
           </span>
+          <div className="field" style={{ margin: 0 }}>
+            <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} aria-label="Sort horses" style={{ padding: "6px 10px" }}>
+              <option value="attention">Needs attention first</option>
+              <option value="stall">By stall</option>
+              <option value="name">By name</option>
+            </select>
+          </div>
           {isAdmin && <RecycleBinButton />}
         </span>
       </div>
@@ -60,6 +74,14 @@ export default function Horses() {
             <div className="meta">
               {details(h.breed, h.sex, h.age)}
             </div>
+            {h.unusual && h.unusual.score != null && (
+              <div style={{ fontSize: 12, marginTop: 6 }} title={h.unusual.reasons.join(", ")}>
+                <span className="muted">Today: </span>
+                <b style={{ color: unusualColor(h.unusual.score) }}>{h.unusual.score}/10 {unusualWord(h.unusual.score)}</b>
+                {h.unusual.reasons[0] && <span className="muted"> · {h.unusual.reasons[0]}</span>}
+              </div>
+            )}
+            {h.mareAndFoal && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Mare and foal</div>}
             <div className="metrics">
               <div className="m">
                 <b title={h.vitals?.calibrated === false ? "Camera not aimed — reading unreliable" : undefined}

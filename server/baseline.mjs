@@ -12,13 +12,10 @@
 //
 // What counts as a notable change is OUR threshold (no published one exists
 // for most of these), marked so in the result.
+import { peopleMinutes, floorAlone, eyeSetAside } from "./reading-rules.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 const MIN_SEEN_S = 4 * 3600;            // a day with less seen time is not used for the baseline
-// An eye above this is not an eye in a stall — people beside the camera, sun
-// or a lamp (1 Oct, RVC: 40.3 and 40.5 °C with people at the camera). Ours.
-const EYE_PLAUSIBLE_MAX_C = 39.5;
-const FLOOR_ALONE_MS = 10 * 60000;      // floor patches closer than this: bedding moved (as the report)
 const DEFAULT_DAYS = 3;
 
 /** The measures compared, how to read them from a day, and what change is notable (ours). */
@@ -50,10 +47,9 @@ export function dayStart(ms, tz = "UTC") {
 /** One row per day with data: { start, end, seenS, lying, eating, …, activity, breathing, eye, manure } */
 export function dailyValues(readings, tz = "UTC") {
   const days = new Map();
-  // minutes with people at the stall: their warmth is not the horse's eye
-  const people = new Set(readings.filter((r) => r.metric === "people_in_view_s" && r.value >= 5).map((r) => String(r.ts).slice(0, 16)));
-  const patches = readings.filter((r) => r.metric === "urination_event" || r.metric === "excretion_event").map((r) => Date.parse(r.ts));
-  const alone = (r) => patches.filter((t) => Math.abs(t - Date.parse(r.ts)) <= FLOOR_ALONE_MS).length === 1;
+  // the same rules as every report (server/reading-rules.mjs)
+  const people = peopleMinutes(readings);
+  const alone = floorAlone(readings);
   const day = (ms) => { const s = dayStart(ms, tz); if (!days.has(s)) days.set(s, { start: s, end: s + DAY_MS, tb: {}, seenS: 0, vals: {}, counts: {} }); return days.get(s); };
   for (const r of readings) {
     const t = Date.parse(r.ts);
@@ -62,8 +58,8 @@ export function dailyValues(readings, tz = "UTC") {
     if (r.metric === "time_budget") {
       for (const k of ["lyingS", "eatingS", "restingS", "movingS", "unseenS"]) d.tb[k] = (d.tb[k] || 0) + (Number(r.meta?.[k]) || 0);
       d.seenS += ["lyingS", "eatingS", "restingS", "movingS"].reduce((x, k) => x + (Number(r.meta?.[k]) || 0), 0);
-    } else if (r.metric === "body_temp_c" && (r.meta?.calibrated === false || r.value > EYE_PLAUSIBLE_MAX_C || people.has(String(r.ts).slice(0, 16)))) {
-      continue;                                                       // unaimed, implausible, or people at the camera
+    } else if (r.metric === "body_temp_c" && (r.meta?.calibrated === false || eyeSetAside(r, people))) {
+      continue;                                                       // unaimed, not an eye, or people at the camera
     } else if ((r.metric === "urination_event" || r.metric === "excretion_event") && !alone(r)) {
       continue;                                                       // one of a cluster: bedding moved, not an event
     } else {
