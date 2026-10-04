@@ -210,6 +210,7 @@ export default function SettingsPage() {
           ["water", "Low water intake", "Below this horse's own normal.", readiness("flow_meter", "flow meter")],
           ["security", "Person at night", "Someone at a stall in the quiet hours (Night security).", readiness("visible_video", "camera")],
           ["heat", "Stall heat", "The stall's heat index (temperature + humidity) at 130 watch, 150 danger.", undefined],
+          ["staff", "Staff rules", "Alerts from the rules your staff set (Alert rules page).", undefined],
           ["monitoring", "Monitoring & devices", "A camera not aimed, a device or edge box not reporting.", undefined],
         ] as const).map(([k, label, desc, blocked]) => (
           <Row key={k} label={label} desc={desc} on={st.send[k]} blocked={blocked}

@@ -1060,6 +1060,7 @@ class MtrpcCameraWorker(CameraWorker):
     Without ffmpeg the video paths are off and breathing falls back to pixel
     sampling (too slow on this firmware to find a rhythm reliably)."""
 
+    HAS_THERMAL = True                 # RtspCameraWorker: an ordinary colour camera, no temperatures
     FLOOR_EVERY_S = 2.0
     DISTURBED_S = 15.0                 # colour floor patches this close together: bedding moved, not events
     LIVE_BREATH_EVERY_S = 10.0         # the Live view's breathing: the last 35 s, every 10 s (None: off)
@@ -1092,6 +1093,17 @@ class MtrpcCameraWorker(CameraWorker):
     # -- which stream does behaviour ------------------------------------------ #
     def behaviour_stream(self):
         return "thermal" if self.dev.get("behaviourStream") == "thermal" else "visible"
+
+    # -- where the streams are (RtspCameraWorker: wherever that camera keeps them)
+    def _colour_path(self):
+        return "/media/live/101" if self.dev.get("colourStream") == "main" else "/media/live/102"
+
+    def _hd_path(self):
+        return "/media/live/101"
+
+    def _require_rois(self, rois):
+        if not rois or not rois.get("nostril"):
+            raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
 
     def _posture_path(self):
         return STATE_DIR / f"posture-{self.dev['id']}-{self.behaviour_stream()}.json"
@@ -1140,7 +1152,7 @@ class MtrpcCameraWorker(CameraWorker):
         d = self.dev
         thermal_posture = self.posture if self.behaviour_stream() == "thermal" else None
         self._video_started = getattr(self, "_video_started", None) or time.time()
-        if self.video is None or not self.video.is_alive():
+        if self.HAS_THERMAL and (self.video is None or not self.video.is_alive()):
             self.analyzer = WindowAnalyzer(mode="thermal", posture=thermal_posture)
 
             def on_thermal(frame, t):
@@ -1182,7 +1194,7 @@ class MtrpcCameraWorker(CameraWorker):
                     self.last_colour = (frame, t)
             # Full HD colour when the camera is set to it: the same picture,
             # less compressed; analysed at the same small size.
-            vpath = "/media/live/101" if d.get("colourStream") == "main" else "/media/live/102"
+            vpath = self._colour_path()
             self.vvideo = VideoStream(d["host"], d.get("username", "admin"), d.get("password") or "", on_visible,
                                       port=d.get("rtspPort", 554), path=vpath, w=vw, h=vh,
                                       on_colour=on_colour if self.detector is not None else None)
@@ -1363,7 +1375,8 @@ class MtrpcCameraWorker(CameraWorker):
             if hd:
                 from video_analytics import grab_still  # noqa
                 d = self.dev
-                got = grab_still(d["host"], d.get("username", "admin"), d.get("password") or "", port=d.get("rtspPort", 554))
+                got = grab_still(d["host"], d.get("username", "admin"), d.get("password") or "", port=d.get("rtspPort", 554),
+                                 path=self._hd_path())
                 if got[0] is not None:
                     bgr, gw, gh = got
                     boxes, persons = self.detector.detect_all(bgr, gw, gh)
@@ -1492,6 +1505,8 @@ class MtrpcCameraWorker(CameraWorker):
     def warnings(self):
         out = []
         for name, v in (("thermal video", self.video), ("colour video", self.vvideo)):
+            if name == "thermal video" and not self.HAS_THERMAL:
+                continue
             if name == "colour video" and v is None and self.behaviour_stream() != "visible":
                 continue
             if v is None:
@@ -1533,9 +1548,8 @@ class MtrpcCameraWorker(CameraWorker):
         return self.floor.scan(temps, horse_cells=horse, lying_recent=lying_recent)
 
     def _run_once(self):
-        rois = self.dev.get("rois")
-        if not rois or not rois.get("nostril"):
-            raise NoRois("the camera answers but has no ROIs — calibrate it in the Hardware page")
+        rois = self.dev.get("rois") or {}
+        self._require_rois(rois)
         if self.cam is None:
             self.connect()
         else:
@@ -1544,7 +1558,8 @@ class MtrpcCameraWorker(CameraWorker):
         vis_ok = self.vvideo is not None and self.vvideo.is_alive() and not self.vvideo.error
         self._log_warnings()
         with self._lock:
-            self.analyzer.reset()
+            if self.analyzer:
+                self.analyzer.reset()
             if self.vanalyzer:
                 self.vanalyzer.reset()
         self.boxes_seen, self.box_widths = 0, []
@@ -1561,7 +1576,7 @@ class MtrpcCameraWorker(CameraWorker):
             if video_ok and self.LIVE_BREATH_EVERY_S and tick - last_live >= self.LIVE_BREATH_EVERY_S:
                 self._live_breathing(rois)
                 last_live = tick
-            if not video_ok:                                  # fallback: pixel-sampled breathing
+            if not video_ok and rois.get("nostril"):          # fallback: pixel-sampled breathing
                 v = self.cam.box_avg(rois["nostril"])
                 if v is not None:
                     pixel_window.append(v)
@@ -1581,7 +1596,7 @@ class MtrpcCameraWorker(CameraWorker):
         # The eye, if it is in view: eye-shaped, not just warm (see behaviour.eye_spot).
         from behaviour import eye_spot  # noqa
         eye, eye_why, eye_method, box_peak, eye_at, eye_where = None, "no eye box drawn", None, None, None, None
-        if rois.get("eye") and "x0" in rois["eye"]:
+        if self.HAS_THERMAL and rois.get("eye") and "x0" in rois["eye"]:
             vals, cols, rows = self.cam.box_grid(rois["eye"])
             eye, eye_why = eye_spot(vals, cols, rows)
             eye_method, eye_at = "eye box, eye-shaped hot spot", time.time()
@@ -1592,14 +1607,15 @@ class MtrpcCameraWorker(CameraWorker):
                                              "y": b["y0"] + (b["y1"] - b["y0"]) * j / max(1, rows - 1)}
                                             for j in range(rows) for i in range(cols)])
         in_boxes = eye is not None                           # the head is where the boxes were drawn
-        if eye is None:
+        if eye is None and self.HAS_THERMAL:
             # The head is not in the eye box: look for the eye anywhere in the
             # thermal view (one camera, aimed where the head spends most time).
             eye, why, eye_where = self._auto_eye()
             eye_method, eye_at = "eye-shaped hot spot, found anywhere in view (eye box missed)", time.time()
             eye_why = None if eye is not None else f"eye box: {eye_why}; rest of the view: {why}"
-        self._note_eye(eye_why if eye is None else None)
-        nostril_c = self.cam.box_avg(rois["nostril"])
+        if self.HAS_THERMAL:
+            self._note_eye(eye_why if eye is None else None)
+        nostril_c = self.cam.box_avg(rois["nostril"]) if self.HAS_THERMAL and rois.get("nostril") else None
         calibrated = bool(self.dev.get("calibrated"))
         ts, out = now_iso(), []
         dev_id = self.dev["id"]
@@ -1611,9 +1627,15 @@ class MtrpcCameraWorker(CameraWorker):
         # detector box, or movement.
         from video_analytics import horse_present  # noqa
         from mtrpc import grid_points  # noqa
-        grid = self.cam.read_pixels(grid_points({"x0": 0, "y0": 0, "x1": 10000, "y1": 10000}, 8))
-        present, why = horse_present(grid, eye if eye is not None else box_peak)   # warm eye box: a head filling the view
         seen_colour = self.boxes_seen > 0 or (vsummary.get("activity") or 0) >= 0.05
+        if self.HAS_THERMAL:
+            grid = self.cam.read_pixels(grid_points({"x0": 0, "y0": 0, "x1": 10000, "y1": 10000}, 8))
+            present, why = horse_present(grid, eye if eye is not None else box_peak)   # warm eye box: a head filling the view
+        else:
+            # No temperatures: the colour picture alone. With the horse detector
+            # a minute with no horse box and no movement is an empty stall.
+            present = True if seen_colour else (False if self.detector is not None else None)
+            why = "seen in the colour picture" if seen_colour else "no horse in the colour picture"
         if present is False and not seen_colour:
             if getattr(self, "_absent_logged", False) is False:
                 print(f"[edge] {self.name}: no horse in view ({why}) — reporting nothing until one is")
@@ -1629,7 +1651,7 @@ class MtrpcCameraWorker(CameraWorker):
                             source=source, confidence=round(conf, 2), meta=meta))
 
         vit = {"calibrated": calibrated}
-        if head_in_view:                                     # vitals only when the head is in the thermal view
+        if head_in_view and self.HAS_THERMAL:                # vitals only when the head is in the thermal view
             if eye is not None:
                 add("body_temp_c", eye, "°C", conf=(0.95 if eye_method.startswith("eye box") else 0.7) if calibrated else 0.3,
                     method=eye_method, readAt=round(eye_at, 1), where=eye_where, **vit)   # when the eye was read: a report's photo comes from then
@@ -1637,9 +1659,10 @@ class MtrpcCameraWorker(CameraWorker):
                 add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
         # Why the eye was (not) read this minute, and where it was found — the
         # Live view shows it, so a missing temperature says why, not just "old".
-        add("eye_check", 1 if eye is not None and head_in_view else 0, "0/1", conf=1.0,
-            detail=eye_method if eye is not None and head_in_view else (eye_why or "head not in the thermal view"),
-            **({"where": eye_where} if eye is not None and eye_where else {}))
+        if self.HAS_THERMAL:
+            add("eye_check", 1 if eye is not None and head_in_view else 0, "0/1", conf=1.0,
+                detail=eye_method if eye is not None and head_in_view else (eye_why or "head not in the thermal view"),
+                **({"where": eye_where} if eye is not None and eye_where else {}))
         br = summary.get("breathing") or {} if head_in_view else {}
         fl = vsummary.get("flank_breathing") or {}
         pick, method = pick_breathing(br, fl, self.flank_followed)
@@ -1668,9 +1691,12 @@ class MtrpcCameraWorker(CameraWorker):
         # the head moves would be worth building).
         nostril, flank = breathing_why(video_ok, head_in_view, bool(rois.get("eye")), in_boxes,
                                        summary.get("breathing"), vis_ok, vsummary.get("flank_breathing"))
-        add("breathing_check", 1 if pick else 0, "0/1", source="thermal_video", conf=1.0,
-            reason="measured" if pick else nostril, nostril=nostril, flank=flank,
-            detail=f"{method}" if pick else BREATHING_WHY[nostril],
+        if not self.HAS_THERMAL:
+            nostril = None                                   # no nostril to watch: the flank is the only way
+        why_not = nostril or flank
+        add("breathing_check", 1 if pick else 0, "0/1", source="thermal_video" if self.HAS_THERMAL else "visible_video", conf=1.0,
+            reason="measured" if pick else why_not, nostril=nostril, flank=flank,
+            detail=f"{method}" if pick else BREATHING_WHY[why_not],
             **({"box": pick["box"]} if pick and pick.get("box") else {}),
             stillS=(summary.get("breathing") or {}).get("seconds"))
         # Behaviour — prototype heuristics, reported as such.
@@ -1781,6 +1807,60 @@ class MtrpcCameraWorker(CameraWorker):
             pass
 
 
+class _NoThermal:
+    """An ordinary colour camera has no temperature pixels: every read is empty."""
+    def box_avg(self, *_a, **_k):
+        return None
+
+    def box_grid(self, *_a, **_k):
+        return [], 0, 0
+
+    def read_pixels(self, pts):
+        return [None] * len(pts)
+
+    def logout(self):
+        pass
+
+
+class RtspCameraWorker(MtrpcCameraWorker):
+    """A camera the stable already owns — any IP / CCTV camera with an RTSP
+    stream (Hikvision, Dahua, CP Plus, Uniview, Axis, Tapo, Reolink… or an NVR
+    channel). The colour analysis is the same as on our own camera: activity,
+    lying and eating time, stillness, weaving / box walking / head tossing,
+    rolling and getting up (with the horse detector), droppings and urine on
+    the bedding (floor box), breathing from the flank (flank box), people at
+    the stall, recognition, recordings. It has no thermal sensor, so no eye
+    temperature and no nostril breathing.
+
+    dev: rtspPath — the stream to analyse (the sub stream: small and enough),
+    rtspPathMain — the main stream, for the occasional full-detail still."""
+
+    HAS_THERMAL = False
+
+    def behaviour_stream(self):
+        return "visible"
+
+    def _colour_path(self):
+        return self.dev.get("rtspPath") or "/"
+
+    def _hd_path(self):
+        return self.dev.get("rtspPathMain") or self._colour_path()
+
+    def _require_rois(self, rois):
+        pass                                                 # the colour boxes are optional
+
+    def _auto_eye(self):
+        return None, "no thermal camera", None
+
+    def connect(self):
+        if self.dev.get("configError"):
+            raise RuntimeError(self.dev["configError"])
+        if not self.dev.get("rtspPath"):
+            raise RuntimeError("no stream address — choose the camera's make, or paste its RTSP address, in the Hardware page")
+        self.cam = _NoThermal()
+        self._start_video()
+
+
 def camera_worker_for(dev, sink, window_s):
     """ISAPI or JSON-RPC, as the portal detected it; asks the camera if unknown."""
     if dev.get("views"):
@@ -1791,6 +1871,8 @@ def camera_worker_for(dev, sink, window_s):
         from multistall import ZoomCameraHub  # noqa
         return ZoomCameraHub(dev, sink, window_s)
     proto = dev.get("protocol") or "auto"
+    if proto == "rtsp" or dev.get("kind") == "ip_camera":
+        return RtspCameraWorker(dev, sink, window_s)            # a camera the stable already owns
     if proto == "auto":
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from mtrpc import detect  # noqa
@@ -1954,11 +2036,12 @@ class EdgeRuntime:
     def _fingerprint(d):
         keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
                 "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol", "rtspPort",
-                "behaviourStream", "colourStream", "transport", "serialPort", "baud", "parity", "stopBits", "ptz")
+                "behaviourStream", "colourStream", "transport", "serialPort", "baud", "parity", "stopBits", "ptz",
+                "rtspPath", "rtspPathMain")
         return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
 
     def apply(self, cfg):
-        wanted = {d["id"]: d for d in cfg.get("devices", []) if d["kind"] in ("thermal_camera", "modbus_sensor")}
+        wanted = {d["id"]: d for d in cfg.get("devices", []) if d["kind"] in ("thermal_camera", "ip_camera", "modbus_sensor")}
         for did in list(self.workers):
             w, fp = self.workers[did]
             if did not in wanted or self._fingerprint(wanted[did]) != fp:
@@ -1969,7 +2052,7 @@ class EdgeRuntime:
             if did in self.workers:
                 self.workers[did][0].dev = d                   # e.g. calibration changed: no restart
                 continue
-            w = camera_worker_for(d, enqueue, self.window_s) if d["kind"] == "thermal_camera" else ModbusWorker(d, enqueue)
+            w = camera_worker_for(d, enqueue, self.window_s) if d["kind"] in ("thermal_camera", "ip_camera") else ModbusWorker(d, enqueue)
             print(f"[edge] starting {w.name}")
             w.start()
             self.workers[did] = (w, self._fingerprint(d))
@@ -1979,7 +2062,8 @@ class EdgeRuntime:
         """Record the cameras switched to "record" in the Hardware page."""
         from recorder import CameraRecorder, RetentionThread, recordings_dir  # noqa
         rec = {did: d for did, d in wanted.items()
-               if d["kind"] == "thermal_camera" and d.get("record") and d.get("protocol") == "mtrpc"}
+               if d.get("record") and ((d["kind"] == "thermal_camera" and d.get("protocol") == "mtrpc")
+                                       or (d["kind"] == "ip_camera" and d.get("rtspPath")))}
         for did in list(self.recorders):
             r, fp = self.recorders[did]
             if did not in rec or self._fingerprint(rec[did]) != fp:

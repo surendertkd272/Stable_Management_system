@@ -31,7 +31,7 @@ const whyText = (counts) => Object.entries(counts).sort((a, b) => b[1] - a[1]).m
  * floorWatched: whether the camera has a floor box (thermal or colour) — no
  * box means urination and manure were never looked for (null: not known).
  */
-export function sessionReport({ readings, from, to, clips = [], alerts = [], horse = null, floorWatched = null }) {
+export function sessionReport({ readings, from, to, clips = [], alerts = [], horse = null, floorWatched = null, thermal = null }) {
   const win = readings.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; })
     .sort((a, b) => a.ts.localeCompare(b.ts));
   const of = (m) => win.filter((r) => r.metric === m);
@@ -71,8 +71,9 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
         ...(asideNote ? [asideNote] : []),
         "Temperature alerts compare with the horse's own 7-day baseline, which needs ~3 days of readings.",
       ] });
-  } else add(1, "Body temperature", "not measured", eyeAside.length
-    ? "No eye temperature that counts in this window."
+  } else add(1, "Body temperature", "not measured", thermal === false
+    ? "Not measured on this stall — its camera has no thermal sensor (eye temperature needs one)."
+    : eyeAside.length ? "No eye temperature that counts in this window."
     : "No eye temperature in this window — the head was never in the thermal view (or the camera was not aimed).",
     asideNote ? { notes: [asideNote] } : {});
 
@@ -109,6 +110,7 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
     add(2, "Respiration pattern", "not measured", "No breathing rhythm found in this window.");
     add(3, "Respiratory rate", "not measured",
       why ? `No breathing rate in the ${why.checked} minutes checked. Why, by minute — nostril: ${whyText(why.nostril)}; flank: ${whyText(why.flank)}.`
+        : thermal === false ? "No breathing rate: on this stall it comes from the flank only (no thermal camera), when the horse stands still side-on in view."
         : "No breathing rate: the head was not still in the nostril box for 30 s, and the flank was not still in the colour picture.",
       { why, notes: why ? [] : ["Minute-by-minute reasons are recorded from 28 Sep 2026 on."] });
   }

@@ -3,6 +3,8 @@
 //
 //   edge_box        the on-site computer (Jetson) that polls devices; holds a token
 //   thermal_camera  Sparsh SC-IT6420-HB V2, polled by an edge box over ISAPI
+//   ip_camera       a camera the stable already owns (any IP / CCTV camera or
+//                   NVR channel with RTSP): the colour measures, no temperatures
 //   modbus_sensor   any Modbus/TCP or Modbus RTU (RS-485) device (flow meter,
 //                   load cell, feeder), described by a register map — no code
 //                   per model
@@ -26,9 +28,11 @@ import { liveResponse } from "./live-video.mjs";
 import { startCoolingTest, coolingJob, coolingView, splitFromCalib } from "./cooling.mjs";
 import { OnvifPtz, validateViews, stallsOf } from "./onvif-ptz.mjs";
 import { setupChecklist } from "./setup-check.mjs";
+import { MAKES, pathsFor, parseRtspUrl, probeIpCamera, snapshotIpCamera, onvifStreams, chooseStreams } from "./ip-camera.mjs";
 
-export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device", "wearable_hub"];
-const POLLED = new Set(["thermal_camera", "modbus_sensor"]);
+export const KINDS = ["edge_box", "thermal_camera", "ip_camera", "modbus_sensor", "push_device", "wearable_hub"];
+const POLLED = new Set(["thermal_camera", "ip_camera", "modbus_sensor"]);
+export const CAMERA_KINDS = new Set(["thermal_camera", "ip_camera"]);
 const TOKEN_KINDS = new Set(["edge_box", "push_device", "wearable_hub"]);
 
 // What a wearable hub may send: everything the wearable measures, and the
@@ -102,6 +106,16 @@ const str = (v, d = "") => String(v ?? d).trim();
 export function validateDevice(kind, body, existing = {}, all = [], { horses = [] } = {}) {
   const errs = [];
   if (!KINDS.includes(kind)) return { out: null, errs: [`unknown device kind "${kind}" (${KINDS.join(", ")})`] };
+  // A pasted RTSP address carries the camera's address, port and stream path.
+  if (kind === "ip_camera" && body.rtspUrl) {
+    const u = parseRtspUrl(body.rtspUrl);
+    if (u.error) errs.push(u.error);
+    else body = { ...body, host: u.host, rtspPort: u.port, rtspPath: u.path, ...(body.username || !u.username ? {} : { username: u.username }) };
+    if (body.rtspUrlMain) {
+      const m = parseRtspUrl(body.rtspUrlMain);
+      if (m.error) errs.push(`full-detail stream: ${m.error}`); else body = { ...body, rtspPathMain: m.path };
+    }
+  }
   const pick = (k, d) => (body[k] !== undefined ? body[k] : existing[k] !== undefined ? existing[k] : d);
 
   const out = {
@@ -192,6 +206,33 @@ export function validateDevice(kind, body, existing = {}, all = [], { horses = [
     errs.push(...validateCameraModel(out));
     if (!out.stall) errs.push("stall is required — the camera's readings are attributed to it");
     for (const k of ["httpPort", "rtspPort", "modbusPort"]) if (!isPort(out[k])) errs.push(`${k} must be a port number`);
+  }
+
+  if (kind === "ip_camera") {
+    Object.assign(out, {
+      make: str(pick("make"), "hikvision"),
+      channel: num(pick("channel"), 1),
+      rtspPort: num(pick("rtspPort"), 554),
+      httpPort: num(pick("httpPort"), 80),           // ONVIF, to find the stream on other makes
+      username: str(pick("username"), "admin"),
+      record: pick("record", false) === true,
+      peopleTrusted: pick("peopleTrusted", true) !== false,
+      // Recordings from the sub stream (small) or the main stream (detail).
+      colourStream: String(pick("colourStream", "sub")),
+    });
+    if (!MAKES[out.make]) errs.push("choose the camera's make");
+    else if (MAKES[out.make].path) Object.assign(out, pathsFor(out.make, out.channel));
+    else {
+      // pasted, or found over ONVIF ("Find the stream")
+      out.rtspPath = str(pick("rtspPath")) || null;
+      out.rtspPathMain = str(pick("rtspPathMain")) || out.rtspPath;
+      if (out.make === "custom" && !out.rtspPath) errs.push("paste the camera's RTSP address (rtsp://…)");
+    }
+    if (out.rtspPath && !/^\/\S*$/.test(out.rtspPath)) errs.push("the stream path must start with /");
+    if (!Number.isInteger(out.channel) || out.channel < 1 || out.channel > 64) errs.push("channel is 1 to 64 (1 for a camera on its own)");
+    if (!["sub", "main"].includes(out.colourStream)) errs.push("recordings: sub or main stream");
+    if (!out.stall) errs.push("stall is required — the camera's readings are attributed to it");
+    for (const k of ["httpPort", "rtspPort"]) if (!isPort(out[k])) errs.push(`${k} must be a port number`);
   }
 
   if (kind === "modbus_sensor") {
@@ -297,10 +338,11 @@ export function validateDevice(kind, body, existing = {}, all = [], { horses = [
   // Two records for the same endpoint would double-poll it (and double-count
   // a water meter). Refuse.
   if (POLLED.has(kind) && out.host) {
-    const port = kind === "thermal_camera" ? out.httpPort : out.port;
+    // an NVR: one address, a channel per camera — the stream is what must differ
+    const port = kind === "thermal_camera" ? out.httpPort : kind === "ip_camera" ? `${out.rtspPort}${out.rtspPath ?? ""}` : out.port;
     const clash = all.find((d) => d.id !== existing.id && d.kind === kind && d.host === out.host && d.transport !== "rtu" &&
-      (kind === "thermal_camera" ? d.httpPort : d.port) === port);
-    if (clash) errs.push(`"${clash.name}" is already registered at ${out.host}:${port}`);
+      (kind === "thermal_camera" ? d.httpPort : kind === "ip_camera" ? `${d.rtspPort}${d.rtspPath ?? ""}` : d.port) === port);
+    if (clash) errs.push(`"${clash.name}" is already registered at ${out.host}${kind === "ip_camera" ? ` (${out.rtspPath ?? "same stream"})` : `:${port}`}`);
   }
   // On an RS-485 bus the endpoint is (edge box, serial port, unit id), and
   // every device on one port shares its line settings.
@@ -342,7 +384,7 @@ export const ownerDevice = (d, all, { horses = [] } = {}) => ({
   id: d.id, kind: d.kind, name: d.name,
   stall: d.kind === "wearable_hub" ? stallOf(horses.find((h) => h.id === d.horseId)) : d.stall,
   status: deviceStatus(d, all).state,
-  calibrated: d.kind === "thermal_camera" ? Boolean(d.rois && !d.rois.stale) : null,
+  calibrated: d.kind === "thermal_camera" ? Boolean(d.rois && !d.rois.stale) : d.kind === "ip_camera" ? true : null,
 });
 
 /** One honest word for how a device is doing, and why. */
@@ -533,6 +575,11 @@ export function deviceApi({ store, json, CORS }) {
         }
         if (!r.unit && METRICS[r.metric]) r.unit = METRICS[r.metric].unit;
         if (!r.source && dev.kind === "push_device") r.source = METRICS[r.metric]?.source ?? "push_device";
+        if (dev.kind === "ip_camera") {
+          // An ordinary camera sees colour only: no temperature can come from it.
+          if (METRICS[r.metric]?.source === "thermal_camera") { rejected.push({ metric: r.metric, reason: "an ordinary camera has no thermal sensor" }); continue; }
+          r.source = VIDEO_SOURCES.has(r.source) ? r.source : "visible_video";
+        }
         if (dev.kind === "thermal_camera") {
           // Vitals come off the camera's thermometry; behaviour off its thermal
           // or colour video — both prototype sources. Anything else is taken
@@ -751,6 +798,18 @@ export function deviceApi({ store, json, CORS }) {
             rois: d.rois && !d.rois.stale ? { eye: d.rois.eye, nostril: d.rois.nostril, floor: d.rois.floor ?? null, flank: d.rois.flank ?? null, colourFloor: d.rois.colourFloor ?? null, hay: d.rois.hay ?? null, pushedAt: d.rois.pushedAt ?? null } : null,
           };
         }
+        if (d.kind === "ip_camera") {
+          const cred = cameraPassword(d);
+          return {
+            ...base, protocol: "rtsp", username: d.username, password: cred.password ?? null,
+            configError: cred.error ?? (d.rtspPath ? null : "the camera's stream is not found yet — press “Find the stream” on the Hardware page"),
+            rtspPort: d.rtspPort, rtspPath: d.rtspPath, rtspPathMain: d.rtspPathMain || d.rtspPath,
+            record: d.record === true, colourStream: d.colourStream || "sub", behaviourStream: "visible", calibrated: true,
+            stallHorse: (({ id, name } = {}) => (id ? { id, name } : null))(horses.find((h) => stallOf(h) && stallOf(h) === d.stall)),
+            // the colour boxes, all optional: flank (breathing), floor, hay
+            rois: d.rois ? { flank: d.rois.flank ?? null, colourFloor: d.rois.colourFloor ?? null, hay: d.rois.hay ?? null, pushedAt: d.rois.pushedAt ?? null } : null,
+          };
+        }
         // registers carry their `use` (flow / bucket / feed_bowl / hay /
         // fault) when set: the edge box turns those into bouts and meals.
         return {
@@ -817,6 +876,10 @@ export function deviceApi({ store, json, CORS }) {
       const extra = { createdAt: now(), lastSeen: null, health: null };
       let token = null;
       if (out.kind === "thermal_camera") Object.assign(extra, { passwordEnc: seal(body.password), rois: null, lastProbe: null, identity: null });
+      if (out.kind === "ip_camera") {
+        const pw = body.password || (body.rtspUrl ? parseRtspUrl(body.rtspUrl).password : null);
+        Object.assign(extra, { passwordEnc: pw ? seal(pw) : null, rois: null, lastProbe: null });
+      }
       if (TOKEN_KINDS.has(out.kind)) { const t = newToken(); token = t.token; Object.assign(extra, { tokenHash: t.tokenHash, tokenHint: t.tokenHint }); }
       const created = store.create("devices", { ...out, ...extra });
       event(created, actorOf(who), "created", `${out.kind} "${out.name}"`);
@@ -856,7 +919,7 @@ export function deviceApi({ store, json, CORS }) {
       return json(405, { error: "method not allowed" });
     }
 
-    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|live|rois|temps|token|events|verification|breathing|cooling|views|ptz|checklist))?$/);
+    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|live|rois|temps|token|events|verification|breathing|cooling|views|ptz|checklist|find))?$/);
     if (!m) return null;
     const dev = byId(decodeURIComponent(m[1]));
     if (!dev) return json(404, { error: "unknown device" });
@@ -881,6 +944,12 @@ export function deviceApi({ store, json, CORS }) {
         // re-confirmed on the next test rather than silently carried over.
         if (changes.includes("host") || changes.includes("httpPort")) forget(dev.id);
       }
+      if (dev.kind === "ip_camera") {
+        const pw = body.password || (body.rtspUrl ? parseRtspUrl(body.rtspUrl).password : null);
+        if (pw) { patch.passwordEnc = seal(pw); changes.push("password"); }
+        // another camera or channel: the boxes drawn on the old picture no longer fit
+        if (["host", "channel", "make", "rtspPath"].some((k) => changes.includes(k)) && dev.rois) patch.rois = null;
+      }
       const row = store.update("devices", dev.id, patch);
       if (changes.length) event(dev, actorOf(who), "updated", changes.join(", "));
       return json(200, publicDevice(row, list(), horses));
@@ -895,6 +964,59 @@ export function deviceApi({ store, json, CORS }) {
       store.remove("devices", dev.id);
       event(dev, actorOf(who), "removed", assigned.length ? `unassigned ${assigned.length} device(s)` : "");
       return json(200, { ok: true });
+    }
+
+    // ---- a camera the stable already owns (server/ip-camera.mjs) ------------ //
+    if (dev.kind === "ip_camera" && ["probe", "snapshot", "rois", "find", "live"].includes(action)) {
+      const cred = cameraPassword(dev);
+      if (cred.error) return json(400, { error: cred.error });
+      const host = await checkHost(dev.host);
+      if (!host.ok) return json(400, { error: host.error });
+      if (action === "find" && method === "POST") {
+        // ONVIF: ask the camera where its streams are
+        try {
+          const list = await onvifStreams({ host: dev.host, port: dev.httpPort || 80, username: dev.username || "admin", password: cred.password });
+          const chosen = chooseStreams(list);
+          store.update("devices", dev.id, { ...chosen, rois: dev.rtspPath && dev.rtspPath !== chosen.rtspPath ? null : dev.rois, updatedAt: now() });
+          event(dev, actorOf(who), "stream found", `${list.length} streams over ONVIF; analysing ${chosen.rtspPath}`);
+          return json(200, { streams: list.map(({ token, width, height, encoding, path: p }) => ({ token, width, height, encoding, path: p })), ...chosen });
+        } catch (e) {
+          return json(502, { error: `could not find the stream over ONVIF: ${e.message} — paste the RTSP address instead` });
+        }
+      }
+      if (!dev.rtspPath) return json(409, { error: "the camera's stream is not known yet — find it or paste its RTSP address" });
+      if (action === "probe" && method === "POST") {
+        const result = await probeIpCamera(dev, cred.password);
+        store.update("devices", dev.id, { lastProbe: result });
+        event(dev, actorOf(who), "tested", result.ok ? result.lines[0] : result.lines.join(" "));
+        return json(200, result);
+      }
+      if (action === "snapshot" && method === "GET") {
+        try {
+          const snap = await snapshotIpCamera(dev, cred.password);
+          return new Response(snap.bytes, { status: 200, headers: { "Content-Type": snap.contentType, "Cache-Control": "no-store", ...CORS } });
+        } catch (e) {
+          return json(502, { error: e.message });
+        }
+      }
+      if (action === "live") return json(501, { error: "live video is shown as pictures for this camera" });
+      if (action === "rois" && method === "PUT") {
+        // Only the colour boxes, all optional: the flank (breathing), the floor
+        // (droppings and urine), the hay (eating time).
+        const { body, error } = await readBody(req);
+        if (error) return error;
+        const ok = (b) => b && [b.x0, b.y0, b.x1, b.y1].every(inRange) && b.x1 - b.x0 >= 50 && b.y1 - b.y0 >= 50;
+        const rois = { pushedAt: now() };
+        for (const k of ["flank", "colourFloor", "hay"]) {
+          if (body[k] === null || body[k] === undefined) continue;
+          if (!ok(body[k])) return json(400, { error: `the ${k === "colourFloor" ? "floor" : k} box must be {x0, y0, x1, y1} in 0–10000, not tiny` });
+          rois[k] = { x0: body[k].x0, y0: body[k].y0, x1: body[k].x1, y1: body[k].y1 };
+        }
+        store.update("devices", dev.id, { rois });
+        event(dev, actorOf(who), "boxes drawn", ["flank", "colourFloor", "hay"].filter((k) => rois[k]).join(", ") || "none (the whole picture)");
+        return json(200, { ok: true, rois });
+      }
+      return json(405, { error: "method not allowed" });
     }
 
     if (action === "token" && method === "POST") {

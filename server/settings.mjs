@@ -35,7 +35,7 @@ export const DEFAULTS = {
   send: {                       // which alert groups are sent
     temperature: true, breathing: true, colic: true, casting: true, activity: true,
     vices: true, sleep: true, elimination: true, lameness: true, water: true, monitoring: true,
-    foaling: true, security: true, heat: true,
+    foaling: true, security: true, heat: true, staff: true,
   },
   sensitivity: 50,              // 0 calm … 50 balanced … 100 sensitive
   privacy: { consentAt: null, consentBy: null },
@@ -44,6 +44,7 @@ export const DEFAULTS = {
 // Alert type -> send group. Types not listed are sent (fail open: an unknown
 // new alert must not be silently muted).
 const GROUPS = [
+  ["staff", /^staff rule/i],              // first: a rule's name may say "colic" or "temperature"
   ["temperature", /temperature/i],
   ["breathing", /respirat|breathing/i],
   ["casting", /cast/i],

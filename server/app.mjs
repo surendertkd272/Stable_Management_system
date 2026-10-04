@@ -22,6 +22,7 @@ import { isKnownMetric, coverage, dedupKey } from "./contract.mjs";
 import { createStore, dataDir } from "./store.mjs";
 import { dispatch, notifyStatus, tick, ackValid } from "./notify.mjs";
 import { dailyTick, listDaily, dailyPath, dailyStatus } from "./daily-reports.mjs";
+import { rulesApi } from "./rules-api.mjs";
 import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
 import { sessionReport } from "./session.mjs";
 import { clientReport, safeTimeZone } from "./client_report.mjs";
@@ -75,6 +76,7 @@ async function ready() {
     G.devices = deviceApi({ store: s, json, CORS });
     G.insights = insightsApi({ store: s, json, CORS, roster: () => s.list("horses") });
     G.recycle = recycleApi({ store: s, json });
+    G.rules = rulesApi({ store: s, json, roster: () => s.list("horses") });
     G.devices.migrate();           // camera-only records from the first hardware version
     // A leg recording waits for the hub's own (head) recording, and the
     // pelvis sensor's when the hub has one paired.
@@ -161,7 +163,7 @@ async function reportHtml(s, bio, from, to, { notes = "", tz } = {}) {
   const rd = s.readingsForHorse(bio.id);
   const cams = new Set(rd.filter((r) => { const t = Date.parse(r.ts); return t >= from && t <= to; }).map((r) => r.meta?.deviceId).filter(Boolean));
   const camDevs = s.list("devices").filter((d) => cams.has(d.id));
-  const cam = camDevs[0] || s.list("devices").find((d) => d.kind === "thermal_camera" && d.stall === bio.stall) || null;
+  const cam = camDevs[0] || s.list("devices").find((d) => (d.kind === "thermal_camera" || d.kind === "ip_camera") && d.stall === bio.stall) || null;
   const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
   const { html } = await clientReport({
     horse: { id: bio.id, name: bio.name, stall: bio.stall }, readings: rd, from, to,
@@ -171,8 +173,16 @@ async function reportHtml(s, bio, from, to, { notes = "", tz } = {}) {
     clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
     baseline: baselineCompare(bio, rd, { tz: safeTimeZone(tz), from, to }),
     autoVisits: camDevs.every((d) => d.peopleTrusted !== false),
+    thermal: thermalAt(s, bio, camDevs),
   });
   return html;
+}
+/** Does a thermal camera watch this horse? false: only ordinary cameras (no
+ *  temperatures possible); null: not known (no camera on record). */
+function thermalAt(s, bio, camDevs) {
+  const cams = camDevs.length ? camDevs : s.list("devices").filter((d) => (d.kind === "thermal_camera" || d.kind === "ip_camera") && d.stall === bio.stall);
+  if (!cams.length) return null;
+  return cams.some((d) => d.kind === "thermal_camera");
 }
 const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 /** The rollup's settings: activity bands, quiet hours, cameras whose people-detection is not trusted. */
@@ -641,6 +651,12 @@ h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%
       return json(200, buildSeries(roster(), store.allReadings(), days));
     }
 
+    // ---- alert rules staff set themselves (server/rules-api.mjs) ------------ //
+    if (path.startsWith("/api/rules")) {
+      const res = await G.rules.handle(req, url, who);
+      if (res) return res;
+    }
+
     // ---- nightly reports (server/daily-reports.mjs) ------------------------ //
     if (path === "/api/reports/daily" && method === "GET") {
       if (who?.role === "owner") return json(404, { error: "not found" });
@@ -671,7 +687,7 @@ h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%
       const alerts = buildAlerts([bio], store.allReadings(), store.isAcked);
       const camDevs = store.list("devices").filter((d) => cams.has(d.id));
       const floorWatched = camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : null;
-      return json(200, sessionReport({ readings: rd, from, to, clips, alerts, floorWatched,
+      return json(200, sessionReport({ readings: rd, from, to, clips, alerts, floorWatched, thermal: thermalAt(store, bio, camDevs),
         horse: { id: bio.id, name: bio.name, stall: bio.stall } }));
     }
 
@@ -788,7 +804,7 @@ h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%
       }
       if (path === "/api/footage/labels/meta" && method === "GET") return json(200, LABELS);
       if (path === "/api/footage" && method === "GET") {
-        const cams = new Map(store.list("devices").filter((d) => d.kind === "thermal_camera").map((d) => [d.id, d]));
+        const cams = new Map(store.list("devices").filter((d) => d.kind === "thermal_camera" || d.kind === "ip_camera").map((d) => [d.id, d]));
         const labels = store.list("footage_labels");
         const clips = listClips().map((c) => ({
           ...c,

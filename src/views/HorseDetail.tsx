@@ -305,6 +305,7 @@ export default function HorseDetail() {
         <div className="flex" style={{ gap: 8, marginTop: -12, marginBottom: 24 }}>
           <GaitCheckButton horseId={horse.id} name={horse.name} />
           <Link className="btn-ghost" href={`/events?horse=${encodeURIComponent(horse.id)}`}>Events &amp; clips</Link>
+          <Link className="btn-ghost" href={`/rules?horse=${encodeURIComponent(horse.id)}`}>Add an alert rule</Link>
         </div>
       )}
 

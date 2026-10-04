@@ -7,6 +7,8 @@
 //                   fetches its device list from here, so what is on this page
 //                   is what gets measured.
 //   Thermal cameras polled by an edge box; aimed with the ROI calibrator.
+//   Existing cameras the stable's own CCTV / IP cameras (or NVR channels):
+//                   the colour measures, no temperatures.
 //   Modbus sensors  any Modbus/TCP or RS-485 (Modbus RTU) device, described
 //                   by a register map.
 //   Push devices    gateways that send their own readings with a token.
@@ -21,11 +23,11 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as RPointer
 import {
   Camera as CameraIcon, Plus, PlugZap, Crosshair, Pencil, Trash2, CheckCircle2, XCircle,
   Loader2, Wifi, Info, Ruler, ScanLine, Server, Gauge, Send, KeyRound, History, Copy,
-  AlertTriangle, ShieldCheck, Power, Focus, Footprints, Database,
+  AlertTriangle, ShieldCheck, Power, Focus, Footprints, Database, Cctv, Search, SquareDashed,
 } from "lucide-react";
 import * as api from "../data/api";
 import type {
-  CameraProbe, CameraTemps, CameraVerification, Device, RoiBox, DeviceEvent, DeviceKind, DeviceState, EdgeBox, ModbusRegister,
+  CameraProbe, CameraTemps, CameraVerification, Device, RoiBox, IpCamera, IpProbe, DeviceEvent, DeviceKind, DeviceState, EdgeBox, ModbusRegister,
   ModbusSensor, PushDevice, RegisterUse, SensorProbe, ThermalCamera, WearableHub, HorseMotion,
 } from "../data/api";
 import { SC_IT6420_HB_V2 as SPEC, assessOptics, focusFor, lensesFor, variants } from "../../server/hardware-spec.mjs";
@@ -56,6 +58,10 @@ const KIND: Record<DeviceKind, { title: string; one: string; icon: ReactNode; bl
     title: `Thermal cameras · ${SPEC.model}`, one: "camera", icon: <CameraIcon size={17} />,
     blurb: "Each stall camera, assigned to the edge box that polls it. Test the connection, then aim its ROIs at the eye and nostril.",
   },
+  ip_camera: {
+    title: "Cameras the stable already has (CCTV)", one: "existing camera", icon: <Cctv size={17} />,
+    blurb: "Any IP or CCTV camera, or a channel of the stable's NVR — Hikvision, Dahua, CP Plus, Uniview, Axis, Tapo, Reolink or any ONVIF camera. EquiCare reads its colour picture: activity, lying and eating time, rolling and getting up, stable vices, droppings and urine, breathing from the flank, people at night, recordings. Eye temperature needs a thermal camera.",
+  },
   modbus_sensor: {
     title: "Modbus sensors", one: "Modbus sensor", icon: <Gauge size={17} />,
     blurb: "Water meters, load cells, feeders — any Modbus/TCP device, or an RS-485 (Modbus RTU) one wired to an edge box. Describe its registers from the datasheet; no code per model.",
@@ -69,7 +75,7 @@ const KIND: Record<DeviceKind, { title: string; one: string; icon: ReactNode; bl
     blurb: "A halter hub with a SIM card and the sensors paired to it — a leg tag and optionally pelvis sensors — for steps, lying, exercise and the trot (lameness) check. It belongs to one horse: the server puts every reading on that horse, whichever stall it is in.",
   },
 };
-const KIND_ORDER: DeviceKind[] = ["edge_box", "thermal_camera", "modbus_sensor", "wearable_hub", "push_device"];
+const KIND_ORDER: DeviceKind[] = ["edge_box", "thermal_camera", "ip_camera", "modbus_sensor", "wearable_hub", "push_device"];
 /** Kinds that authenticate with their own token (shown once). */
 const TOKEN_KINDS = new Set<DeviceKind>(["edge_box", "push_device", "wearable_hub"]);
 
@@ -127,6 +133,7 @@ export default function Hardware() {
   const [editing, setEditing] = useState<{ kind: DeviceKind; dev?: Device } | null>(null);
   const [calibrating, setCalibrating] = useState<ThermalCamera | null>(null);
   const [zoomSetup, setZoomSetup] = useState<ThermalCamera | null>(null);
+  const [boxing, setBoxing] = useState<IpCamera | null>(null);
   const [token, setToken] = useState<{ dev: Device; token: string } | null>(null);
   const [history, setHistory] = useState<Device | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -183,8 +190,17 @@ export default function Hardware() {
     const r = await api.probeDevice(dev.id, acceptIdentity);
     setBusy(null);
     if (!r.ok) return notify(`Test failed: ${r.error}`);
-    notify(r.data.ok ? `${dev.name}: answered` : `${dev.name}: test failed — see the steps`);
+    notify(r.data.ok ? `${dev.name}: answered` : `${dev.name}: test failed — see the ${dev.kind === "ip_camera" ? "result" : "steps"}`);
     setOpenProbe(dev.id);
+    load();
+  };
+
+  const findStream = async (dev: Device) => {
+    setBusy(dev.id);
+    const r = await api.findIpStream(dev.id);
+    setBusy(null);
+    if (!r.ok) return notify(r.error);
+    notify(`${dev.name}: found ${r.data.streams.length} streams — analysing ${r.data.streams.find((x) => x.path === r.data.rtspPath)?.width ?? "?"} wide`);
     load();
   };
 
@@ -229,6 +245,8 @@ export default function Hardware() {
     onHistory: () => setHistory(dev),
     onCalibrate: dev.kind === "thermal_camera" ? () => setCalibrating(dev) : undefined,
     onStalls: dev.kind === "thermal_camera" ? () => setZoomSetup(dev) : undefined,
+    onFind: dev.kind === "ip_camera" ? () => findStream(dev) : undefined,
+    onBoxes: dev.kind === "ip_camera" ? () => setBoxing(dev) : undefined,
   });
 
   const canEdit = isAdmin && !api.demoMode;
@@ -329,6 +347,7 @@ export default function Hardware() {
       )}
       {token && <TokenModal dev={token.dev} token={token.token} onClose={() => setToken(null)} />}
       {history && <HistoryModal dev={history} onClose={() => setHistory(null)} />}
+      {boxing && <IpBoxesModal cam={boxing} onClose={() => { setBoxing(null); load(); }} />}
       {zoomSetup && (
         <ZoomSetupModal cam={zoomSetup} stalls={stalls} onClose={() => { setZoomSetup(null); load(); }} />
       )}
@@ -403,6 +422,7 @@ function StatePill({ dev }: { dev: Device }) {
 type CardActions = {
   isAdmin: boolean; busy: boolean; showProbe: boolean;
   onToggleProbe: () => void; onProbe: (acceptIdentity?: boolean) => void; onEdit: () => void;
+  onFind?: () => void; onBoxes?: () => void;
   onRemove: () => void; onToggle: () => void; onToken: () => void; onHistory: () => void;
   onCalibrate?: () => void;
   /** One camera watching several stalls (zooming in on each horse). */
@@ -446,6 +466,16 @@ function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardAction
           </>
         )}
         {dev.kind === "thermal_camera" && <CameraFacts cam={dev} edge={edgeName(dev.edgeId)} />}
+        {dev.kind === "ip_camera" && (
+          <>
+            <div><span>Edge box</span><b>{edgeName(dev.edgeId)}</b></div>
+            <div><span>Camera</span><b>{api.IP_MAKES.find((m) => m.key === dev.make)?.label ?? dev.make}{api.IP_MAKES.find((m) => m.key === dev.make)?.channel && dev.channel > 1 ? ` · channel ${dev.channel}` : ""}</b></div>
+            <div><span>Stream</span><b>{dev.rtspPath ? `rtsp://${dev.host}:${dev.rtspPort}${dev.rtspPath}` : "not found yet — press “Find the stream”"}{dev.record ? " · recording" : ""}</b></div>
+            <div><span>Boxes</span><b>{dev.rois && (dev.rois.flank || dev.rois.colourFloor || dev.rois.hay)
+              ? [dev.rois.flank && "flank", dev.rois.colourFloor && "floor", dev.rois.hay && "hay"].filter(Boolean).join(", ")
+              : "none — the whole picture is watched; draw the floor and hay for droppings and eating time"}</b></div>
+          </>
+        )}
         {dev.kind === "modbus_sensor" && (
           <>
             <div><span>Edge box</span><b>{edgeName(dev.edgeId)}</b></div>
@@ -477,11 +507,17 @@ function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardAction
 
       {canEdit && (
         <div className="flex gap-sm wrap" style={{ marginTop: 14 }}>
-          {(dev.kind === "thermal_camera" || dev.kind === "modbus_sensor") && (
+          {(dev.kind === "thermal_camera" || dev.kind === "modbus_sensor" || (dev.kind === "ip_camera" && dev.rtspPath)) && (
             <button className="btn-ghost accent" onClick={() => a.onProbe()} disabled={a.busy}>
               {a.busy ? <Loader2 size={15} className="spin" /> : <PlugZap size={15} />}
-              {a.busy ? "Testing…" : dev.kind === "thermal_camera" ? "Test connection" : "Test read"}
+              {a.busy ? "Testing…" : dev.kind === "modbus_sensor" ? "Test read" : dev.kind === "ip_camera" ? "Test camera" : "Test connection"}
             </button>
+          )}
+          {dev.kind === "ip_camera" && dev.make === "onvif" && a.onFind && (
+            <button className="btn-ghost" onClick={a.onFind} disabled={a.busy}><Search size={15} /> Find the stream</button>
+          )}
+          {dev.kind === "ip_camera" && dev.rtspPath && a.onBoxes && (
+            <button className="btn-ghost" onClick={a.onBoxes}><SquareDashed size={15} /> Draw floor, hay, flank</button>
           )}
           {a.onCalibrate && (
             <button className="btn-ghost" onClick={a.onCalibrate}>
@@ -518,7 +554,9 @@ function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardAction
           <button className="sub" style={{ color: "var(--accent)", fontWeight: 600 }} onClick={a.onToggleProbe}>
             {a.showProbe ? "Hide" : "Show"} last test · {when(dev.lastProbe.at)}
           </button>
-          {a.showProbe && <ProbeResult probe={dev.lastProbe} canAccept={canEdit} onAccept={() => a.onProbe(true)} />}
+          {a.showProbe && (dev.kind === "ip_camera"
+            ? <IpProbeResult probe={dev.lastProbe as IpProbe} />
+            : <ProbeResult probe={dev.lastProbe as CameraProbe | SensorProbe} canAccept={canEdit} onAccept={() => a.onProbe(true)} />)}
         </div>
       )}
     </div>
@@ -1018,6 +1056,10 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
       username: "admin", password: "", variant: "640", thermalLens: "13", visibleLens: "4", distanceM: 3.5, emissivity: 0.98,
       protocol: "auto", record: false, behaviourStream: "visible", colourStream: "sub", peopleTrusted: true,
     };
+    case "ip_camera": return {
+      ...common, stall, edgeId, make: "hikvision", channel: 1, host: "", rtspPort: 554, httpPort: 80,
+      username: "admin", password: "", rtspUrl: "", record: false, colourStream: "sub", peopleTrusted: true,
+    };
     case "modbus_sensor": return {
       ...common, stall, edgeId, transport: "tcp", host: "", port: 502,
       serialPort: "/dev/ttyUSB0", baud: 9600, parity: "N", stopBits: 1,
@@ -1046,7 +1088,12 @@ function DeviceForm({ kind, dev, edges, stalls, horses, onClose, onSaved }: {
     setErrors([]);
     let payload: Form = { ...f };
     if (dev && !payload.password) delete payload.password;   // blank = keep the stored one
-    if (kind !== "thermal_camera") delete payload.password;
+    if (kind !== "thermal_camera" && kind !== "ip_camera") delete payload.password;
+    if (kind === "ip_camera") {
+      // a pasted address only for "another make — paste"; the paths are the server's to derive
+      if (payload.make !== "custom" || !String(payload.rtspUrl ?? "").trim()) delete payload.rtspUrl;
+      delete payload.rtspPath; delete payload.rtspPathMain;
+    }
     if (kind === "wearable_hub") {
       // Only what the registry stores: the stall follows the horse, and the
       // metrics a hub may send are fixed by the server.
@@ -1138,7 +1185,7 @@ function DeviceForm({ kind, dev, edges, stalls, horses, onClose, onSaved }: {
         <div>
           <div className="grid cols-2" style={{ gap: 10 }}>
             {text("name", "Name", kind === "edge_box" ? "Barn A edge" : kind === "modbus_sensor" ? "A-04 water meter"
-              : kind === "wearable_hub" ? "Zarina's halter hub" : "Stall A-04 thermal")}
+              : kind === "wearable_hub" ? "Zarina's halter hub" : kind === "ip_camera" ? "Stall A-04 CCTV" : "Stall A-04 thermal")}
             {kind === "edge_box" ? text("location", "Location", "Barn A comms cabinet")
               : kind === "wearable_hub" ? horseField : stallField}
           </div>
@@ -1282,6 +1329,8 @@ function DeviceForm({ kind, dev, edges, stalls, horses, onClose, onSaved }: {
               )}
             </>
           )}
+
+          {kind === "ip_camera" && <IpCameraFields f={f} set={set} edgeField={edgeField} editing={Boolean(dev)} hasPassword={Boolean(dev && (dev as IpCamera).hasPassword)} noEdges={edges.length === 0} />}
 
           {isCamera && (
             <>
@@ -2128,5 +2177,189 @@ function RoiStage({ src, rois, mode, onChange, onDrag, hotspot }: {
       )}
       {hotspot && <div className="hw-hot" style={{ left: `${hotspot.x / 100}%`, top: `${hotspot.y / 100}%` }} title="Hottest pixel in the eye box" />}
     </div>
+  );
+}
+
+/* ---------- a camera the stable already owns (CCTV / IP / NVR channel) ---------- */
+function IpCameraFields({ f, set, edgeField, editing, hasPassword, noEdges }: {
+  f: Form; set: (k: string, v: unknown) => void; edgeField: ReactNode; editing: boolean; hasPassword: boolean; noEdges: boolean;
+}) {
+  const make = String(f.make ?? "hikvision");
+  const m = api.IP_MAKES.find((x) => x.key === make);
+  const val = (k: string) => String(f[k] ?? "");
+  return (
+    <>
+      <p className="hw-legend">The camera</p>
+      {noEdges && <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>No edge box yet — you can save this now and assign it once one is added.</p>}
+      <div className="grid cols-2" style={{ gap: 10 }}>
+        {edgeField}
+        <div className="field">
+          <label>Make</label>
+          <select value={make} onChange={(e) => set("make", e.target.value)}>
+            {api.IP_MAKES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+          </select>
+        </div>
+        {make === "custom" ? (
+          <div className="field" style={{ gridColumn: "1 / -1" }}>
+            <label>RTSP address{editing ? " (leave empty to keep the current one)" : ""}</label>
+            <input value={val("rtspUrl")} onChange={(e) => set("rtspUrl", e.target.value.trim())} placeholder="rtsp://192.168.1.64:554/stream1" autoComplete="off" />
+            <small className="muted">From the camera&apos;s manual or its app (often under “RTSP” or “stream URL”). Use the smaller sub stream if it has one. A password written in the address is taken out and kept encrypted.</small>
+          </div>
+        ) : (
+          <>
+            <div className="field">
+              <label>IP address (camera or NVR)</label>
+              <input value={val("host")} onChange={(e) => set("host", e.target.value.trim())} placeholder="192.168.1.64" />
+            </div>
+            {m?.channel && (
+              <div className="field">
+                <label>Channel</label>
+                <input type="number" min={1} max={64} value={val("channel")} onChange={(e) => set("channel", Number(e.target.value) || 1)} />
+                <small className="muted">1 for a camera on its own; the NVR&apos;s channel number for a camera on a recorder.</small>
+              </div>
+            )}
+            <div className="field">
+              <label>RTSP port</label>
+              <input type="number" value={val("rtspPort")} onChange={(e) => set("rtspPort", Number(e.target.value) || 554)} />
+            </div>
+            {make === "onvif" && (
+              <div className="field">
+                <label>ONVIF (HTTP) port</label>
+                <input type="number" value={val("httpPort")} onChange={(e) => set("httpPort", Number(e.target.value) || 80)} />
+              </div>
+            )}
+          </>
+        )}
+        <div className="field">
+          <label>Username</label>
+          <input value={val("username")} onChange={(e) => set("username", e.target.value)} autoComplete="off" placeholder="admin" />
+        </div>
+        <div className="field">
+          <label>Password</label>
+          <input type="password" value={val("password")} onChange={(e) => set("password", e.target.value)} autoComplete="new-password" placeholder={hasPassword ? "unchanged" : ""} />
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
+        A viewer account on the camera or NVR is enough — EquiCare only reads the picture and never changes the camera.
+        {make === "onvif" ? " After saving, press “Find the stream”." : ""}
+      </p>
+      <div className="field" style={{ marginTop: 10, maxWidth: 360 }}>
+        <label>Recordings from</label>
+        <select value={val("colourStream") || "sub"} onChange={(e) => set("colourStream", e.target.value)}>
+          <option value="sub">The sub stream — small files</option>
+          <option value="main">The main stream — full detail, larger files</option>
+        </select>
+      </div>
+      <label className="hw-check" style={{ marginTop: 8 }}>
+        <input type="checkbox" checked={Boolean(f.record)} onChange={(e) => set("record", e.target.checked)} /> Record video on the edge
+        box (10-minute clips; oldest deleted past 100 GB) — for event clips, the night time-lapse and labelling
+      </label>
+      <label className="hw-check" style={{ marginTop: 8 }}>
+        <input type="checkbox" checked={f.peopleTrusted !== false} onChange={(e) => set("peopleTrusted", e.target.checked)} /> Count
+        visits from people seen in the picture — switch off if this camera takes the horse for a person at night
+      </label>
+      <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>
+        Mount for the whole stall: a front corner, 3.5–4.5 m up, the hay and the floor in the picture, no lamp or bright doorway
+        facing it. A camera on the aisle that sees only the stall door gives activity and visits, not lying or droppings.
+      </p>
+    </>
+  );
+}
+
+function IpProbeResult({ probe }: { probe: IpProbe }) {
+  const line = (s: IpProbe["sub"], name: string) => !s ? null : "error" in s
+    ? <li className="bad"><XCircle size={15} /><div><b>{name}</b><span>{s.error}</span></div><em /></li>
+    : <li className="ok"><CheckCircle2 size={15} /><div><b>{name}</b><span>{s.width}×{s.height}, {s.fps} fps, {s.codec.toUpperCase()}</span></div><em /></li>;
+  return (
+    <>
+      <ul className="hw-steps">
+        {line(probe.sub, "Analysis stream")}
+        {line(probe.main, "Full-detail stream")}
+      </ul>
+      <ul style={{ fontSize: 12.5, margin: "6px 0 0", paddingLeft: 18 }}>
+        {probe.lines.map((l) => <li key={l}>{l}</li>)}
+      </ul>
+      <p className="muted" style={{ fontSize: 11.5, margin: "4px 0 0" }}>{probe.address}</p>
+    </>
+  );
+}
+
+type IpBoxKey = "colourFloor" | "hay" | "flank";
+const IP_BOXES: { key: IpBoxKey; label: string; hint: string; color: string }[] = [
+  { key: "colourFloor", label: "Floor", hint: "the bedding where he stands and lies — droppings and urine", color: "#f59e0b" },
+  { key: "hay", label: "Hay", hint: "where the hay is — eating time", color: "#16a34a" },
+  { key: "flank", label: "Flank", hint: "his side, where he usually stands still — breathing", color: "#6366f1" },
+];
+
+function IpBoxesModal({ cam, onClose }: { cam: IpCamera; onClose: () => void }) {
+  const notify = useToast();
+  const [img, setImg] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+  const [mode, setMode] = useState<IpBoxKey>("colourFloor");
+  const [boxes, setBoxes] = useState<Partial<Record<IpBoxKey, RoiBox | null>>>({
+    colourFloor: cam.rois?.colourFloor ?? null, hay: cam.rois?.hay ?? null, flank: cam.rois?.flank ?? null });
+  const [drag, setDrag] = useState<{ x: number; y: number; x2: number; y2: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const shot = useCallback(async () => {
+    setErr("");
+    const r = await api.fetchSnapshot(cam.id, 0);
+    if (r.url) setImg(r.url); else setErr(r.error ?? "no picture");
+  }, [cam.id]);
+  useEffect(() => { shot(); }, [shot]);
+  const at = (e: RPointerEvent<HTMLDivElement>) => {
+    const b = ref.current!.getBoundingClientRect();
+    const c = (v: number) => Math.max(0, Math.min(10000, Math.round(v * 10000)));
+    return { x: c((e.clientX - b.left) / b.width), y: c((e.clientY - b.top) / b.height) };
+  };
+  const save = async () => {
+    setBusy(true);
+    const r = await api.saveIpBoxes(cam.id, boxes);
+    setBusy(false);
+    if (!r.ok) { notify(r.error); return; }
+    notify("Boxes saved — the edge box uses them from its next minute");
+    onClose();
+  };
+  const pct = (b: RoiBox) => ({ left: `${b.x0 / 100}%`, top: `${b.y0 / 100}%`, width: `${(b.x1 - b.x0) / 100}%`, height: `${(b.y1 - b.y0) / 100}%` });
+  return (
+    <Modal open wide onClose={onClose} title={`${cam.name} — floor, hay and flank`}
+      footer={<><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy} onClick={save}>{busy ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />} Save boxes</button></>}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>All optional. Choose a box, then drag on the picture. Without a floor box droppings and urine are not watched; without a hay box eating time is not counted.</p>
+      <div className="flex wrap" style={{ gap: 8, marginBottom: 10 }}>
+        {IP_BOXES.map((b) => (
+          <button key={b.key} className={mode === b.key ? "btn-primary" : "btn-ghost"} onClick={() => setMode(b.key)} title={b.hint}>
+            <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: b.color, marginRight: 6 }} />{b.label}{boxes[b.key] ? " ✓" : ""}
+          </button>
+        ))}
+        {boxes[mode] && <button className="btn-ghost" onClick={() => setBoxes({ ...boxes, [mode]: null })}><Trash2 size={14} /> Clear {IP_BOXES.find((b) => b.key === mode)!.label.toLowerCase()}</button>}
+        <button className="btn-ghost" onClick={shot}>New picture</button>
+      </div>
+      <p style={{ fontSize: 12.5, margin: "0 0 8px" }}><b>{IP_BOXES.find((b) => b.key === mode)!.label}:</b> {IP_BOXES.find((b) => b.key === mode)!.hint}.</p>
+      {err && <div className="row watch" style={{ padding: "8px 12px" }}><span style={{ fontSize: 12.5 }}>No picture from the camera: {err}</span></div>}
+      {!img && !err && <div className="card"><Loader2 className="spin" size={18} /> Asking the camera for a picture…</div>}
+      {img && (
+        <div ref={ref} style={{ position: "relative", userSelect: "none", touchAction: "none", cursor: "crosshair" }}
+          onPointerDown={(e) => { const p = at(e); setDrag({ x: p.x, y: p.y, x2: p.x, y2: p.y }); (e.target as HTMLElement).setPointerCapture?.(e.pointerId); }}
+          onPointerMove={(e) => { if (drag) { const p = at(e); setDrag({ ...drag, x2: p.x, y2: p.y }); } }}
+          onPointerUp={() => {
+            if (!drag) return;
+            const b = { x0: Math.min(drag.x, drag.x2), y0: Math.min(drag.y, drag.y2), x1: Math.max(drag.x, drag.x2), y1: Math.max(drag.y, drag.y2) };
+            setDrag(null);
+            if (b.x1 - b.x0 >= 200 && b.y1 - b.y0 >= 200) setBoxes({ ...boxes, [mode]: b });
+          }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={img} alt={`${cam.name} now`} style={{ width: "100%", display: "block", borderRadius: 8 }} draggable={false} />
+          {IP_BOXES.map((b) => boxes[b.key] && (
+            <div key={b.key} style={{ position: "absolute", ...pct(boxes[b.key]!), border: `2px solid ${b.color}`, background: `${b.color}22`, pointerEvents: "none" }}>
+              <span style={{ background: b.color, color: "#fff", fontSize: 11, padding: "1px 5px" }}>{b.label}</span>
+            </div>
+          ))}
+          {drag && (
+            <div style={{ position: "absolute", ...pct({ x0: Math.min(drag.x, drag.x2), y0: Math.min(drag.y, drag.y2), x1: Math.max(drag.x, drag.x2), y1: Math.max(drag.y, drag.y2) }),
+              border: `2px dashed ${IP_BOXES.find((b) => b.key === mode)!.color}`, pointerEvents: "none" }} />
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }

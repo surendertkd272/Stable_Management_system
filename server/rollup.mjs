@@ -5,6 +5,7 @@
 
 import { METRICS, SOURCE_STATUS } from "./contract.mjs";
 import { namedAlerts, suppressed, unusualScore, configureNamedAlerts } from "./named-alerts.mjs";
+import { staffRuleAlerts } from "./staff-rules.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 const BASELINE_TARGET_DAYS = 14;
@@ -411,6 +412,8 @@ function evaluate(bio, rd) {
   }
   // Named alerts: colic (signs together), foaling, people at night, stall heat.
   for (const a of namedAlerts(bio, rd, b)) push(a.type, a.severity, a.detail, a.ts);
+  // the stable's own rules (server/staff-rules.mjs) — they only add alerts
+  for (const a of staffRuleAlerts(bio, rd)) push(a.type, a.severity, a.detail, a.ts);
 
   // Vices: a new one is worth a look; a rise is information.
   for (const [k, label] of [["weaving", "Weaving"], ["boxWalking", "Box walking"], ["headTossing", "Head tossing"]]) {

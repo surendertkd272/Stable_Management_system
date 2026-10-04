@@ -35,8 +35,17 @@ COLOUR_MAIN = "/media/live/101"            # the colour picture in full HD (1920
 
 def stream_path(dev, stream):
     """The sub-stream — or, for colour, the full-HD main stream when the camera
-    is set to it (Hardware → colour detail): sharper recordings to zoom into."""
+    is set to it (Hardware → colour detail): sharper recordings to zoom into.
+    A camera the stable already owns (ip_camera) keeps its streams wherever
+    its make does: the paths come with it."""
+    if dev.get("kind") == "ip_camera":
+        return (dev.get("rtspPathMain") if dev.get("colourStream") == "main" else None) or dev["rtspPath"]
     return COLOUR_MAIN if stream == "visible" and dev.get("colourStream") == "main" else STREAMS[stream]
+
+
+def streams_of(dev):
+    """An ordinary camera has only the colour picture."""
+    return ["visible"] if dev.get("kind") == "ip_camera" else list(STREAMS)
 
 
 def record_cmd(url, out_dir, clip_seconds, codec, audio=False):
@@ -168,12 +177,12 @@ class CameraRecorder:
 
     def __init__(self, dev, root):
         self.dev = dev
-        self.parts = [StreamRecorder(dev, s, root) for s in STREAMS]
+        self.parts = [StreamRecorder(dev, s, root) for s in streams_of(dev)]
 
     def start(self):
         for p in self.parts:
             p.start()
-        print(f"[edge] recording {self.dev['name']} (thermal + visible) to {self.parts[0].out.parent}")
+        print(f"[edge] recording {self.dev['name']} ({' + '.join(p.stream for p in self.parts)}) to {self.parts[0].out.parent}")
 
     def stop(self):
         for p in self.parts:

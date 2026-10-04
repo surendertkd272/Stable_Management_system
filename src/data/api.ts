@@ -299,7 +299,7 @@ export async function exportReadingsCsv(horseId: string, days = 30): Promise<boo
    Every device runs through the site server, which is the only thing that can
    reach the barn LAN. The browser never sees a camera password or a device
    token after it is first shown — only `hasPassword` / `hasToken`. */
-export type DeviceKind = "edge_box" | "thermal_camera" | "modbus_sensor" | "push_device" | "wearable_hub";
+export type DeviceKind = "edge_box" | "thermal_camera" | "ip_camera" | "modbus_sensor" | "push_device" | "wearable_hub";
 export type DeviceState =
   | "online" | "offline" | "never" | "disabled" | "unassigned" | "edge-offline"
   | "needs-calibration" | "error" | "stale" | "waiting" | "silent";
@@ -424,7 +424,29 @@ export interface WearableHub extends DeviceCommon {
   stall?: string | null;
   metrics?: string[];
 }
-export type Device = EdgeBox | ThermalCamera | ModbusSensor | PushDevice | WearableHub;
+/** A camera the stable already owns (CCTV / IP camera or an NVR channel): colour only. */
+export type IpMake = "hikvision" | "dahua" | "uniview" | "axis" | "tapo" | "reolink" | "onvif" | "custom";
+export const IP_MAKES: { key: IpMake; label: string; channel: boolean }[] = [
+  { key: "hikvision", label: "Hikvision, Prama, HiLook", channel: true },
+  { key: "dahua", label: "Dahua, CP Plus, Amcrest, Lorex", channel: true },
+  { key: "uniview", label: "Uniview (UNV)", channel: true },
+  { key: "axis", label: "Axis", channel: true },
+  { key: "tapo", label: "TP-Link Tapo, VIGI", channel: false },
+  { key: "reolink", label: "Reolink", channel: true },
+  { key: "onvif", label: "Another make — find the stream automatically (ONVIF)", channel: false },
+  { key: "custom", label: "Another make — paste its RTSP address", channel: false },
+];
+export interface IpStream { codec: string; width: number; height: number; fps: number }
+export interface IpProbe { at: string; ok: boolean; sub: IpStream | { error: string } | null; main: IpStream | { error: string } | null; lines: string[]; address: string }
+export interface IpCamera extends DeviceCommon {
+  kind: "ip_camera"; stall: string; edgeId: string | null;
+  host: string; rtspPort: number; httpPort: number; username: string; hasPassword: boolean;
+  make: IpMake; channel: number; rtspPath: string | null; rtspPathMain: string | null;
+  record?: boolean; colourStream?: "sub" | "main"; peopleTrusted?: boolean;
+  rois: { flank?: RoiBox | null; colourFloor?: RoiBox | null; hay?: RoiBox | null; pushedAt?: string } | null;
+  lastProbe: IpProbe | null;
+}
+export type Device = EdgeBox | ThermalCamera | IpCamera | ModbusSensor | PushDevice | WearableHub;
 
 /** What an owner account receives: status only, no address or credentials. */
 export interface OwnerDevice {
@@ -494,7 +516,7 @@ export const ptzAction = (id: string, body: { action: "nudge" | "absolute" | "go
 export const deviceEvents = (id: string) => call<DeviceEvent[]>("GET", dpath(id, "events"));
 /** Camera connection test, or a Modbus test read. `acceptIdentity` confirms a replacement camera. */
 export const probeDevice = (id: string, acceptIdentity = false) =>
-  call<CameraProbe | SensorProbe>("POST", dpath(id, "probe") + (acceptIdentity ? "?acceptIdentity=1" : ""), undefined, 45000);
+  call<CameraProbe | SensorProbe | IpProbe>("POST", dpath(id, "probe") + (acceptIdentity ? "?acceptIdentity=1" : ""), undefined, 45000);
 export const pushRois = (id: string, rois: Pick<CameraRois, "eye" | "nostril"> & { floor?: RoiBox | null; flank?: RoiBox | null; colourFloor?: RoiBox | null }) =>
   call<{ ok: true; rois: CameraRois; verify: { verified: boolean | null; detail: string } }>("PUT", dpath(id, "rois"), rois, 30000);
 /** Live ROI temperatures. `parts: "nostril"` is the fast path for the
@@ -583,6 +605,13 @@ export async function readLive(id: string, stream: "thermal" | "colour", signal:
   } catch { /* stopped, or the connection dropped */ }
   return shown;
 }
+
+/** An ordinary camera: ask it over ONVIF where its streams are. */
+export const findIpStream = (id: string) =>
+  call<{ streams: { token: string; width: number; height: number; encoding: string | null; path: string }[]; rtspPath: string; rtspPathMain: string; rtspPort: number }>("POST", dpath(id, "find"), undefined, 30000);
+/** An ordinary camera's colour boxes, all optional: flank (breathing), floor, hay. */
+export const saveIpBoxes = (id: string, boxes: { flank?: RoiBox | null; colourFloor?: RoiBox | null; hay?: RoiBox | null }) =>
+  call<{ ok: true; rois: IpCamera["rois"] }>("PUT", dpath(id, "rois"), boxes, 30000);
 
 export async function fetchSnapshot(id: string, dev: 0 | 1): Promise<{ url?: string; error?: string; status?: number }> {
   if (!apiConfigured) return { error: "demo mode — no server" };
@@ -746,7 +775,7 @@ export interface SiteSettings {
   };
   security: { nightVisitors: boolean; quietFrom: number; quietTo: number };
   reports: { daily: boolean; hour: number };
-  send: Record<"temperature" | "breathing" | "colic" | "casting" | "activity" | "vices" | "sleep" | "elimination" | "lameness" | "water" | "monitoring" | "foaling" | "security" | "heat", boolean>;
+  send: Record<"temperature" | "breathing" | "colic" | "casting" | "activity" | "vices" | "sleep" | "elimination" | "lameness" | "water" | "monitoring" | "foaling" | "security" | "heat" | "staff", boolean>;
   sensitivity: number;
   privacy: { consentAt: string | null; consentBy: string | null };
   notify: { transport: "webhook" | "log-only"; minSeverity: string; disabled: boolean; notified: number; escalated: number; digests: number; failed: number;
@@ -754,6 +783,28 @@ export interface SiteSettings {
 }
 export interface ChainPerson { role: string; name: string; phone: string; channel: "call" | "sms" | "whatsapp" }
 export const getSettings = () => call<SiteSettings>("GET", "/api/settings");
+
+// ---- alert rules staff set themselves (server/staff-rules.mjs) ------------------ //
+export interface RuleHours { from: number; to: number }
+export interface RuleDraft {
+  horse: string; measure: string; op: "more" | "less"; value: number; windowMin: number;
+  hours: RuleHours | null; level: "watch" | "urgent"; name?: string; note?: string; enabled?: boolean;
+}
+export interface StaffRule extends RuleDraft {
+  id: string; name: string; note: string; enabled: boolean; createdBy: string; createdAt: string;
+  horseName: string; text: string; firingNow: string[];
+}
+export interface RuleMeasure { key: string; label: string; unit: string; kind: "count" | "budget" | "reading"; max: number }
+export interface RuleTest {
+  text: string; name: string;
+  horses: { horse: string; now: { judged: boolean; fires: boolean; value: number | null; why?: string };
+    week: { checks: number; judged: number; fired: number; days: number; last: { at: string; value: number } | null } }[];
+}
+export const listRules = () => call<{ rules: StaffRule[]; measures: RuleMeasure[] }>("GET", "/api/rules");
+export const testRule = (r: RuleDraft) => call<RuleTest>("POST", "/api/rules/test", r);
+export const createRule = (r: RuleDraft) => call<StaffRule>("POST", "/api/rules", r);
+export const patchRule = (id: string, r: Partial<RuleDraft>) => call<StaffRule>("PATCH", `/api/rules/${encodeURIComponent(id)}`, r);
+export const deleteRule = (id: string) => call<{ ok: true }>("DELETE", `/api/rules/${encodeURIComponent(id)}`);
 
 // ---- nightly reports: one PDF per horse each morning (server/daily-reports.mjs) -- //
 export interface DailyReports { reports: { day: string; files: { name: string; bytes: number }[] }[];

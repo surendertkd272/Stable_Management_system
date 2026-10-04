@@ -58,7 +58,7 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // an earlier session (its report's `summary`), for a page comparing the horse
 // across the two sessions.
 export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
-  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", review = [], marks = [], lastLive = null, autoVisits = true, boxes = null, trough = null, baseline = null, now = Date.now() }) {
+  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", review = [], marks = [], lastLive = null, autoVisits = true, boxes = null, trough = null, baseline = null, thermal = null, now = Date.now() }) {
   tz = safeTimeZone(tz);
   from = Math.floor(from / 60000) * 60000;                        // minutes on the clock: 23:24 reads 23:24, not 23:23
   const minutes = Math.max(1, Math.round((to - from) / 60000));
@@ -522,7 +522,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const lead = `${name} was monitored for ${dur}${pausedMin ? ` (the session was paused ${pauseText}; that time is not counted)` : ""}, with data in ${Math.round((anyMin.size / liveMin) * 100)}% of the session. ${tempLead} ${actShort} ${viceShort}`.trim();
 
   const findings = [
-    ["thermo", eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : lastLive ? `Body temperature ${f1(lastLive.median)} °C` : fromRec ? "Eye temperature: live monitoring only" : "Temperature not captured",
+    ["thermo", eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : lastLive ? `Body temperature ${f1(lastLive.median)} °C` : fromRec ? "Eye temperature: live monitoring only" : thermal === false ? "Temperature: not on this camera" : "Temperature not captured",
       eye.length ? `Eye-surface temperature ${f1(eyeMed)} °C median (range ${f1(eyeLo)}–${f1(eyeHi)} °C) across ${plural(eye.length, "reading")}, eye in view for ${eyeMinutes} of ${anyRec ? `${[...anyMin].filter(checkedLive).length} live` : minutes} minutes.`
         : lastLive ? `Measured during live monitoring at ${lastLive.where} (median of ${plural(lastLive.n, "reading")}).`
         : fromRec ? "Taken during live monitoring; not part of this review." : "The eye was not in view long enough to read."],
@@ -594,7 +594,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const pointsAll = [
     !eye.length && lastLive
       ? [1, "Body temperature", S.last, `${f1(lastLive.median)} °C`, `Last live check${lastLive.date ? `, ${lastLive.date}` : ""}: median of ${plural(lastLive.n, "reading")} at ${lastLive.where}. This ${overnight ? "overnight " : ""}session was reviewed from video; temperature is read during live monitoring.`]
-      : [1, "Body temperature", eye.length ? S.ok : fromRec ? S.live : S.no, eye.length ? `${f1(eyeMed)} °C` : fromRec ? "Live check" : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature is followed as a trend for each horse.${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : "Needs the eye in view."],
+      : [1, "Body temperature", eye.length ? S.ok : fromRec ? S.live : S.no, eye.length ? `${f1(eyeMed)} °C` : fromRec ? "Live check" : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature is followed as a trend for each horse.${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : thermal === false ? "This stall's camera has no thermal sensor." : "Needs the eye in view."],
     [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : respNote],
     [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
     [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${liveMin} minutes; ${plural(bands.high, "minute")} of high activity.` : "No movement data in this session."],
@@ -643,7 +643,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
     minutes >= 360
       ? `<b>Continue monitoring over several nights</b> to establish ${esc(name)}'s personal baseline; changes in temperature, breathing and activity are then flagged automatically.`
       : `<b>Run longer sessions, such as overnight,</b> to establish ${esc(name)}'s personal baseline; changes in temperature and activity are then flagged automatically.`,
-    !eye.length && `<b>Include a live monitoring period</b> to add eye temperature to ${esc(name)}'s record.`,
+    !eye.length && thermal !== false && `<b>Include a live monitoring period</b> to add eye temperature to ${esc(name)}'s record.`,
     !lyingMeasured && !lyingRev.length && actV.length && `<b>Continue overnight monitoring</b> so lying down can be reported: it is shown once ${esc(name)} has been seen both lying and standing in this stall.`,
   ].filter(Boolean).slice(0, 4);
 
@@ -723,7 +723,7 @@ ${grid}${bandsSvg}${tk}${bars}${line}
 
   function tempChart() {
     const H = 250;
-    if (!eye.length) return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="No eye temperature"><rect x="${L}" y="0" width="${W - L - R}" height="${H}" rx="8" class="away"/><text x="${W / 2}" y="${H / 2}" class="lbl" text-anchor="middle">${fromRec ? "Eye temperature is taken during live monitoring — not part of this review" : "No eye-temperature readings in this session"}</text>${ticks(H)}</svg>`;
+    if (!eye.length) return `<svg viewBox="0 -8 ${W} ${H + 34}" role="img" aria-label="No eye temperature"><rect x="${L}" y="0" width="${W - L - R}" height="${H}" rx="8" class="away"/><text x="${W / 2}" y="${H / 2}" class="lbl" text-anchor="middle">${fromRec ? "Eye temperature is taken during live monitoring — not part of this review" : thermal === false ? "No thermal camera on this stall" : "No eye-temperature readings in this session"}</text>${ticks(H)}</svg>`;
     const lo = Math.floor(eyeLo - 0.5), hi = Math.max(lo + 3, Math.ceil(eyeHi + 0.5));
     const y = (v) => H - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * H;
     const m = eyeMed, q1 = q(eyeV, 0.25), q3 = q(eyeV, 0.75);

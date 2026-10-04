@@ -58,9 +58,10 @@ export default function Portal() {
       if (!r.ok) return;
       const rows = r.data as unknown as (api.OwnerDevice | api.Device)[];
       setCams(rows
-        .filter((d) => d.kind === "thermal_camera")
+        .filter((d) => d.kind === "thermal_camera" || d.kind === "ip_camera")
         .map((d) => {
           if (typeof d.status === "string") return { name: d.name, stall: d.stall, state: d.status, calibrated: Boolean(d.calibrated) };
+          if (d.kind === "ip_camera") return { name: d.name, stall: d.stall, state: d.status.state, calibrated: true };
           const c = d as api.ThermalCamera;
           return { name: c.name, stall: c.stall, state: c.status.state, calibrated: Boolean(c.rois && !c.rois.stale) };
         }));

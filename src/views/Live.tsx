@@ -35,13 +35,13 @@ const ago = (iso?: string | null) => {
 
 export default function Live() {
   const { horses } = useStable();
-  const [cams, setCams] = useState<api.ThermalCamera[] | null>(null);
+  const [cams, setCams] = useState<(api.ThermalCamera | api.IpCamera)[] | null>(null);
   const [camId, setCamId] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
     api.listDevices().then((r) => {
       if (!r.ok) return setError(r.error);
-      const list = r.data.filter((d): d is api.ThermalCamera => d.kind === "thermal_camera");
+      const list = r.data.filter((d): d is api.ThermalCamera | api.IpCamera => d.kind === "thermal_camera" || d.kind === "ip_camera");
       setCams(list);
       // Open the camera that is working: a camera replaced by another one
       // stays listed (switched off) for its history.
@@ -129,7 +129,9 @@ function LivePicture({ camId, name, paused, view, onView, marks = [] }: {
   );
 }
 
-function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: string; name: string } | null }) {
+function CameraLive({ cam, horse }: { cam: api.ThermalCamera | api.IpCamera; horse: { id: string; name: string } | null }) {
+  // A camera the stable already owns has the colour picture only.
+  const thermal = cam.kind === "thermal_camera";
   const [paused, setPaused] = useState(false);
   // Zoom: one view for both pictures (they show about the same area), unless unlinked.
   const [linked, setLinked] = useState(true);
@@ -212,7 +214,7 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
           <div className="muted" style={{ fontSize: 12.5 }}>
             <CircleDot size={11} color={status?.state === "online" ? "var(--positive)" : "var(--warn)"} /> {status?.state ?? "?"} — {status?.detail}
             {" · "}{cam.record ? "recording video for the report" : "NOT recording (Hardware → edit camera → Record video)"}
-            {" · "}behaviour from the {cam.behaviourStream === "thermal" ? "thermal" : "colour"} picture
+            {" · "}behaviour from the {cam.kind === "thermal_camera" && cam.behaviourStream === "thermal" ? "thermal" : "colour"} picture
           </div>
           {status?.warnings?.map((w) => (
             <div key={w} style={{ fontSize: 12.5, color: "var(--warn)", marginTop: 2 }}>⚠ {w}</div>
@@ -232,8 +234,8 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
         )}
       </div>
 
-      <div className="grid cols-2" style={{ gap: 14, alignItems: "start" }}>
-        {(["Thermal", "Colour"] as const).map((name) => (
+      <div className={thermal ? "grid cols-2" : ""} style={{ gap: 14, alignItems: "start" }}>
+        {(thermal ? (["Thermal", "Colour"] as const) : (["Colour"] as const)).map((name) => (
           <LivePicture key={name} camId={cam.id} name={name} paused={paused}
             view={views[name]} onView={name === "Thermal" ? onThermal : onColour} marks={name === "Thermal" ? marks : []} />
         ))}
@@ -257,7 +259,8 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
         {!horse ? <p className="muted">Give a horse this camera&apos;s stall ({cam.stall}) on the Horses page to see its readings here.</p> : (
           <div className="hw-facts">
             <div><span><Thermometer size={13} /> Eye temperature</span><b>
-              {eyeWhy ? `not measured now — ${eyeWhy.detail}`
+              {!thermal ? "not on this camera — it has no thermal sensor"
+                : eyeWhy ? `not measured now — ${eyeWhy.detail}`
                 : v.body_temp_c ? `${v.body_temp_c.value.toFixed(1)} °C · ${ago(v.body_temp_c.ts)}${v.body_temp_c.calibrated === false ? " · not aimed" : ""}`
                 : "not read yet — the head has not been in the thermal view"}
               {eyeWhy && (
@@ -266,7 +269,7 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera; horse: { id: strin
                 </span>
               )}
             </b></div>
-            <div><span><Wind size={13} /> Breathing</span><b>{rr ? `${Math.round(rr.value)} /min · ${ago(rr.ts)}${rr === rLive ? " · last 35 s" : b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : "no rate yet — needs 30 s with the head still"}
+            <div><span><Wind size={13} /> Breathing</span><b>{rr ? `${Math.round(rr.value)} /min · ${ago(rr.ts)}${rr === rLive ? " · last 35 s" : b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : thermal ? "no rate yet — needs 30 s with the head still" : "no rate yet — from the flank, when he stands still side-on (draw a flank box)"}
               {v.breathing_check && v.breathing_check.value === 0 && v.breathing_check.detail && (!rr || v.breathing_check.ts > rr.ts) && (
                 <span className="muted" style={{ display: "block", fontWeight: 400, fontSize: 12 }}>last minute: no rate — {v.breathing_check.detail} ({ago(v.breathing_check.ts)})</span>
               )}</b></div>

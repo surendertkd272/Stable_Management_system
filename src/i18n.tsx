@@ -69,7 +69,7 @@ const HI: Record<string, string> = {
   "Stress level": "तनाव स्तर", "Yard map": "यार्ड नक्शा", "Alerts this week": "इस हफ़्ते के अलर्ट",
   "Foaling watch": "ब्याने पर नज़र", "Risk radar": "जोखिम रडार", "What we monitor here": "हम यहाँ क्या देखते हैं",
   // settings
-  Appearance: "दिखावट", Theme: "थीम", "Interface language": "भाषा", "Alert delivery": "अलर्ट भेजना", "Stable board": "अस्तबल बोर्ड", "Night security": "रात की सुरक्षा", "Nightly reports": "रात की रिपोर्ट",
+  Appearance: "दिखावट", Theme: "थीम", "Interface language": "भाषा", "Alert delivery": "अलर्ट भेजना", "Stable board": "अस्तबल बोर्ड", "Alert rules": "अलर्ट नियम", "Night security": "रात की सुरक्षा", "Nightly reports": "रात की रिपोर्ट",
   "Send these alerts": "ये अलर्ट भेजें", "Sensitivity & calibration": "संवेदनशीलता और कैलिब्रेशन",
 };
 

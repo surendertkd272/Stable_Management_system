@@ -30,10 +30,10 @@ export function envelope(body, user = null, password = "", created = new Date())
 }
 
 /** Elements by local name (namespace prefixes vary between cameras). */
-const tags = (raw, name) => [...raw.matchAll(new RegExp(`<(?:[\\w-]+:)?${name}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</(?:[\\w-]+:)?${name}>)`, "g"))]
+export const tags = (raw, name) => [...raw.matchAll(new RegExp(`<(?:[\\w-]+:)?${name}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</(?:[\\w-]+:)?${name}>)`, "g"))]
   .map((m) => ({ attrs: m[1] || "", body: m[2] ?? "" }));
-const attr = (attrs, k) => attrs.match(new RegExp(`\\b${k}="([^"]*)"`))?.[1] ?? null;
-const text = (raw, name) => tags(raw, name)[0]?.body?.replace(/<[^>]+>/g, "").trim() ?? null;
+export const attr = (attrs, k) => attrs.match(new RegExp(`\\b${k}="([^"]*)"`))?.[1] ?? null;
+export const text = (raw, name) => tags(raw, name)[0]?.body?.replace(/<[^>]+>/g, "").trim() ?? null;
 
 export class OnvifPtz {
   constructor({ host, username = "admin", password = "", port = 80, path = "/onvif/device_service", timeoutMs = 8000, post }) {
