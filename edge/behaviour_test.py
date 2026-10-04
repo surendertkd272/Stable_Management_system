@@ -309,5 +309,145 @@ check("the leg band moved, the body did not", (mm.moved_share((40, 105, 120, 135
       and (mm.moved_share((40, 40, 120, 100), 10) or 0) == 0.0,
       (mm.moved_share((40, 105, 120, 135), 10), mm.moved_share((40, 40, 120, 100), 10)))
 
+# ---- collapse, buckle (PostureTracker fast checks) ------------------------- #
+def tracker():
+    # a stall whose model is known: standing box 0.50 high (head up), lying 0.25
+    return PostureTracker({"model": {"split": 0.35, "stand_h": 0.47, "lie_h": 0.25, "lie_ar": 2.5, "ref": None, "labelled": True},
+                           "posture": "standing", "standTop": 0.50})
+
+
+def bx(h, w=0.45):
+    return {"x0": 0.2, "y0": 0.9 - h, "x1": 0.2 + w, "y1": 0.9, "edges": 0}
+
+
+def play(tr, seq, fast=None):
+    """seq: (t, h, motion) once a second through feed(); fast: extra samples through watch()."""
+    rows = sorted([(t, h, m, False) for t, h, m in seq] + [(t, h, m, True) for t, h, m in (fast or [])], key=lambda r: r[0])
+    for t, h, m, w in rows:
+        (tr.watch if w else tr.feed)(t, bx(h, 0.45 if h > 0.35 else 0.7), m)
+    return [e["kind"] for e in tr.drain()["events"]]
+
+
+def doze(t0, t1, h=0.44, m=0.01, jitter=0.0):
+    return [(float(t), h + (jitter * (1 if t % 2 else -1)), m) for t in range(t0, t1)]
+
+
+# a collapse: dozing, then down to lying height within a second, no circling first
+seq = doze(0, 120) + [(float(t), 0.25, 0.01 if t > 123 else 0.5) for t in range(121, 200)]
+fast = [(120.25, 0.40, 0.5), (120.5, 0.30, 0.6), (120.75, 0.26, 0.5)]
+ev = play(tracker(), seq, fast)
+check("collapse: dozing, then down within a second", "possible_collapse" in ev and "lie_down" in ev, ev)
+
+# the usual lying down: circling and sniffing first, the descent over 4 s
+seq = [(float(t), 0.48 if t % 3 else 0.44, 0.3) for t in range(0, 90)] + [(float(t), 0.40, 0.2) for t in range(90, 110)]
+seq += [(110.0, 0.42, 0.3), (111.0, 0.38, 0.3), (112.0, 0.33, 0.3), (113.0, 0.29, 0.3), (114.0, 0.26, 0.2)]
+seq += [(float(t), 0.25, 0.01) for t in range(115, 200)]
+ev = play(tracker(), seq)
+check("normal lie-down (preparation first) is not a collapse", "lie_down" in ev and "possible_collapse" not in ev, ev)
+
+# a quiet lie-down without preparation but a slow (3 s) descent is not a collapse either
+seq = doze(0, 120) + [(120.0, 0.40, 0.2), (121.0, 0.34, 0.2), (122.0, 0.30, 0.2), (123.0, 0.26, 0.1)] + [(float(t), 0.25, 0.01) for t in range(124, 200)]
+fast = [(120.25, 0.39, 0.2), (120.5, 0.38, 0.2), (120.75, 0.36, 0.2), (121.25, 0.33, 0.2), (121.5, 0.32, 0.2), (121.75, 0.31, 0.2),
+        (122.25, 0.29, 0.2), (122.5, 0.28, 0.2), (122.75, 0.27, 0.1)]
+ev = play(tracker(), seq, fast)
+check("slow quiet lie-down: not a collapse", "possible_collapse" not in ev, ev)
+
+# a buckle: dozing, a 20 % dip with a jolt, back up within 2 s
+seq = doze(0, 120) + doze(122, 200)
+# (the dip stays above lying height: the knees go, the body does not reach the ground)
+fast = [(120.25, 0.37, 0.3), (120.5, 0.365, 0.3), (120.75, 0.37, 0.2), (121.0, 0.41, 0.1), (121.5, 0.43, 0.05), (121.75, 0.44, 0.02)]
+ev = play(tracker(), seq, fast)
+check("buckle while dozing", ev == ["possible_buckle"], ev)
+
+# the same dip seen only once a second still counts
+seq = doze(0, 120) + [(120.0, 0.365, 0.3), (121.0, 0.42, 0.1)] + doze(122, 200)
+ev = play(tracker(), seq)
+check("buckle at one look a second", ev == ["possible_buckle"], ev)
+
+# lowering the head slowly while dozing, no jolt: nothing
+seq = doze(0, 120) + [(float(120 + i), 0.44 - 0.003 * i, 0.01) for i in range(30)] + doze(150, 220, h=0.35)
+ev = play(tracker(), seq)
+check("head lowered slowly while dozing: no buckle", ev == [], ev)
+
+# detector jitter of ±3 % while dozing: nothing
+ev = play(tracker(), doze(0, 300, jitter=0.013))
+check("jitter while dozing: nothing", ev == [], ev)
+
+# a dip with a jolt while eating (moving before): not a buckle
+seq = [(float(t), 0.40 + (0.03 if t % 2 else 0), 0.12) for t in range(0, 120)] + [(120.0, 0.32, 0.3), (121.0, 0.41, 0.1)] + doze(122, 160)
+ev = play(tracker(), seq)
+check("dip while eating, not dozing: not a buckle", "possible_buckle" not in ev, ev)
+
+# down to the ground and straight back up within 2 s: a collapse he got up from
+seq = doze(0, 120) + doze(123, 200)
+fast = [(120.25, 0.30, 0.5), (120.5, 0.26, 0.6), (120.75, 0.27, 0.6), (121.0, 0.33, 0.5), (121.5, 0.41, 0.3), (122.0, 0.43, 0.1), (122.5, 0.44, 0.02)]
+tr2 = tracker()
+rows = sorted([(t, h, m, False) for t, h, m in seq] + [(t, h, m, True) for t, h, m in fast], key=lambda r: r[0])
+for t, h, m, w in rows:
+    (tr2.watch if w else tr2.feed)(t, bx(h), m)
+evs = tr2.drain()["events"]
+check("down and straight back up: a collapse, recovered", [e["kind"] for e in evs] == ["possible_collapse"] and evs[0].get("recovered") is True, evs)
+
+# no whole horse in view (box touching the top of the picture): no head height, no fast checks
+tr = tracker()
+check("head height needs the whole horse", tr.head_rel({"x0": 0.1, "y0": 0.0, "x1": 0.6, "y1": 0.9, "edges": 1}) is None)
+check("and a view where height tells lying from standing (a model)", PostureTracker({"standTop": 0.5}).head_rel(bx(0.45)) is None)
+
+# 1 Oct, 05:19: the detector swapping between the horse's box and a taller one
+# reaching the bottom of the picture — a 35 % "dip" that is no buckle
+tr = tracker()
+for t in range(0, 120):
+    tr.feed(float(t), bx(0.44), 0.01)
+for i, t in enumerate([120.25, 120.5, 120.75, 121.0, 121.25]):
+    tall = {"x0": 0.12, "y0": 0.09, "x1": 0.45, "y1": 0.97, "edges": 0}
+    tr.watch(t, tall if i % 2 else {"x0": 0.2, "y0": 0.9 - 0.30, "x1": 0.65, "y1": 0.95, "edges": 0}, 0.3)
+for t in range(122, 160):
+    tr.feed(float(t), bx(0.44), 0.01)
+check("box swapping (bottom jumps): not a buckle", [e["kind"] for e in tr.drain()["events"]] == [])
+check("dozing after a quiet minute", (lambda t: (play(t, doze(0, 90)), t.dozing(89.0))[1])(tracker()))
+
+# ---- withdrawn: head low and still, and reactions to people --------------- #
+from behaviour import DemeanourWatch  # noqa: E402
+
+dw = DemeanourWatch()
+for t in range(0, 600):
+    dw.feed(float(t), True, 0.80, 0.01)
+out = dw.drain(600.0)
+check("10 min head low and still: counted", 590 <= out["lowStillS"] <= 600 and out["bouts"] == 1, out)
+dw = DemeanourWatch()
+for t in range(0, 600):
+    dw.feed(float(t), True, 0.80, 0.01, at_hay=True)
+check("head low at the hay is eating, not withdrawn", dw.drain(600.0)["lowStillS"] == 0)
+dw = DemeanourWatch()
+for t in range(0, 600):
+    dw.feed(float(t), True, 1.0, 0.01)
+check("standing still with the head up: not counted", dw.drain(600.0)["lowStillS"] == 0)
+dw = DemeanourWatch()
+for t in range(0, 600):
+    dw.feed(float(t), True, 0.80, 0.01 if (t // 15) % 2 else 0.2)
+check("15 s stretches only: too short to count", dw.drain(600.0)["lowStillS"] == 0)
+dw = DemeanourWatch()
+for t in range(0, 300):
+    dw.feed(float(t), True, 0.80, 0.01)
+first = dw.drain(300.0)
+for t in range(300, 310):
+    dw.feed(float(t), True, 0.80, 0.01)
+dw.feed(310.0, True, 1.0, 0.2)
+second = dw.drain(311.0)
+check("a bout across two windows keeps counting", first["lowStillS"] >= 290 and second["lowStillS"] >= 9, (first, second))
+
+
+def visit(react):
+    d = DemeanourWatch()
+    for t in range(0, 200):
+        people = 1 if 120 <= t < 140 else 0
+        head = 1.0 if (react and 122 <= t < 135) else 0.80
+        d.feed(float(t), True, head, 0.01, people=people)
+    return d.drain(200.0)["visits"]
+
+
+check("a person comes, the horse raises its head: reacted", [v["reacted"] for v in visit(True)] == [True], visit(True))
+check("a person comes, no movement at all: did not react", [v["reacted"] for v in visit(False)] == [False], visit(False))
+
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

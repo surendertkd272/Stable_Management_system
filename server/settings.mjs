@@ -53,9 +53,9 @@ const GROUPS = [
   ["checks", /isolation|vet check due/i], // before temperature: "Isolation: no temperature today"
   ["temperature", /temperature|fever/i],
   ["breathing", /respirat|breathing/i],
-  ["casting", /cast/i],
+  ["casting", /cast|went down suddenly|buckling/i],
   ["colic", /colic|lying down and getting up|rolling|flat on the side|manure/i],
-  ["activity", /activity unusual/i],
+  ["activity", /activity unusual|dull or withdrawn/i],
   ["vices", /vice|weaving|box walking|head tossing/i],
   ["sleep", /lying-down time|lying down at night|hardly lying/i],
   ["elimination", /urination/i],

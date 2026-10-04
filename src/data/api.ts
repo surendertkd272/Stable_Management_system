@@ -128,7 +128,10 @@ export interface HorseBehaviour {
     bouts24h: number; getUps24h: number; bouts: { start: string; end: string | null; minutes: number }[];
     longestBoutMin: number | null; nightsSeen: number; lowNights: number; rolls24h: number;
     lastRoll: string | null; lastCast: string | null;
+    collapses24h?: number; buckles24h?: number; lastCollapse?: string | null;
   } | null;
+  /** head carriage and reactions to people (dull / withdrawn) */
+  demeanour?: { headLowMin24h: number; headLowShare24h: number | null; visits7d: number; reacted7d: number } | null;
   stream?: string | null;
   urination: FloorEvents | null;
   excretion: FloorEvents | null;

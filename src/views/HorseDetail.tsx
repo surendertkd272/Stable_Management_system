@@ -662,7 +662,7 @@ function readAt(iso: string) {
 
 function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number | null }) {
   const { t } = useT();
-  const any = b.activity || b.inactive || b.resting || b.urination || b.excretion || b.weaving || b.boxWalking || b.headTossing || b.breathing;
+  const any = b.activity || b.inactive || b.resting || b.urination || b.excretion || b.weaving || b.boxWalking || b.headTossing || b.breathing || b.demeanour;
   if (!any) return null;
   const none = <span className="muted">not measured here</span>;
   const reg = b.breathing?.regularity;
@@ -709,6 +709,11 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
     "Box walking: fast walking with calling means confinement distress; if it happens when a neighbour leaves, separation anxiety." });
   if (b.breathing?.band === "fast") meaning.push({ id: "resp_rate", text:
     "Fast breathing at rest. Heat, pain, fever or excitement raise it; 40–50+ breaths/min that does not settle at rest points to heat stress." });
+  if (rs && (rs.buckles24h ?? 0) > 0) meaning.push({ id: "collapse_standing", text:
+    `Knees buckled ${rs.buckles24h === 1 ? "once" : `${rs.buckles24h} times`} while dozing in 24 h. A horse that sinks at the knees while dozing is not lying down to sleep; repeated, it injures the knees and fetlocks.` });
+  const dm = b.demeanour;
+  if (dm && dm.headLowShare24h != null && dm.headLowShare24h >= 0.35) meaning.push({ id: "withdrawn", text:
+    "Often standing still with its head low. Dozing looks like this too (eyes half closed, a hind leg rested, wakes when you come); a dull or withdrawn horse stays uninterested — it can be in pain or unwell." });
   if (b.excretion && b.excretion.count24h < 4) meaning.push({ id: "manure_frequency", text:
     `${b.excretion.count24h} ${b.excretion.count24h === 1 ? "manure event" : "manure events"} seen in 24 h; normal is 4–13 a day and fewer droppings is a colic sign. ` +
     "Droppings hidden under bedding can be missed — check the stall." });
@@ -723,7 +728,7 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
       <p className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 12 }}>
         {colour ? "Behaviour from the camera's colour video; breathing from the thermal view; floor events where a floor box is drawn."
           : "From the thermal camera's video and floor temperatures."}{" "}
-        Shown for context and watch notes only — never used for clinical alarms until validated on horses.
+        Shown for context and watch notes; the urgent ones (possibly cast, went down suddenly) ask a person to look at the horse — they are not a diagnosis.
       </p>
       <div className="hw-facts">
         <div>
@@ -749,6 +754,36 @@ function CameraBehaviour({ b, nostrilC }: { b: HorseBehaviour; nostrilC: number 
                   ? <span className="muted"> · own normal {b.activity.baseline.toFixed(2)}</span>
                   : <span className="muted"> · learning this horse&apos;s normal (3 days)</span>}
                 {b.activity.unusual && <span className="pill warn" style={{ marginLeft: 6, fontSize: 10.5 }}>unusually {b.activity.unusual}</span>}
+              </>
+            )}
+          </b>
+        </div>
+        <div>
+          <span>{t("Falls and buckling")}</span>
+          <b>
+            {!rs ? none : (
+              <>
+                {(rs.collapses24h ?? 0) === 0 && (rs.buckles24h ?? 0) === 0
+                  ? "none seen in 24 h"
+                  : <>
+                      {(rs.collapses24h ?? 0) > 0 && <span className="pill alert" style={{ marginRight: 6, fontSize: 10.5 }}>went down suddenly ×{rs.collapses24h}</span>}
+                      {(rs.buckles24h ?? 0) > 0 && <span className="pill warn" style={{ fontSize: 10.5 }}>knees buckled ×{rs.buckles24h}</span>}
+                      {rs.lastCollapse && <span className="muted"> · last fall {hm(rs.lastCollapse)}</span>}
+                    </>}
+                <br /><small className="muted">needs the whole horse in view; watched 4 times a second while it dozes</small>
+              </>
+            )}
+          </b>
+        </div>
+        <div>
+          <span>{t("Head carriage & interest")}</span>
+          <b>
+            {!b.demeanour ? none : (
+              <>
+                {b.demeanour.headLowShare24h != null
+                  ? <>head low and still {Math.round(b.demeanour.headLowShare24h * 100)}% of standing time <span className="muted">({b.demeanour.headLowMin24h} min in 24 h)</span></>
+                  : <span className="muted">head carriage: not enough seen today</span>}
+                {b.demeanour.visits7d > 0 && <><br /><span className="muted">reacted to {b.demeanour.reacted7d} of {b.demeanour.visits7d} people at the stall (7 days)</span></>}
               </>
             )}
           </b>

@@ -54,7 +54,7 @@ const HI: Record<string, string> = {
   "Respiratory rate · uncalibrated": "साँस की दर · कैलिब्रेट नहीं", "Daily rest · camera": "रोज़ का आराम · कैमरा",
   "Water intake": "पानी", "Time outside box": "बॉक्स के बाहर समय",
   // horse page — wearable (leg tag, halter hub, pelvis) and stall sensors (water, feeder, hay)
-  "Steps and movement": "कदम और चाल", "Steps today": "आज के कदम", Steps: "कदम", "Last 7 days": "पिछले 7 दिन",
+  "Steps and movement": "कदम और चाल", "Falls and buckling": "गिरना और घुटने मुड़ना", "Head carriage & interest": "सिर की स्थिति और रुचि", "Steps today": "आज के कदम", Steps: "कदम", "Last 7 days": "पिछले 7 दिन",
   today: "आज", "Latest trot": "आख़िरी दुलकी जाँच", "Recent trots": "हाल की दुलकी जाँचें",
   flagged: "चिह्नित", "not flagged": "चिह्नित नहीं", "own normal": "इसका सामान्य", "no leg singled out": "कोई एक पैर नहीं",
   "left front": "बायाँ अगला पैर", "right front": "दायाँ अगला पैर", "left hind": "बायाँ पिछला पैर", "right hind": "दायाँ पिछला पैर",

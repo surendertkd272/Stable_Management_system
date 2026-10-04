@@ -34,6 +34,9 @@ test("alert types map to the Settings groups; unknown types are sent (fail open)
   assert.equal(groupOf("Drinking less than usual"), "water");
   assert.equal(groupOf("Eating less than usual"), "eating");
   assert.equal(groupOf("Very hot, humid stall"), "heat");
+  assert.equal(groupOf("Went down suddenly — check the horse now"), "casting");
+  assert.equal(groupOf("Knees buckling while dozing"), "casting");
+  assert.equal(groupOf("Dull or withdrawn"), "activity");
   assert.equal(groupOf("Something new"), null);
 });
 

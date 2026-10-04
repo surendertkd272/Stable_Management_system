@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 process.env.CAMERA_SECRET_KEY ??= "test-only-key";   // sign() must not write a key file
-const { namedAlerts, colicSigns, foalingWindow, mareAndFoal, configureNamedAlerts, unusualScore, droppingsNow, stableAlerts, foalingPlan } = await import("./named-alerts.mjs");
+const { namedAlerts, colicSigns, foalingWindow, mareAndFoal, configureNamedAlerts, unusualScore, droppingsNow, stableAlerts, foalingPlan, withdrawnNow } = await import("./named-alerts.mjs");
 const { configureCareLog } = await import("./care-log.mjs");
 const { tick, configureNotify, resetNotify, messageOf, ackLink, ackValid } = await import("./notify.mjs");
 const { DEFAULTS, mergeSettings } = await import("./settings.mjs");
@@ -166,6 +166,56 @@ test("several horses with fever, and outbreak mode", () => {
   const ob = stableAlerts(roster, one, T).find((x) => x.type === "Outbreak mode");
   assert.match(ob.detail, /Strangles: day 10\..*lifted in 23 days/);
   configureNamedAlerts({ outbreak: null });
+});
+
+test("went down suddenly: urgent while still down, a watch note once it got up", () => {
+  const pe = (kind, ms, meta = {}) => r("posture_event", 1, ms, { kind, ...meta });
+  const down = [pe("possible_collapse", NOW - 10 * 60000, { fallS: 1, recovered: false }), pe("lie_down", NOW - 10 * 60000)];
+  const a = namedAlerts(bio, down, null, NOW);
+  assert.deepEqual(a.map((x) => [x.type, x.severity]), [["Went down suddenly — check the horse now", "alert"]]);
+  assert.match(a[0].detail, /in about 1 s/);
+  const upAgain = [...down, pe("get_up", NOW - 2 * 60000)];
+  assert.deepEqual(namedAlerts(bio, upAgain, null, NOW).map((x) => [x.type, x.severity]), [["Went down suddenly and got up", "warn"]]);
+  const recovered = [pe("possible_collapse", NOW - 10 * 60000, { fallS: 0.5, recovered: true })];
+  assert.equal(namedAlerts(bio, recovered, null, NOW)[0].type, "Went down suddenly and got up");
+  assert.deepEqual(namedAlerts(bio, [pe("possible_collapse", NOW - 3 * H, { recovered: false })], null, NOW), [], "older than 2 h: in events, not an alert");
+  assert.deepEqual(namedAlerts({ ...bio, foaledAt: iso(NOW - 5 * DAY) }, down, null, NOW), [], "mare and foal: two animals, paused");
+});
+
+test("knees buckling while dozing: counted over 24 h, with the lying it did (not) do", () => {
+  const bk = [3, 2.5, 1].map((h) => r("posture_event", 1, NOW - h * H, { kind: "possible_buckle", drop: 0.2 }));
+  const a = namedAlerts(bio, bk, null, NOW);
+  assert.deepEqual(a.map((x) => x.type), ["Knees buckling while dozing"]);
+  assert.match(a[0].detail, /^3 times in the last 24 h/);
+  const hardly = namedAlerts(bio, bk, { resting: { downTimes: [], lastRoll: null, lateralLast90Min: 0, lowNights: 2 } }, NOW);
+  assert.match(hardly[0].detail, /hardly lain down at night/);
+});
+
+test("dull or withdrawn: head low in the daytime against its own usual, and ignoring people", () => {
+  configureNamedAlerts({ tz: "UTC" });
+  const T = Date.parse("2026-10-04T14:00:00Z");
+  const hl = (ms, low, standing = 600) => r("head_low_still_s", low, ms, { standingS: standing });
+  const usual = [];
+  for (let d = 1; d <= 7; d++) for (let m = 0; m < 180; m += 10) usual.push(hl(T - d * DAY - m * 60000, 60));   // 10% usually
+  const today = [];
+  for (let m = 0; m < 180; m += 10) today.push(hl(T - m * 60000, 330));                                        // 55% now
+  const a = namedAlerts(bio, [...usual, ...today], null, T);
+  assert.deepEqual(a.map((x) => [x.type, x.severity]), [["Dull or withdrawn", "warn"]]);
+  assert.match(a[0].detail, /head low 55% of the time it stood in the last 3 h, against about 10% usually/);
+  assert.deepEqual(namedAlerts(bio, [...usual, ...usual.map((x) => ({ ...x, ts: iso(Date.parse(x.ts) + 7 * DAY) }))], null, T)
+    .filter((x) => x.type === "Dull or withdrawn"), [], "its usual amount: nothing");
+  const night = Date.parse("2026-10-04T02:00:00Z");
+  assert.equal(withdrawnNow([...usual, ...today], night), null, "at night dozing looks the same: not judged");
+  // the same posture is the colic 'quiet' sign — counted once
+  assert.deepEqual(colicSigns([...usual, ...today], null, T).map((x) => x.key), ["quiet"]);
+  // people: a horse that usually reacts ignored the last two visits
+  const pr = (ms, v) => r("people_response", v, ms, {});
+  const visits = [...[2, 3, 4, 5, 6, 8].map((d) => pr(T - d * DAY, 1)), pr(T - 3 * H, 0), pr(T - H, 0)];
+  const b2 = namedAlerts(bio, visits, null, T);
+  assert.match(b2[0].detail, /did not react to the last 2 people at the stall \(it usually does, 100% of visits\)/);
+  assert.deepEqual(namedAlerts(bio, [...[2, 3, 4, 5, 6, 8].map((d) => pr(T - d * DAY, 0)), pr(T - 3 * H, 0), pr(T - H, 0)], null, T), [],
+    "a horse that never reacts much is its usual self");
+  configureNamedAlerts({ tz: "UTC" });
 });
 
 test("how unusual: learning until there is a normal", () => {

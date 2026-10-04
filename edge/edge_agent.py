@@ -1067,6 +1067,9 @@ class MtrpcCameraWorker(CameraWorker):
     VISIBLE_SIZE = (352, 288)          # finer than thermal: flank movement is ~1 cm
     FILLS_VIEW = 0.5                   # horse box at least half the frame wide: laps cannot be seen
     DETECT_EVERY_S = 1.0
+    # While the horse dozes standing, extra looks between the once-a-second
+    # ones: a knee buckle is over in a second or two (behaviour.py). 0 or 1: off.
+    WATCH_HZ = float(os.environ.get("EQUICARE_COLLAPSE_WATCH_HZ", "4"))
 
     def __init__(self, dev, sink, window_s=60, target_hz=5.0):
         super().__init__(dev, sink, window_s, target_hz)
@@ -1084,8 +1087,9 @@ class MtrpcCameraWorker(CameraWorker):
         self.horse_focus, self.people_px, self._focus_t = None, [], None   # last detection (colour pixels)
         self.people_s = 0                  # seconds with people at the stall, this window
         self.budget, self.where = {}, {}   # this window: seconds per state; seconds per 12x8 cell (where he stood)
-        from behaviour import WeightShiftCounter  # noqa
+        from behaviour import WeightShiftCounter, DemeanourWatch  # noqa
         self.wshift = WeightShiftCounter()  # feet lifted and put down while standing still (behaviour.py)
+        self.demeanour = DemeanourWatch()   # head low and still; reactions to people (behaviour.py)
         self.cfloor, self.cfloor_events = None, []
         # Recognition looks only when something may have changed (see _identity_due).
         self._idst = {"last_t": None, "verdict": None, "seen_t": None, "absent": False, "people_t": None,
@@ -1229,10 +1233,48 @@ class MtrpcCameraWorker(CameraWorker):
         colour floor watcher (urination / manure on the bedding) and, while
         the horse stands still, the flank region for breathing."""
         st = {"last": None, "history": []}
+        main_t = 0.0
         while not self.stop_evt.is_set():
-            self.stop_evt.wait(self.DETECT_EVERY_S)
-            if not self._detect_step(st):
+            self.stop_evt.wait(1.0 / self.WATCH_HZ if self.watching() else self.DETECT_EVERY_S)
+            now = time.time()
+            if now - main_t >= self.DETECT_EVERY_S - 0.05:
+                main_t = now
+                if not self._detect_step(st):
+                    return
+            elif not self._watch_step(st):
                 return
+
+    def watching(self):
+        """Extra looks: the horse is dozing standing (still for a minute)."""
+        return self.WATCH_HZ > 1 and self.posture is not None and self.posture.dozing(time.time())
+
+    def _watch_step(self, st):
+        """A quick look between the once-a-second ones, only for the posture
+        tracker's collapse and buckle checks (nothing else is counted). Also
+        called by edge/replay.py while the horse dozes."""
+        from detector import pick_horse  # noqa
+        vw, vh = self.VISIBLE_SIZE
+        with self._lock:
+            snap = self.last_visible
+            colour = getattr(self, "last_colour", None)
+            motion = self.vanalyzer.recent_motion() if self.vanalyzer else 0.0
+        if not snap or snap[1] == st.get("watch_last") or snap[1] == st["last"]:
+            return True
+        st["watch_last"] = snap[1]
+        look = colour[0] if colour and abs(colour[1] - snap[1]) <= 1.5 else snap[0]
+        try:
+            boxes = (self.detector.detect_all(look, vw, vh)[0] if hasattr(self.detector, "detect_all")
+                     else self.detector.detect(look, vw, vh))
+        except Exception as e:                              # noqa: BLE001
+            print(f"[edge] {self.name}: detector failed ({e}) — lying not measured")
+            self.detector, self.detector_note = None, f"detector failed: {e}"
+            return False
+        best = pick_horse(boxes, list(st.get("scene", [])))     # a copy: only the main look learns the scene
+        if best:
+            best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
+            with self._lock:
+                self.posture.watch(snap[1], best, motion)
+        return True
 
     def _detect_step(self, st):
         """One look for the horse in the latest colour frame (see _detect_loop).
@@ -1309,6 +1351,12 @@ class MtrpcCameraWorker(CameraWorker):
             moving = self.vanalyzer.motion.moving_cells(self.cfloor.bounds, self.cfloor.COLS, self.cfloor.ROWS, 30) \
                 if (self.vanalyzer and self.cfloor) else set()
         state = self._budget_state(best, motion, rois.get("hay"))
+        # Head carriage and reactions to people (dull / withdrawn), once a second.
+        with self._lock:
+            # standing as the posture model says (a view where height tells it): else nothing is judged
+            standing = bool(best) and self.posture is not None and self.posture.state == "standing"
+            head = self.posture.head_rel(best) if (standing and best) else None
+            self.demeanour.feed(t, standing, head, motion, at_hay=(state == "eating"), people=len(persons))
         # Weight shifts: standing at rest (not eating — the head is low at the
         # hay), hooves in the picture; the legs are the box's lowest 30 %, the
         # body its middle (the head, higher up, moves on its own).
@@ -1788,6 +1836,19 @@ class MtrpcCameraWorker(CameraWorker):
             with self._lock:
                 budget, where = dict(self.budget), sorted(self.where.items())
                 wsh = self.wshift.drain()
+                dem = self.demeanour.drain(time.time())
+            # Head low and still, and reactions to people (dull / withdrawn):
+            # the server judges both against this horse's own usual.
+            if dem["standingS"] >= 60:
+                add("head_low_still_s", dem["lowStillS"], "s", source="visible_video", conf=0.4, windowMin=wmin,
+                    standingS=dem["standingS"], bouts=dem["bouts"], longestS=dem["longestS"], prototype=True,
+                    method="once a second: standing still (20 s+ bouts) with the top of the horse's box at or below 85 % "
+                           "of its height with the head up, not at the hay, nobody at the stall")
+            for v in dem["visits"]:
+                add("people_response", 1 if v["reacted"] else 0, "reacted", source="visible_video", conf=0.4,
+                    at=dt.datetime.fromtimestamp(v["t"], dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    moveGain=v["moveGain"], headGain=v["headGain"], prototype=True,
+                    method="a person arriving at the stall: did the horse move or raise its head within 20 s?")
             if wsh["standingS"] >= 60:
                 add("weight_shift_count", wsh["count"], "count", source="visible_video", conf=0.4, windowMin=wmin,
                     standingS=wsh["standingS"], prototype=True,
@@ -1801,17 +1862,20 @@ class MtrpcCameraWorker(CameraWorker):
                            "standing at rest, moving about", prototype=True)
         # Posture: lying minutes and events, once this stall's model has
         # seen both standing and lying.
-        if posture and posture["observed_s"] > 0 and self.posture.model:
+        if posture and posture["observed_s"] > 0 and (self.posture.model or posture["events"]):
             psrc = "thermal_video" if bstream == "thermal" else "visible_video"
             pm = {**proto, "stream": psrc, "method": "horse box shape over time (per-stall)" +
                   ("" if bstream == "thermal" else ", colour detector")}
-            add("lying_minutes", posture["lying_s"] / 60, "min", source=psrc, conf=0.5,
-                lateralMin=round(posture["lateral_s"] / 60, 2), observedMin=round(posture["observed_s"] / 60, 2),
-                windowMin=wmin, **pm)
+            if self.posture.model:
+                add("lying_minutes", posture["lying_s"] / 60, "min", source=psrc, conf=0.5,
+                    lateralMin=round(posture["lateral_s"] / 60, 2), observedMin=round(posture["observed_s"] / 60, 2),
+                    windowMin=wmin, **pm)
             for ev in posture["events"]:
+                # collapse / buckle carry how far and how fast (fallS, drop, backS, recovered)
+                extra = {k: v for k, v in ev.items() if k not in ("t", "kind")}
                 add("posture_event", 1, "event", source=psrc, conf=0.5 if ev["kind"] in ("lie_down", "get_up") else 0.35,
                     at=dt.datetime.fromtimestamp(ev["t"], dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-                    kind=ev["kind"], **pm)
+                    kind=ev["kind"], **extra, **pm)
         # Colour-picture floor events; one also seen by the thermal floor check
         # within 5 minutes is the same event, now confirmed by both.
         with self._lock:

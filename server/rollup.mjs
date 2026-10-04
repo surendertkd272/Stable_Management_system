@@ -804,14 +804,26 @@ export function behaviourForHorse(rd) {
       rolls24h: kind("possible_roll").length,
       lastRoll: kind("possible_roll").at(-1)?.ts ?? null,
       lastCast: kind("possible_cast").at(-1)?.ts ?? null,
+      collapses24h: kind("possible_collapse").length,
+      buckles24h: kind("possible_buckle").length,
+      lastCollapse: kind("possible_collapse").at(-1)?.ts ?? null,
       downTimes: downs.map((r) => r.ts),
     };
   }
 
+  // Head carriage and reactions to people (dull / withdrawn), from the colour detector.
+  const hl = day(of("head_low_still_s")), pr = of("people_response").filter((r) => within(r, 7 * DAY_MS));
+  const hlStand = hl.reduce((a, r) => a + (Number(r.meta?.standingS) || 0), 0), hlLow = hl.reduce((a, r) => a + r.value, 0);
+  const demeanour = hl.length || pr.length ? {
+    headLowMin24h: Math.round(hlLow / 60),
+    headLowShare24h: hlStand >= 1800 ? Math.round((hlLow / hlStand) * 100) / 100 : null,
+    visits7d: pr.length, reacted7d: pr.filter((r) => r.value === 1).length,
+  } : null;
+
   const resp = of("respiratory_rate_bpm").at(-1);
   const stream = act.at(-1)?.source ?? null;
   return {
-    activity, inactive, resting, stream,
+    activity, inactive, resting, stream, demeanour,
     urination: floorEvents("urination_event"),
     excretion: floorEvents("excretion_event"),
     weaving: vice("weaving"),

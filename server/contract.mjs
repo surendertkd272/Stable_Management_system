@@ -25,7 +25,7 @@ export const METRICS = {
   // the "low lying-down time" alert uses) — a horse can stand still, dozing.
   inactive_minutes:     { point: 6,  label: "Inactive (still)",     unit: "min",   source: "thermal_video",  kind: "sample" },
   lying_minutes:        { point: 6,  label: "Lying (camera)",       unit: "min",   source: "visible_video",  kind: "sample" }, // meta.lateralMin: possibly flat on the side
-  posture_event:        { point: 6,  label: "Lies down / gets up",  unit: "event", source: "visible_video",  kind: "event" },  // meta.kind: lie_down|get_up|possible_roll|possible_cast
+  posture_event:        { point: 6,  label: "Lies down / gets up",  unit: "event", source: "visible_video",  kind: "event" },  // meta.kind: lie_down|get_up|possible_roll|possible_cast|possible_collapse (meta.fallS, recovered)|possible_buckle (meta.drop, backS)
   gait_asymmetry:       { point: 7,  label: "Lameness / gait",      unit: "0..1",  source: "imu_optical",    kind: "sample" },
   vice_event:           { point: 8,  label: "Stable vice",          unit: "event", source: "visible_video", kind: "event" }, // meta.kind: weaving|box_walking|head_tossing (video); crib_biting needs a model / microphone
   // Drinking: one water_visit (value 1) plus one water_ml per bout, both
@@ -94,6 +94,11 @@ export const METRICS = {
   // hind foot lifted and put down with the body still — the commonest early
   // sign of laminitis (OR 17.7) and of limb pain. From the colour picture.
   weight_shift_count:   { point: 7,  label: "Weight shifts (camera)", unit: "count", source: "visible_video", kind: "sample" },
+  // Dull / withdrawn: seconds standing still with the head no higher than the
+  // back (20 s+ bouts, not at the hay, nobody there; meta.standingS), and for
+  // each person arriving at the stall whether the horse reacted (1) or not (0).
+  head_low_still_s:     { point: 5,  label: "Head low and still (camera)", unit: "s", source: "visible_video", kind: "sample" },
+  people_response:      { point: 5,  label: "Reacts to people (camera)",   unit: "reacted", source: "visible_video", kind: "event" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },
 };

@@ -126,7 +126,48 @@ export function colicSigns(rd, b, now = Date.now()) {
   const usual4 = median(same4);
   if (last4.length >= 60 && same4.length >= 3 && usual4 >= 0.05 && mean(last4) <= usual4 * 0.5)
     signs.push({ key: "quiet", text: `unusually still: activity ${mean(last4).toFixed(2)} against ${usual4.toFixed(2)} at these hours` });
+  // dull and low-headed (the camera's head carriage) is the same sign: one count, not two
+  const wd = withdrawnNow(rd, now);
+  if (wd?.posture) {
+    const q = signs.find((s) => s.key === "quiet");
+    if (q) q.text += `, ${wd.posture}`;
+    else signs.push({ key: "quiet", text: wd.posture });
+  }
   return signs;
+}
+
+// ---- dull / withdrawn ------------------------------------------------------- //
+// Standing still with the head no higher than the back, in 20 s+ bouts (the
+// edge's head_low_still_s), against this horse's own usual for the same
+// hours; and whether it reacts when people come (people_response). Daytime
+// only: dozing looks the same and belongs to the night. Our rule: no study
+// gives a camera threshold. [E: Fureix 2012; A: dull, low-headed OR 5.7]
+export const WITHDRAWN_SHARE = 0.35;
+export function withdrawnNow(rd, now = Date.now()) {
+  const h = hourOf(now);
+  if (h < 7 || h >= 20) return null;
+  const low = rd.filter((r) => r.metric === "head_low_still_s");
+  const share = (a, b) => {
+    const rows = between(low, a, b);
+    const st = rows.reduce((x, r) => x + (Number(r.meta?.standingS) || 0), 0);
+    return st >= 1800 ? { share: rows.reduce((x, r) => x + r.value, 0) / st, standing: st } : null;
+  };
+  const cur = share(now - 3 * H, now);
+  const usual = median([1, 2, 3, 4, 5, 6, 7].map((k) => share(now - k * DAY - 3 * H, now - k * DAY)).filter(Boolean).map((x) => x.share));
+  const days = [1, 2, 3, 4, 5, 6, 7].map((k) => share(now - k * DAY - 3 * H, now - k * DAY)).filter(Boolean).length;
+  let posture = null;
+  if (cur && cur.standing >= 3600 && days >= 3 && cur.share >= WITHDRAWN_SHARE && cur.share >= 2 * (usual ?? 0))
+    posture = `standing still with its head low ${Math.round(cur.share * 100)}% of the time it stood in the last 3 h, against about ${Math.round((usual ?? 0) * 100)}% usually`;
+  // reactions to people: the last two visits in 6 h ignored, by a horse that usually reacts
+  const pr = rd.filter((r) => r.metric === "people_response" && Date.parse(r.ts) <= now);
+  const recent = pr.filter((r) => now - Date.parse(r.ts) <= 6 * H);
+  const before = pr.filter((r) => { const a = now - Date.parse(r.ts); return a > 6 * H && a <= 14 * DAY; });
+  const rate = before.length ? before.reduce((x, r) => x + r.value, 0) / before.length : null;
+  let people = null;
+  if (recent.length >= 2 && recent.slice(-2).every((r) => r.value === 0) && before.length >= 5 && rate >= 0.6)
+    people = `did not react to the last ${recent.slice(-2).length} people at the stall (it usually does, ${Math.round(rate * 100)}% of visits)`;
+  if (!posture && !people) return { posture: null, people: null, share: cur?.share ?? null, usual };
+  return { posture, people, share: cur?.share ?? null, usual };
 }
 
 /** Droppings now against this horse's normal: { sign, perDay, threshold } or null. */
@@ -226,6 +267,47 @@ export function namedAlerts(bio, rd, b, now = Date.now()) {
     if (!bio.foalStoodAt && after >= 2) push("Foal not standing yet", "alert", `${hrs} since the foal was born and it has not been recorded standing — most stand within an hour. Call the vet.`);
     if (!bio.foalNursedAt && after >= 3) push("Foal not nursing yet", "alert", `${hrs} since birth with no nursing recorded — most nurse within 2 hours, and colostrum in the first hours matters. Call the vet.`);
     if (!bio.placentaAt && after >= 3) push("Placenta not passed", "alert", `${hrs} since foaling and the placenta is not recorded as passed — retained placenta leads to other disease in about 4 mares in 10 (laminitis in 14%). Call the vet.`);
+  }
+  // collapse and knees buckling while dozing (posture events from the camera) [E]
+  if (!suppressed(bio, now)) {
+    const pev = rd.filter((r) => r.metric === "posture_event" && Date.parse(r.ts) <= now);
+    const ofKind = (k, ms) => pev.filter((r) => r.meta?.kind === k && now - Date.parse(r.ts) <= ms);
+    const col = ofKind("possible_collapse", 2 * H).at(-1);
+    if (col) {
+      const at = Date.parse(col.ts);
+      const up = col.meta?.recovered || pev.some((r) => r.meta?.kind === "get_up" && Date.parse(r.ts) > at);
+      const fall = col.meta?.fallS != null ? `in about ${col.meta.fallS} s` : "suddenly";
+      if (!up)
+        push("Went down suddenly — check the horse now", "alert",
+          `${bio.name} went from standing to the ground ${fall} at ${clock(at)}, with none of the circling or pawing that comes before ` +
+          "lying down — from the camera — and has not got up since. A fall, a faint, a seizure or colic, or a horse that simply dropped " +
+          "to lie down: look at the horse now, and call the vet if it cannot rise, struggles, sweats or is not alert.", col.ts);
+      else
+        push("Went down suddenly and got up", "warn",
+          `${bio.name} dropped to the ground ${fall} at ${clock(at)} without the usual circling first, and got up again — from the camera. ` +
+          "Look it over for injury (knees, fetlocks, head) and watch the clip. Falls while dozing mean the horse is not lying down to sleep.", col.ts);
+    }
+    const bk = ofKind("possible_buckle", DAY);
+    if (bk.length) {
+      const last = bk.at(-1);
+      const hardly = (b?.resting?.lowNights ?? 0) >= 1;
+      push("Knees buckling while dozing", "warn",
+        `${bk.length === 1 ? "Once" : `${bk.length} times`} in the last 24 h (${bk.slice(-4).map((r) => clock(Date.parse(r.ts))).join(", ")}) the camera saw ` +
+        `${bio.name} sink at the knees while dozing standing and catch itself${hardly ? ", and it has hardly lain down at night" : ""}. ` +
+        "This is the sign of a horse not lying down to sleep (deep sleep needs lying): over days it injures the knees and fetlocks. " +
+        "Check for pain (feet, back), stall size and bedding, a new place or company; scrapes on the front of the knees confirm it. Tell the vet.", last.ts);
+    }
+    // dull / withdrawn: daytime head carriage and reactions to people against its own usual
+    const wd = withdrawnNow(rd, now);
+    if (wd?.posture || wd?.people) {
+      const both = wd.posture && wd.people;
+      push("Dull or withdrawn", "warn",
+        `${bio.name}: ${[wd.posture, wd.people].filter(Boolean).join("; and ")} — from the camera. ` +
+        (both ? "Together these are what a dull or painful horse looks like. " : "") +
+        "Look at the horse: is it eating, are its droppings and breathing normal, does it look at you? A dull horse can be in pain " +
+        "(colic, feet) or unwell (check its body temperature); one that stays withdrawn for days needs the vet. A dozing horse wakes and " +
+        "takes an interest when you come — a dull one does not.");
+    }
   }
   // people in the quiet hours
   if (CFG.nightVisitors) {

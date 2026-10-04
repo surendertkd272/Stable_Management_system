@@ -218,7 +218,7 @@ class Feeder:
         self.clock, self.src, self.w = clock, source, worker
         self.head = next(self.src, None)
         self.done = self.head is None
-        self.last_detect = -1e18
+        self.last_detect = self.last_watch = -1e18
         self.st = {"last": None, "history": []}
 
     def is_set(self):
@@ -251,6 +251,11 @@ class Feeder:
                 if w.detector is not None and t - self.last_detect >= w.DETECT_EVERY_S:
                     self.last_detect = t
                     if not w._detect_step(self.st):
+                        w.detector = None
+                elif (w.detector is not None and w.WATCH_HZ > 1 and t - self.last_watch >= 1.0 / w.WATCH_HZ
+                      and w.posture is not None and w.posture.dozing(t)):
+                    self.last_watch = t                      # the quicker looks while he dozes, as live
+                    if not w._watch_step(self.st):
                         w.detector = None
             self.head = next(self.src, None)
         if self.head is None:
@@ -487,7 +492,7 @@ def main():
                 print(f"[replay]   posture model kept for this camera: {st}", flush=True)
         else:
             pt.learn()
-        posture_state = {"hist": pt.hist, "model": pt.model, "posture": None}
+        posture_state = {"hist": pt.hist, "model": pt.model, "posture": None, "standTop": pt.stand_top}
         print(f"[replay]   {len(hist)} horse boxes; " + (
             f"standing ~{pt.model['stand_h']:.2f}, lying ~{pt.model['lie_h']:.2f} of the frame height" if pt.model
             else "only one posture seen — lying is not measured"), flush=True)

@@ -319,6 +319,12 @@ def warm_blob_box(frame, w, h, mask=None, step=2, z=1.0):
 
 
 # --------------------------------------------------------------------------- #
+def _median(v):
+    s = sorted(v)
+    n = len(s)
+    return 0.0 if not n else (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2)
+
+
 class PostureTracker:
     """Standing vs lying from the horse's box over time, learned per stall.
 
@@ -337,7 +343,31 @@ class PostureTracker:
       possible roll        — lying, a burst of movement with the box's height
         swinging;
       possible cast        — lying 10+ min with 3+ bursts of struggling and no
-        getting up."""
+        getting up;
+      possible collapse    — down from standing to lying height within ~2 s,
+        with none of the circling, pawing or sniffing that comes before a
+        horse lies down (stillness for the 45 s before). A fall, a faint, a
+        seizure — or a horse that simply dropped: a person looks;
+      possible buckle      — dozing standing (still for a minute), the box's
+        top drops 15 %+ of the horse's standing height with a jolt and comes
+        back within 6 s: the knees buckled and it caught itself — the sign of
+        lying-down sleep deprivation (Fuchs 2017: up to 199 a day, mostly at
+        night, 87 % in REM while standing).
+    The fast checks (collapse, buckle) use every sample there is: feed() once
+    a second, and watch() in between while the horse dozes (the edge agent
+    looks 4 times a second then). Head height is the box's height as a share
+    of this horse's own standing height at that spot (head up), so it needs
+    the whole horse in view: hooves and the top of the head inside the
+    picture — and a view in which box height tells lying from standing at
+    all (a model learned, or labelled: 1 Oct's camera looks down from above
+    the door, where lying was 66–72 % of the head-up height and standing
+    81–109 % only once a person had marked a lying stretch).
+
+    The detector sometimes swaps between two boxes for one horse from one
+    look to the next (1 Oct, 05:19: the horse alone, and a box twice as tall
+    reaching the bottom of the picture). Hooves do not jump: a buckle must
+    keep the box's bottom and sides where they were, with only its top
+    dropping."""
 
     MIN_BOUT_S = 30.0
     # Lying: a box at least 40 % lower than standing at the same spot. 25 %
@@ -350,6 +380,17 @@ class PostureTracker:
     LEARN_EVERY = 120
     HISTORY = 20000
     LOST_LATERAL_S = 30.0
+    # fast checks (ours; no published thresholds)
+    STILL = 0.03            # activity share below which the horse is still
+    DOZE_S = 60.0           # still this long before a buckle can count
+    BUCKLE_DROP = 0.15      # top of the box drops this share of its height…
+    BUCKLE_FAST_S = 2.0     # …within this…
+    BUCKLE_BACK_S = 6.0     # …and comes back up within this
+    JOLT = 0.10             # with this much of the horse moving at the drop
+    FALL_S = 1.5            # standing to lying height this fast: a collapse (a horse lying down takes longer)
+    PREP_S = 45.0           # no circling / pawing / sniffing in this long before
+    PREP_MOTION = 0.15
+    FAST_KEEP_S = 150.0
 
     def __init__(self, state=None):
         st = state or {}
@@ -364,11 +405,15 @@ class PostureTracker:
         self.lost_since = None
         self.bursts = []
         self.last_roll = self.last_cast = -1e18
+        self.fast = []                                           # (t, head_rel, motion, y1, x0, x1) every sample
+        self.last_buckle = self.last_collapse = -1e18
+        self.stand_top = st.get("standTop")                      # his standing height, head up (normalised)
+        self.ref_cache = (self.model or {}).get("ref")
         self.drain()
 
     # -- persistence ------------------------------------------------------- #
     def to_state(self):
-        return {"hist": self.hist[-self.HISTORY:], "model": self.model, "posture": self.state}
+        return {"hist": self.hist[-self.HISTORY:], "model": self.model, "posture": self.state, "standTop": self.stand_top}
 
     def drain(self):
         """Per-window totals, then start a new window."""
@@ -438,12 +483,27 @@ class PostureTracker:
         ars = sorted(e[1] for e in lying)
         self.model = {"split": split, "stand_h": stand_h, "lie_h": lie_h, "lie_ar": ars[len(ars) // 2], "ref": ref, "labelled": True,
                       "agreement": round(1 - (sum(v >= split for v in lh) / len(lh) + sum(v < split for v in sh) / len(sh)) / 2, 3)}
+        self._learn_top(ref)
         return self.model
+
+    def _learn_top(self, ref):
+        """His standing height with the head up: the upper quartile of the
+        normalised heights that are not lying. Horses stand most of the day,
+        so this needs no lying model."""
+        split = (self.model or {}).get("split")
+        hs = sorted(self._norm(e[0], e[2] if len(e) >= 3 else None, ref) for e in self.hist[-5000:]
+                    if not ref or (len(e) >= 3 and e[2] is not None))
+        hs = [h for h in hs if split is None or h >= split]
+        if len(hs) >= 200:
+            self.stand_top = round(hs[int(0.75 * (len(hs) - 1))], 4)
 
     def learn(self):
         if self.model and self.model.get("labelled"):
+            self._learn_top(self.model.get("ref"))
             return                                            # a person-labelled model stands
         ref = self._ref()
+        self.ref_cache = ref
+        self._learn_top(ref)
         rows = [e for e in self.hist if not ref or (len(e) >= 3 and e[2] is not None)]
         hs = [self._norm(e[0], e[2] if len(e) >= 3 else None, ref) for e in rows]
         if len(hs) < 200:
@@ -496,6 +556,7 @@ class PostureTracker:
         self.recent.append((t, hgt, ar, motion, box["y1"]))
         self.recent = [r for r in self.recent if t - r[0] <= 12]
         self.acc["observed_s"] += dt
+        self._fast_sample(t, box, motion)
         if self.model is None:
             return
         ref = self.model.get("ref")
@@ -528,6 +589,10 @@ class PostureTracker:
                 self.lying_since = t
             return
         if now == self.state:
+            # A lying spell too short to count as lying down (2–30 s) that
+            # came on as a fall: down and straight back up.
+            if self.cand == "lying" and self.state == "standing" and t - self.cand_t >= 2:
+                self._collapse_check(self.cand_t, recovered=True)
             self.cand, self.cand_t = None, None
             return
         if self.cand != now:
@@ -535,6 +600,8 @@ class PostureTracker:
             return
         if t - self.cand_t >= self.MIN_BOUT_S:
             kind = "lie_down" if now == "lying" else "get_up"
+            if now == "lying":
+                self._collapse_check(self.cand_t, recovered=False)
             # The change began at cand_t: back-date the lying time to it.
             if now == "lying":
                 self.acc["lying_s"] += t - self.cand_t
@@ -544,6 +611,117 @@ class PostureTracker:
             self.state, self.cand = now, None
             self.lying_since = self.cand_t if now == "lying" else None
             self.bursts = []
+
+    # -- the fast checks: collapse and buckle ------------------------------ #
+    def head_rel(self, box):
+        """The box's height as a share of his standing height with the head
+        up, at that spot (1.0 head up, ~0.8 head at the withers, lying lower).
+        None unless the whole horse is in the picture."""
+        if (not box or self.stand_top is None or self.model is None
+                or box.get("edges", 0) > 1 or box["y0"] <= 0.01 or box["y1"] >= 0.99):
+            return None                                         # no model: height says nothing about posture here
+        ref = (self.model or {}).get("ref") if self.model else self.ref_cache
+        hn = self._norm(box["y1"] - box["y0"], box["y1"], ref)
+        return hn / self.stand_top if self.stand_top > 0 else None
+
+    def _lying_level(self):
+        """A head_rel at or below this is lying height (None without a model)."""
+        if not self.model or not self.stand_top:
+            return None
+        return self.model["split"] / self.stand_top
+
+    def watch(self, t, box, motion=0.0):
+        """An extra sample between the once-a-second ones, for the fast checks
+        only (the standing / lying model is fed by feed())."""
+        if box is not None and box.get("edges", 0) < 3 and box["y1"] > box["y0"]:
+            self._fast_sample(t, box, motion)
+
+    def dozing(self, t):
+        """Standing still for DOZE_S: when collapses and buckles happen."""
+        if self.state == "lying":
+            return False
+        quiet = [r for r in self.fast if t - self.DOZE_S - 3 <= r[0] <= t]
+        return (len(quiet) >= 0.5 * self.DOZE_S and quiet[0][0] <= t - self.DOZE_S + 5
+                and max(r[2] for r in quiet) < self.PREP_MOTION and _median([r[2] for r in quiet]) < self.STILL)
+
+    def _fast_sample(self, t, box, motion):
+        rel = self.head_rel(box)
+        if rel is None:
+            return
+        if self.fast and t <= self.fast[-1][0]:
+            return
+        self.fast.append((t, rel, motion, box["y1"], box["x0"], box["x1"]))
+        cut = t - self.FAST_KEEP_S
+        if self.fast[0][0] < cut:
+            self.fast = [r for r in self.fast if r[0] >= cut]
+        self._buckle_check(t)
+
+    def _buckle_check(self, t):
+        """Knees buckling while dozing: a fast dip of the top of the box with a
+        jolt, back up within BUCKLE_BACK_S. Judged when he is back up."""
+        if t - self.last_buckle < 20 or len(self.fast) < 10:
+            return
+        now = self.fast[-1]
+        recent = [r for r in self.fast if t - self.BUCKLE_BACK_S <= r[0] < t]
+        before = [r for r in self.fast if t - self.BUCKLE_BACK_S - self.DOZE_S <= r[0] < t - self.BUCKLE_BACK_S]
+        if not recent or len(before) < 0.4 * self.DOZE_S or before[0][0] > t - self.BUCKLE_BACK_S - self.DOZE_S + 10:
+            return
+        if max(r[2] for r in before) >= self.PREP_MOTION or _median([r[2] for r in before]) >= self.STILL:
+            return                                              # not dozing: moving about, eating
+        base = _median([r[1] for r in before[-30:]])
+        if now[1] < base * 0.93:
+            return                                              # not back up (yet)
+        dip = min(recent, key=lambda r: r[1])
+        if dip[1] > base * (1 - self.BUCKLE_DROP):
+            return
+        # the same box, only its top moving: bottom and sides where they were
+        # before, at the dip and now (a detector swapping boxes moves them all)
+        foot = _median([r[3] for r in before[-30:]])
+        left, right = _median([r[4] for r in before[-30:]]), _median([r[5] for r in before[-30:]])
+        wid = max(0.05, right - left)
+        if any(abs(r[3] - foot) > 0.03 or abs(r[4] - left) > 0.15 * wid or abs(r[5] - right) > 0.15 * wid for r in recent + [now]):
+            return
+        # fast: from up near his dozing height to the bottom of the dip within BUCKLE_FAST_S
+        lead = [r for r in self.fast if dip[0] - self.BUCKLE_FAST_S <= r[0] < dip[0]]
+        if not lead or max(r[1] for r in lead) < base * 0.95:
+            return
+        jolt = max((r[2] for r in self.fast if dip[0] - 1.5 <= r[0] <= dip[0] + 2.0), default=0.0)
+        if jolt < self.JOLT:
+            return
+        lying = self._lying_level()
+        self.last_buckle = t
+        deep = lying is not None and dip[1] <= lying
+        if deep:
+            self.last_collapse = dip[0]
+        self.acc["events"].append({"t": dip[0], "kind": "possible_collapse" if deep else "possible_buckle",
+                                   "drop": round(1 - dip[1] / base, 2), "backS": round(t - dip[0], 1),
+                                   **({"recovered": True, "fallS": round(dip[0] - lead[-1][0], 1)} if deep else {})})
+
+    def _collapse_check(self, t_down, recovered):
+        """At a lie-down (or a short lying spell): did he go down as a fall —
+        standing to lying height within FALL_S, with no preparation?"""
+        lying = self._lying_level()
+        if lying is None or t_down - self.last_collapse < 60:
+            return
+        around = [r for r in self.fast if t_down - self.PREP_S - 10 <= r[0] <= t_down + 3]
+        lows = [r for r in around if r[1] <= lying and r[0] >= t_down - 5]
+        if not lows:
+            return
+        low = lows[0]
+        ups = [r for r in around if r[0] < low[0] and r[1] >= max(lying + 0.15, 0.75)]
+        if not ups:
+            return
+        up = ups[-1]
+        if low[0] - up[0] > self.FALL_S:
+            return                                              # a gradual lie-down
+        prep = [r for r in self.fast if up[0] - self.PREP_S <= r[0] < up[0]]
+        if len(prep) < 0.4 * self.PREP_S or prep[0][0] > up[0] - self.PREP_S + 10:
+            return                                              # not watched long enough before to say
+        if max(r[2] for r in prep) >= self.PREP_MOTION or _median([r[2] for r in prep]) >= self.STILL:
+            return                                              # moved about first: the usual lying down
+        self.last_collapse = t_down
+        self.acc["events"].append({"t": up[0], "kind": "possible_collapse", "fallS": round(low[0] - up[0], 1),
+                                   "recovered": recovered})
 
     def _lying_checks(self, t, motion):
         if motion >= 0.4:
@@ -581,6 +759,108 @@ EYE_MIN_C, EYE_MAX_C = 33.0, 41.0      # a living eye; hotter is a lamp or the s
 EYE_HOT_C = 0.7                        # within this of the peak: part of the same hot spot
 EYE_RING_C = 1.0                       # the skin round an eye is at least this much cooler
 EYE_MAX_SHARE = 0.12                   # an eye covers little of the window around it
+
+
+class DemeanourWatch:
+    """Dull or withdrawn: standing still with the head low, and not reacting
+    when people come — fed once a second by the edge agent.
+
+    The withdrawn posture (Fureix 2012) is a fixed stare, the neck level with
+    the back, ears back, no head or ear movement, in bouts of 17–97 s; pain
+    in the box looks alike (Ask 2020: head low, away from the door, not
+    interested in people). A stall camera cannot see the eyes or the ears. It
+    can see the head carried no higher than the back (the top of the horse's
+    box at or below ~85 % of its height with the head up — or the head turned
+    away out of sight), stillness, and whether the horse reacts when someone
+    comes to the stall. Dozing looks the same from a distance, so the server
+    judges it against this horse's own usual, in the daytime, together with
+    its reactions to people.
+
+      lowStillS  seconds in bouts of 20 s+ standing, still, head low, not at
+                 the hay, nobody at the stall
+      visits     each person's arrival (after a minute with nobody): did the
+                 horse react within 20 s — move (activity +0.05 on the 20 s
+                 before) or raise its head (+6 % of its height)?"""
+
+    LOW = 0.85
+    STILL = 0.03
+    BOUT_S = 20.0
+    QUIET_BEFORE_S = 60.0
+    REACT_S = 20.0
+    MOVE_GAIN = 0.05
+    HEAD_GAIN = 0.06
+    MAX_DT = 3.0
+
+    def __init__(self):
+        self.ring = []                         # (t, head_rel or None, motion, people)
+        self.last_t = None
+        self.bout_t = None
+        self.bout_counted = False              # a bout already 20 s+ when the last window closed
+        self.people_gone_t = None
+        self.pending = []                      # arrivals waiting for their 20 s
+        self._reset()
+
+    def _reset(self):
+        self.standing_s = self.low_s = 0.0
+        self.bouts, self.longest = 0, 0.0
+        self.visits = []
+
+    def feed(self, t, standing, head_rel, motion, at_hay=False, people=0):
+        dt = 0.0 if self.last_t is None else t - self.last_t
+        dt = dt if 0 < dt <= self.MAX_DT else 0.0
+        self.last_t = t
+        seen = standing and head_rel is not None
+        if seen:
+            self.standing_s += dt
+        low = seen and head_rel <= self.LOW and motion < self.STILL and not at_hay and not people
+        if low:
+            if self.bout_t is None:
+                self.bout_t = t
+        else:
+            self._end_bout(t)
+        # people arriving: after a quiet minute, a person in the picture
+        if people:
+            if self.people_gone_t is not None and t - self.people_gone_t >= self.QUIET_BEFORE_S:
+                self.pending.append(t)
+            self.people_gone_t = None
+        elif self.people_gone_t is None:
+            self.people_gone_t = t
+        self.ring.append((t, head_rel if seen else None, motion, people))
+        self.ring = [r for r in self.ring if t - r[0] <= self.QUIET_BEFORE_S + self.REACT_S + 5]
+        for ta in [a for a in self.pending if t - a >= self.REACT_S]:
+            self.pending.remove(ta)
+            self._judge_visit(ta)
+
+    def _end_bout(self, t):
+        if self.bout_t is not None:
+            length = t - self.bout_t
+            if length >= self.BOUT_S or self.bout_counted:
+                self.low_s += length
+                self.bouts += 0 if self.bout_counted else 1
+                self.longest = max(self.longest, length)
+            self.bout_t, self.bout_counted = None, False
+
+    def _judge_visit(self, ta):
+        before = [r for r in self.ring if ta - self.REACT_S <= r[0] < ta and r[1] is not None]
+        after = [r for r in self.ring if ta <= r[0] <= ta + self.REACT_S and r[1] is not None]
+        if len(before) < 5 or len(after) < 5:
+            return                                             # the horse was not seen: no judgement
+        move = max(r[2] for r in after) - _median([r[2] for r in before])
+        head = max(r[1] for r in after) - _median([r[1] for r in before])
+        self.visits.append({"t": ta, "reacted": move >= self.MOVE_GAIN or head >= self.HEAD_GAIN,
+                            "moveGain": round(move, 3), "headGain": round(head, 3)})
+
+    def drain(self, t=None):
+        if t is not None and self.bout_t is not None and t - self.bout_t >= self.BOUT_S:
+            # a bout still going: count it so far, carry on from here
+            self.low_s += t - self.bout_t
+            self.bouts += 0 if self.bout_counted else 1
+            self.longest = max(self.longest, t - self.bout_t)
+            self.bout_t, self.bout_counted = t, True
+        out = {"standingS": round(self.standing_s, 1), "lowStillS": round(self.low_s, 1), "bouts": self.bouts,
+               "longestS": round(self.longest, 1), "visits": self.visits}
+        self._reset()
+        return out
 
 
 class WeightShiftCounter:

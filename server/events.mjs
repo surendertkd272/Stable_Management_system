@@ -22,6 +22,10 @@ export const EVENT_KINDS = {
     next: "Nothing to do — normal rest. Repeated lying down and getting up within minutes is different: check for colic." },
   get_up: { title: "Got up", verdict: "normal", pattern: "getting_up", label: "gets_up",
     next: "Nothing to do. Several attempts to rise, or rolling to get up, is worth a look at the legs and back." },
+  collapse: { title: "Went down suddenly", verdict: "vet", pattern: "collapse_standing",
+    next: "Watch the clip: did the horse fall — legs folding at once, no circling or pawing first — or lie down quietly? After a fall, check it for injury and alertness; call the vet if it cannot rise, or if it happens again." },
+  buckle: { title: "Knees buckled while dozing", verdict: "watch", pattern: "collapse_standing",
+    next: "Watch the clip: a sudden sink at the knees and a catch. Several in a night mean the horse is not lying down to sleep — check pain, stall size, bedding and company, look for scrapes on the knees, and tell the vet." },
   down_up: { title: "Lying down and getting up again and again", verdict: "vet", pattern: "down_up",
     next: "Look at the horse now: repeated lying down and getting up is the commonest colic sign. Call the vet if it continues, or with sweating, pawing or rolling." },
   weaving: { title: "Weaving", verdict: "watch", pattern: "weaving", label: "weaving",
@@ -74,7 +78,11 @@ export function buildEvents(horse, readings, { from, to, alerts = [], eyeBaselin
     if (m === "posture_event" && (k === "lie_down" || k === "get_up")) {
       push(k, r);
       if (k === "lie_down") lieDowns.push(Date.parse(r.ts));
-    } else if (m === "vice_event" && EVENT_KINDS[k]) push(k, r, { detail: r.meta?.windowMin ? `${r.meta.windowMin} min in the window` : null });
+    } else if (m === "posture_event" && k === "possible_collapse")
+      push("collapse", r, { verdict: r.meta?.recovered ? "watch" : "vet",
+        detail: `${r.meta?.fallS != null ? `standing to the ground in about ${r.meta.fallS} s` : "sudden"}, no circling first${r.meta?.recovered ? "; got up again" : ""}` });
+    else if (m === "posture_event" && k === "possible_buckle")
+      push("buckle", r, { detail: r.meta?.drop != null ? `sank ${Math.round(r.meta.drop * 100)}% of its height and caught itself` : null }); else if (m === "vice_event" && EVENT_KINDS[k]) push(k, r, { detail: r.meta?.windowMin ? `${r.meta.windowMin} min in the window` : null });
     else if ((m === "urination_event" || m === "excretion_event") && alone(r)) push(m.replace("_event", ""), r, { detail: r.meta?.tier ?? null });
     else if (m === "respiratory_rate_bpm" && r.value >= 20)
       push("fast_breathing", r, { stream: r.source === "visible_video" ? "visible" : "thermal", verdict: r.value >= 24 ? "vet" : "watch", detail: `${Math.round(r.value)} breaths a minute` });
