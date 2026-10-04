@@ -28,7 +28,10 @@ export interface Horse {
   uninstrumented?: string[];
   /** what the thermal camera measures directly; null until a reading arrives */
   vitals?: {
+    /** body temperature by the thermal camera, from the horse's own normal eye temperature (null while learning) */
     bodyTempC: number | null;
+    /** the eye's surface temperature itself */
+    eyeTempC?: number | null;
     respRateBpm: number | null;
     respConfidence: number | null;
     /** false = taken through un-aimed ROIs; shown, never alerted on */
@@ -44,6 +47,49 @@ export interface Horse {
   foalingDue?: string | null;
   foaledAt?: string | null;
   mareAndFoal?: boolean;
+  /** covering date and the mare's own past pregnancies (days): the due date and watch from them */
+  coveredAt?: string | null;
+  pastGestationDays?: number[];
+  /** the foaling plan as the server works it out */
+  foaling?: { due: string; watchFrom: string; expected: number; fromOwnHistory: boolean; day: number; watching: boolean } | null;
+  /** the first hours after foaling, entered by staff */
+  foaledTimeKnown?: boolean;
+  foalStoodAt?: string | null;
+  foalNursedAt?: string | null;
+  placentaAt?: string | null;
+  /** body temperature in full (server/core-temp.mjs) */
+  bodyTemp?: BodyTemperature;
+  /** horse, mule or donkey: their normal temperatures and heat signs differ */
+  species?: "horse" | "mule" | "donkey";
+  /** arrival at the stable: 3 weeks in isolation */
+  arrivedAt?: string | null;
+  /** standing colic risks */
+  cribBiter?: boolean;
+  previousColic?: boolean;
+  dentalIssue?: boolean;
+  /** the 6-monthly check from age 15 */
+  seniorCheckAt?: string | null;
+}
+
+export interface CameraBodyTemp {
+  value: number | null;
+  /** °C above (−: below) this horse's own normal at this time of day */
+  rise?: number;
+  /** ± its everyday range */
+  within?: number;
+  at?: string;
+  readings?: number;
+  learning: boolean;
+  settled?: boolean;
+  days?: number;
+  needed?: number;
+  eye?: number | null;
+  source?: "camera";
+}
+export interface BodyTemperature {
+  current: (CameraBodyTemp | { value: number; at: string; source: "sensor" }) | null;
+  camera: CameraBodyTemp | null;
+  measured: { value: number; at: string; source: "sensor" } | null;
 }
 
 const img = (seed: string) =>
@@ -186,6 +232,8 @@ export interface Alert {
   time: string;
   detail: string;
   acknowledged: boolean;
+  /** staff's mark: was the alert right? (counted per kind on the Accuracy page) */
+  verdict?: "right" | "wrong" | "unsure";
 }
 
 export const alerts: Alert[] = [

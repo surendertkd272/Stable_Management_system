@@ -13,6 +13,7 @@
 
 import { isDiagnostic } from "./contract.mjs";
 import { peopleMinutes, floorAlone, eyeSetAside } from "./reading-rules.mjs";
+import { cameraBodyTemp, isFever, normalFor, RISING_C } from "./core-temp.mjs";
 import { LIMB_NAME, leftOf, mealsOf, offCamera, stepsTotal } from "./rollup.mjs";
 
 const LEVELS = [["none", "No activity", 0, 0.05], ["low", "Low", 0.05, 0.2], ["moderate", "Moderate", 0.2, 0.6], ["high", "High", 0.6, 1.01]];
@@ -83,6 +84,13 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const people = peopleMinutes(rd);
   const eye = of("body_temp_c").filter((r) => !eyeSetAside(r, people) && !inAway(Date.parse(r.ts)));
   const eyeV = eye.map((r) => r.value);
+  // Body temperature from the cameras (server/core-temp.mjs): the horse's
+  // normal body temperature plus how far its eye was from its own normal for
+  // that time of day — at the session's last eye reading.
+  const lastEyeMs = eye.length ? Math.max(...eye.map((r) => Date.parse(r.ts))) : null;
+  const bodyT = lastEyeMs === null ? null : cameraBodyTemp(horse, readings, lastEyeMs);
+  const bodyV = bodyT?.value ?? null;
+  const bodyState = bodyV === null ? null : isFever(bodyT) ? "high" : bodyT.rise >= Math.max(RISING_C, bodyT.within) ? "raised" : "normal";
   // Minutes reviewed afterwards from recorded footage (edge/replay.py) hold no
   // temperatures: the eye there was not "out of view", it was not measurable.
   // A session may be all review (a night recorded at the stable) or a review
@@ -505,13 +513,16 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   };
 
   // ---- words, from the numbers only ------------------------------------------ //
-  const tempShort = eye.length >= 3
+  const bodyLead = bodyV !== null
+    ? `Body temperature was about ${f1(bodyV)} °C at ${clock(lastEyeMs)} — ${bodyState === "normal" ? `within ${name}'s usual range` : bodyState === "raised" ? `above ${name}'s usual range` : `a possible fever, well above ${name}'s usual range`}. `
+    : bodyT?.learning ? `Body temperature will be given once ${name}'s own normal eye temperature is learned (${bodyT.days} of 3 days so far). ` : "";
+  const tempShort = bodyLead + (eye.length >= 3
     ? (trend !== null && trend >= 0.5 ? `Eye-surface temperature rose by ${f1(trend)} °C during the session (median ${f1(eyeMed)} °C) — worth rechecking.`
       : `Eye-surface temperature was stable at around ${f1(eyeMed)} °C.`)
     : eye.length ? `Only ${plural(eye.length, "eye-temperature reading")} ${eye.length === 1 ? "was" : "were"} taken — the eye was mostly out of view.`
       : fromRec && lastLive ? `${REVIEW.split(". Eye temperature")[0]}. Temperature is measured during live monitoring${lastLive.date ? ` (${lastLive.date})` : ""}: ${lastLive.where} read ${f1(lastLive.median)} °C.`
       : fromRec ? REVIEW
-        : "Eye temperature was not captured — the eye was not in view.";
+        : "Eye temperature was not captured — the eye was not in view.");
   const tempLead = eye.length && anyRec
     ? `${tempShort} Eye temperature was taken during the live check (${span(checkedLive)}); the ${overnight ? "overnight " : ""}part (${span(reviewed)}) was recorded at the stable and reviewed minute by minute afterwards.`
     : tempShort;
@@ -522,8 +533,9 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const lead = `${name} was monitored for ${dur}${pausedMin ? ` (the session was paused ${pauseText}; that time is not counted)` : ""}, with data in ${Math.round((anyMin.size / liveMin) * 100)}% of the session. ${tempLead} ${actShort} ${viceShort}`.trim();
 
   const findings = [
-    ["thermo", eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : lastLive ? `Body temperature ${f1(lastLive.median)} °C` : fromRec ? "Eye temperature: live monitoring only" : thermal === false ? "Temperature: not on this camera" : "Temperature not captured",
-      eye.length ? `Eye-surface temperature ${f1(eyeMed)} °C median (range ${f1(eyeLo)}–${f1(eyeHi)} °C) across ${plural(eye.length, "reading")}, eye in view for ${eyeMinutes} of ${anyRec ? `${[...anyMin].filter(checkedLive).length} live` : minutes} minutes.`
+    ["thermo", bodyV !== null ? `Body temperature ${f1(bodyV)} °C${bodyState === "normal" ? "" : bodyState === "raised" ? " · raised" : " · high"}`
+      : eye.length >= 3 ? (trend !== null && trend >= 0.5 ? "Temperature rising" : "Temperature stable") : lastLive ? `Body temperature ${f1(lastLive.median)} °C` : fromRec ? "Eye temperature: live monitoring only" : thermal === false ? "Temperature: not on this camera" : "Temperature not captured",
+      eye.length ? `${bodyV !== null ? `${name}'s usual range at that hour is ±${bodyT.within} °C. ` : ""}Eye-surface temperature ${f1(eyeMed)} °C median (range ${f1(eyeLo)}–${f1(eyeHi)} °C) across ${plural(eye.length, "reading")}, eye in view for ${eyeMinutes} of ${anyRec ? `${[...anyMin].filter(checkedLive).length} live` : minutes} minutes.`
         : lastLive ? `Measured during live monitoring at ${lastLive.where} (median of ${plural(lastLive.n, "reading")}).`
         : fromRec ? "Taken during live monitoring; not part of this review." : "The eye was not in view long enough to read."],
     ["move", actV.length ? `${dominant === "high" ? "Active" : dominant === "none" ? "Mostly resting" : "Settled"} behaviour` : "Activity not captured",
@@ -594,7 +606,7 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const pointsAll = [
     !eye.length && lastLive
       ? [1, "Body temperature", S.last, `${f1(lastLive.median)} °C`, `Last live check${lastLive.date ? `, ${lastLive.date}` : ""}: median of ${plural(lastLive.n, "reading")} at ${lastLive.where}. This ${overnight ? "overnight " : ""}session was reviewed from video; temperature is read during live monitoring.`]
-      : [1, "Body temperature", eye.length ? S.ok : fromRec ? S.live : S.no, eye.length ? `${f1(eyeMed)} °C` : fromRec ? "Live check" : "—", eye.length ? `Eye surface, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C). Eye-surface temperature is followed as a trend for each horse.${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : thermal === false ? "This stall's camera has no thermal sensor." : "Needs the eye in view."],
+      : [1, "Body temperature", eye.length ? S.ok : fromRec ? S.live : S.no, bodyV !== null ? `${f1(bodyV)} °C` : eye.length ? `Eye ${f1(eyeMed)} °C` : fromRec ? "Live check" : "—", eye.length ? `${bodyV !== null ? `At ${clock(lastEyeMs)}, from the eye against ${name}'s own normal for that time of day (±${bodyT.within} °C). ` : bodyT?.learning ? `Learning ${name}'s normal (${bodyT.days} of 3 days). ` : ""}Eye surface ${f1(eyeMed)} °C median, ${plural(eye.length, "reading")} (${f1(eyeLo)}–${f1(eyeHi)} °C).${anyRec ? " Taken during the live check." : ""}` : fromRec ? "Taken during live monitoring; not part of this review." : thermal === false ? "This stall's camera has no thermal sensor." : "Needs the eye in view."],
     [2, "Respiration pattern", resp.length ? S.ok : S.no, resp.length ? (regs.length ? (med(regs) >= 0.75 ? "Regular" : "Irregular") : "Captured") : "—", resp.length ? `Rhythm from ${plural(resp.length, "reading")}.` : respNote],
     [3, "Respiratory rate", resp.length ? S.ok : S.no, resp.length ? `${f1(med(respV))} /min` : "—", resp.length ? `Range ${f1(Math.min(...respV))}–${f1(Math.max(...respV))} breaths per minute.` : "Same requirement as respiration pattern."],
     [4, "Activity", actV.length ? S.ok : S.no, actV.length ? f2(med(actV)) : "—", actV.length ? `Median activity index (0–1), measured in ${actV.length} of ${liveMin} minutes; ${plural(bands.high, "minute")} of high activity.` : "No movement data in this session."],
@@ -980,7 +992,7 @@ tr.dim td{color:var(--muted)}
 <div class="meta"><span><b>Date</b> ${day}</span><span><b>Session</b> ${clock(from)}–${clock(rangeEnd)} ${esc(tzName)} (${dur})</span><span><b>Ref.</b> ${ref}</span>${client ? `<span><b>Prepared for</b> ${esc(client)}</span>` : ""}</div>
 </header>
 <div class="kpis">
-<div class="kpi"><b>${eye.length ? `${f1(eyeMed)} °C` : lastLive ? `${f1(lastLive.median)} °C` : "—"}</b><span>${eye.length ? "Eye temperature" : lastLive ? "Temperature" : "Eye temperature"}</span><small>${eye.length ? `median · ${plural(eye.length, "reading")}` : lastLive ? `measured${lastLive.date ? `, ${lastLive.date}` : ""}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
+<div class="kpi"><b>${bodyV !== null ? `${f1(bodyV)} °C` : eye.length ? `${f1(eyeMed)} °C` : lastLive ? `${f1(lastLive.median)} °C` : "—"}</b><span>${bodyV !== null ? "Body temperature" : eye.length ? "Eye temperature" : lastLive ? "Temperature" : "Eye temperature"}</span><small>${bodyV !== null ? `eye ${f1(eyeMed)} °C · ${plural(eye.length, "reading")}` : eye.length ? `median · ${plural(eye.length, "reading")}` : lastLive ? `measured${lastLive.date ? `, ${lastLive.date}` : ""}` : fromRec ? "live monitoring only" : "eye not in view"}</small></div>
 <div class="kpi"><b>${f2(med(actV))}</b><span>Activity index</span><small>median · scale 0–1</small></div>
 <div class="kpi"><b>${lyingMeasured ? `${lyingMin} min` : lyingRev.length ? hmText(lyingRevMin * 60) : `${stillMin} min`}</b><span>${lyingMeasured || lyingRev.length ? "Lying down" : "Standing rest"}</span><small>${!lyingMeasured && lyingRev.length ? "seen on the recording" : `of ${dur}`}</small></div>
 <div class="kpi"><b>${Math.round((anyMin.size / liveMin) * 100)}%</b><span>Monitoring coverage</span><small>${anyMin.size} of ${liveMin} minutes</small></div>
@@ -1037,7 +1049,7 @@ ${pg()}</div>
 <div class="stats"><div class="stat"><b>${bands.high} min</b><span>high activity</span></div><div class="stat"><b>${bands.moderate} min</b><span>moderate activity</span></div><div class="stat"><b>${bands.low + bands.none} min</b><span>low or no activity</span></div><div class="stat"><b>${lyingMeasured ? `${lyingMin} min` : `${stillMin} min`}</b><span>${lyingMeasured ? "lying down" : lyingKnown ? "still, standing or lying" : "standing still"}</span></div></div>
 <p class="sub" style="margin-top:14px">${esc((spells.length ? `Rest came in ${plural(spells.length, "spell")}${spells.length <= 6 ? `: ${spellText(spells)}` : ""}. ` : actV.length ? "No sustained rest spells. " : "") + (busiest ? `The most active period was ${busiest.label} (average ${f2(busiest.act)}).` : ""))}</p></section>
 
-${fromRec ? "" : `<section class="card"><div class="sh">${sn()}<h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Eye-surface temperature is followed as a trend for each horse; a fever is confirmed with a thermometer.</p>
+${fromRec ? "" : `<section class="card"><div class="sh">${sn()}<h2>Eye temperature</h2></div><p class="sub">Readings taken with the eye in view. Each reading is compared with ${esc(name)}'s own normal eye temperature for that time of day; the body temperature in this report comes from that difference.</p>
 <div style="margin-top:14px">${tempChart()}</div>
 <div class="legend"><span><i class="sw dot"></i>reading</span><span><i class="sw iqr"></i>middle 50% of readings</span><span>— — median</span></div>
 <p class="fig">Figure 3 · Eye temperature</p>
@@ -1110,7 +1122,7 @@ ${blocks.map((b) => `<tr class="${b.data ? "" : "dim"}"><td class="num">${b.labe
 
 <section class="card"><div class="sh">${sn()}<h2>About this report</h2></div>
 <div class="about">
-<div><b>Eye temperature</b><span>Read at the eye whenever the eye is in view — only from a small hot spot with cooler skin around it, so a warm coat is not mistaken for the eye. Eye-surface temperature differs from rectal temperature by an amount that depends on the horse and the conditions, so it is tracked as a trend for each horse and a fever is confirmed with a thermometer.</span></div>
+<div><b>Eye and body temperature</b><span>Read at the eye whenever the eye is in view — only from a small hot spot with cooler skin around it, so a warm coat is not mistaken for the eye. The eye's surface is cooler than the body by an amount that differs between horses, so each horse's own normal eye temperature is learned for every time of day, allowing for the warmth of the stall. Body temperature is a resting ${esc(horse.species || "horse")}'s normal ${normalFor(horse)} °C plus how far the eye is from that normal; a rise well beyond the horse's everyday range is reported as a possible fever.</span></div>
 <div><b>Activity index</b><span>The share of the horse moving: 0 = still, 1 = very active. Levels: no activity below 0.05, low 0.05–0.2, moderate 0.2–0.6, high 0.6 and above.</span></div>
 <div><b>Rest</b><span>Minutes in which the horse stood still; lying down is reported when the horse's whole body is in view.</span></div>
 <div><b>Stable vices</b><span>Weaving, box walking and head tossing are identified from sustained rhythmic movement; a flagged moment can be checked on the recording.</span></div>

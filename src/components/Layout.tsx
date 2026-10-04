@@ -33,6 +33,7 @@ import {
   Gauge,
   LayoutGrid,
   SlidersHorizontal,
+  Stethoscope,
 } from "lucide-react";
 import { useTheme } from "../theme";
 import { useAuth } from "../auth";
@@ -54,6 +55,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/horses", label: "Horses", icon: Heart },
       { to: "/board", label: "Stable board", icon: LayoutGrid },
       { to: "/alerts", label: "Alerts", icon: Bell },
+      { to: "/checks", label: "Health checks", icon: Stethoscope, staffOnly: true },
       { to: "/rules", label: "Alert rules", icon: SlidersHorizontal, staffOnly: true },
       { to: "/events", label: "Events & clips", icon: Clapperboard, staffOnly: true },
       { to: "/yard", label: "Yard View", icon: Map },
@@ -279,6 +281,7 @@ function TopBar() {
     "/validation": { h1: "Accuracy checks", p: "People count, the system measures — how closely they agree" },
     "/board": { h1: "Stable board", p: "Every stall at a glance — for the office screen" },
     "/rules": { h1: "Alert rules", p: "Your own alerts, for one horse or all — on top of EquiCare's" },
+    "/checks": { h1: "Health checks", p: "Every horse's temperature by camera, the checks due, the care log and outbreak mode" },
   };
 
   const base = "/" + (pathname.split("/")[1] || "");

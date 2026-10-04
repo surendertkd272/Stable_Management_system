@@ -648,8 +648,8 @@ export const footageTicket = () => call<{ ticket: string; expiresInS: number }>(
 // ---- each horse's own normal (server/baseline.mjs) ---------------------------- //
 export interface BaselineRow { key: string; label: string; unit: string; baseline: number | null; recent: number | null;
   change: number | null; pct: number | null; notable: boolean; direction: "up" | "down" | "same" | null; pattern: string }
-export interface BaselineCompare { window: { from: string; to: string; set: boolean; by?: string | null; at?: string | null; days?: number } | null;
-  learning: boolean; comparedDays: number; baselineDays: number; sameAsBaseline: boolean; rows: BaselineRow[];
+export interface BaselineCompare { window: { from: string; to: string; set: boolean; by?: string | null; at?: string | null; days?: number; settlingLeftOut?: number } | null;
+  learning: boolean; provisional?: boolean; comparedDays: number; baselineDays: number; sameAsBaseline: boolean; rows: BaselineRow[];
   days: Record<string, number | string | null>[]; note: string }
 const tzq = () => `tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`;
 export const getBaseline = (horse: string) => call<BaselineCompare>("GET", `/api/horses/${encodeURIComponent(horse)}/baseline?${tzq()}`);
@@ -772,14 +772,16 @@ export interface SiteSettings {
     instant: boolean; digest: boolean; digestHour: number; escalation: boolean; escalateAfterMin: number;
     recipients: { manager: string; onCall: string; vet: string };
     chain: ChainPerson[]; callAtMostEveryMin: number; warnToStaff: boolean;
+    /** a silent trial: nothing is sent before this time */
+    trialUntil: string | null;
   };
   security: { nightVisitors: boolean; quietFrom: number; quietTo: number };
   reports: { daily: boolean; hour: number };
-  send: Record<"temperature" | "breathing" | "colic" | "casting" | "activity" | "vices" | "sleep" | "elimination" | "lameness" | "water" | "monitoring" | "foaling" | "security" | "heat" | "staff", boolean>;
+  send: Record<"temperature" | "breathing" | "colic" | "casting" | "activity" | "vices" | "sleep" | "elimination" | "lameness" | "water" | "monitoring" | "foaling" | "security" | "heat" | "staff" | "eating" | "checks" | "outbreak", boolean>;
   sensitivity: number;
   privacy: { consentAt: string | null; consentBy: string | null };
   notify: { transport: "webhook" | "log-only"; minSeverity: string; disabled: boolean; notified: number; escalated: number; digests: number; failed: number;
-    phones: "twilio" | "exotel" | "not connected"; publicUrl: string | null; calls: number; texts: number; phoneFailed: number };
+    phones: "twilio" | "exotel" | "not connected"; publicUrl: string | null; calls: number; texts: number; phoneFailed: number; trialHeld?: number };
 }
 export interface ChainPerson { role: string; name: string; phone: string; channel: "call" | "sms" | "whatsapp" }
 export const getSettings = () => call<SiteSettings>("GET", "/api/settings");
@@ -904,3 +906,26 @@ export const getSession = (horse: string, from?: string, to?: string) => {
   if (to) q.set("to", to);
   return call<SessionReport>("GET", `/api/session?${q}`);
 };
+
+// ---- the Health checks page (server/care-api.mjs) -------------------------- //
+export interface CareTemp {
+  value: number | null; by: "camera" | "sensor" | null; at: string | null;
+  rise: number | null; within: number | null; learning: boolean; learnedDays: number | null; settled: boolean | null;
+  fever: boolean; noRecentEye: boolean;
+}
+export interface DueCheck { kind: string; text: string; severity: "ok" | "warn" | "alert" }
+export interface CareHorse { id: string; name: string; stall: string; species: string; temperature: CareTemp; checks: DueCheck[] }
+export interface CareEvent { id: string; kind: string; horseId: string; at: string; hours: number | null; note: string; by: string; label: string; horseName: string }
+export interface Outbreak { active: boolean; disease: string; startedAt: string | null; lastCaseAt: string | null; quarantineDays: number; endedAt?: string }
+export interface CarePage { horses: CareHorse[]; events: CareEvent[]; kinds: { key: string; label: string }[]; outbreak: Outbreak; feverLine: number }
+export const carePage = () => call<CarePage>("GET", "/api/care");
+export const logCare = (e: { kind: string; horseId: string; at?: string; hours?: number; note?: string }) => call<CareEvent>("POST", "/api/care/events", e);
+export const deleteCare = (id: string) => call<{ ok: true }>("DELETE", `/api/care/events/${encodeURIComponent(id)}`);
+export const outbreakAction = (b: { action: "start" | "case" | "end"; disease?: string; quarantineDays?: number }) => call<CarePage>("POST", "/api/care/outbreak", b);
+
+// ---- was the alert right? (the silent trial, the accuracy page) ------------- //
+export type Verdict = "right" | "wrong" | "unsure";
+export const alertVerdict = (id: string, b: { verdict: Verdict; type: string; horse: string; note?: string }) =>
+  call<{ alertId: string; verdict: Verdict }>("POST", `/api/alerts/${encodeURIComponent(id)}/verdict`, b);
+export interface HitRates { trialUntil: string | null; held: number; types: { type: string; right: number; wrong: number; unsure: number; judged: number; rate: number | null }[] }
+export const hitRates = () => call<HitRates>("GET", "/api/alerts/hit-rates");

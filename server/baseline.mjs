@@ -13,10 +13,17 @@
 // What counts as a notable change is OUR threshold (no published one exists
 // for most of these), marked so in the result.
 import { peopleMinutes, floorAlone, eyeSetAside } from "./reading-rules.mjs";
+import { settlingTimes } from "./care-log.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 const MIN_SEEN_S = 4 * 3600;            // a day with less seen time is not used for the baseline
-const DEFAULT_DAYS = 3;
+// The normal is the 14 settled days before the day compared (a rolling
+// window): judging from 3, provisional until 7. Horses differ a lot from day
+// to day and take several nights to settle in a new stall (part E of
+// CLINICAL_RESEARCH.md), so the first two nights after a move or arrival
+// are left out.
+export const MIN_BASE_DAYS = 3, PROVISIONAL_DAYS = 7, MAX_BASE_DAYS = 14;
+const SETTLE_MS = 2 * DAY_MS;
 
 /** The measures compared, how to read them from a day, and what change is notable (ours). */
 export const MEASURES = [
@@ -80,39 +87,56 @@ export function dailyValues(readings, tz = "UTC") {
   return out;
 }
 
-/** The baseline window: the one set on the horse, else its first DEFAULT_DAYS days with enough seen. */
-export function baselineWindow(horse, days) {
-  const set = horse?.baseline;
-  if (set?.from && set?.to) return { from: set.from, to: set.to, set: true, by: set.setBy ?? null, at: set.setAt ?? null };
-  const usable = days.filter((d) => d.seenS >= MIN_SEEN_S || ["breathing", "eye", "activity"].some((k) => d[k] !== null));
-  if (!usable.length) return null;
-  const first = usable.slice(0, DEFAULT_DAYS);
-  return { from: first[0].start, to: first.at(-1).end, set: false, days: first.length };
+/** Days the horse was settling after a move or arrival (ISO day starts). */
+function settlingDays(days, moves) {
+  return new Set(days.filter((d) => {
+    const a = Date.parse(d.start), e = Date.parse(d.end);
+    return moves.some((t) => (t >= a && t < e) || (a >= t && a < t + SETTLE_MS));
+  }).map((d) => d.start));
 }
 
+/** The baseline window: the one set on the horse (a vet's choice), else the
+ *  up to 14 settled days with enough seen before the day compared (`before`,
+ *  ISO; default: before the newest day). */
+export function baselineWindow(horse, days, { before = null, moves = null } = {}) {
+  const set = horse?.baseline;
+  if (set?.from && set?.to) return { from: set.from, to: set.to, set: true, by: set.setBy ?? null, at: set.setAt ?? null };
+  const settling = settlingDays(days, moves ?? (horse?.id ? settlingTimes(horse.id) : []));
+  const usable = days.filter((d) => !settling.has(d.start) && (d.seenS >= MIN_SEEN_S || ["breathing", "eye", "activity"].some((k) => d[k] !== null)));
+  const cut = before ?? days.at(-1)?.start;
+  const earlier = cut ? usable.filter((d) => d.end <= cut) : usable;
+  const base = earlier.slice(-MAX_BASE_DAYS);
+  if (!base.length) return null;
+  return { from: base[0].start, to: base.at(-1).end, set: false, days: base.length, rolling: true,
+    provisional: base.length < PROVISIONAL_DAYS, settlingLeftOut: settling.size };
+}
+
+const sd = (v) => { if (v.length < 3) return null; const m = v.reduce((a, b) => a + b, 0) / v.length; return Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / (v.length - 1)); };
+
 /** Compare one day (or a window's days) with the baseline. */
-export function compare(horse, readings, { tz = "UTC", from = null, to = null } = {}) {
+export function compare(horse, readings, { tz = "UTC", from = null, to = null, moves = null } = {}) {
   const days = dailyValues(readings, tz);
-  const win = baselineWindow(horse, days);
-  const inWin = (d) => win && d.start >= win.from && d.end <= win.to;
-  const base = days.filter(inWin);
-  // what is compared: the days in [from, to), else the last day outside the baseline
+  // what is compared: the days in [from, to), else the newest day
   const recent = from !== null && to !== null
     ? days.filter((d) => Date.parse(d.end) > from && Date.parse(d.start) < to)
-    : days.filter((d) => !inWin(d)).slice(-1);
-  const learning = !win || !base.length;
+    : days.slice(-1);
+  const win = baselineWindow(horse, days, { before: recent[0]?.start ?? null, moves });
+  const inWin = (d) => win && d.start >= win.from && d.end <= win.to;
+  const base = days.filter(inWin);
+  const learning = !win || (!win.set && base.length < MIN_BASE_DAYS) || !base.length;
   const rows = MEASURES.map((m) => {
-    const b = median(base.map((d) => d[m.key]).filter((v) => v !== null && v !== undefined));
+    const bv = base.map((d) => d[m.key]).filter((v) => v !== null && v !== undefined);
+    const b = median(bv);
     const r = median(recent.map((d) => d[m.key]).filter((v) => v !== null && v !== undefined));
     const change = b !== null && r !== null ? r - b : null;
     const pct = change !== null && b ? (100 * change) / Math.abs(b) : null;
     const notable = change !== null && Math.abs(change) >= m.notable.abs && (m.notable.rel === 0 || Math.abs(change) >= Math.abs(b) * m.notable.rel);
-    return { key: m.key, label: m.label, unit: m.unit, baseline: b, recent: r, change: round(change, m.key === "activity" ? 3 : 1),
+    return { key: m.key, label: m.label, unit: m.unit, baseline: b, spread: round(sd(bv), m.key === "activity" ? 3 : 1), recent: r, change: round(change, m.key === "activity" ? 3 : 1),
       pct: round(pct, 0), notable, direction: change === null ? null : change > 0 ? "up" : change < 0 ? "down" : "same", pattern: m.pattern };
   });
   const inside = recent.length && recent.every(inWin);
   return {
-    window: win, learning, comparedDays: recent.length, baselineDays: base.length,
+    window: win, learning, provisional: Boolean(win && !win.set && base.length < PROVISIONAL_DAYS), comparedDays: recent.length, baselineDays: base.length,
     sameAsBaseline: Boolean(inside),
     rows, days,
     note: "A change is marked notable at EquiCare's own thresholds (no published ones for most of these) — a reason to look, not a diagnosis.",

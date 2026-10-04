@@ -6,6 +6,7 @@
 
 import { BREATHING_WHY, isDiagnostic } from "./contract.mjs";
 import { splitEye, floorAlone, setAsideNote } from "./reading-rules.mjs";
+import { cameraBodyTemp, normalFor } from "./core-temp.mjs";
 import { LIMB_NAME, lamenessVsNormal, leftOf, mealsOf, offCamera, stepsTotal } from "./rollup.mjs";
 
 const MIN = 60000;
@@ -63,13 +64,19 @@ export function sessionReport({ readings, from, to, clips = [], alerts = [], hor
   if (ts) {
     const uncal = temp.filter((r) => r.meta?.calibrated === false).length;
     const methods = countBy(temp, (r) => (String(r.meta?.method || "").startsWith("eye box") ? "eye box" : r.meta?.method ? "head found elsewhere in view" : "—"));
-    add(1, "Body temperature", uncal === temp.length ? "uncalibrated" : "measured",
-      `Eye surface ${ts.n === 1 ? `${ts.median} °C, 1 reading` : `${ts.median} °C median (${ts.min}–${ts.max}), ${ts.n} readings`} over ${minutesCovered(temp)} of ${windowMin} min (${pct(minutesCovered(temp))} %).`,
-      { stats: ts, methods, notes: [
-        "Eye infrared is a trend for this horse, not a core temperature: its offset from rectal depends on the camera, distance and conditions.",
+    // body temperature by the cameras, at the window's last good eye reading (server/core-temp.mjs)
+    const lastEye = Math.max(...temp.filter((r) => r.meta?.calibrated !== false).map((r) => Date.parse(r.ts)));
+    const body = horse && Number.isFinite(lastEye) ? cameraBodyTemp(horse, readings, lastEye) : null;
+    const eyeLine = `Eye surface ${ts.n === 1 ? `${ts.median} °C, 1 reading` : `${ts.median} °C median (${ts.min}–${ts.max}), ${ts.n} readings`} over ${minutesCovered(temp)} of ${windowMin} min (${pct(minutesCovered(temp))} %).`;
+    const bodyLine = body?.value != null
+      ? `Body temperature about ${body.value.toFixed(1)} °C (±${body.within}) at ${new Date(lastEye).toTimeString().slice(0, 5)} — the eye ${body.rise >= 0 ? "+" : ""}${body.rise.toFixed(1)} °C against this horse's own normal for that time of day. `
+      : body?.learning ? `Body temperature: learning this horse's normal (day ${body.days} of 3). ` : "";
+    add(1, "Body temperature", uncal === temp.length ? "uncalibrated" : "measured", bodyLine + eyeLine,
+      { stats: ts, methods, bodyTemp: body, notes: [
+        `Body temperature by camera = a resting ${horse?.species || "horse"}'s normal ${normalFor(horse)} °C + how far the eye is from this horse's own normal at that time of day, allowing for the stall's warmth. The ± is how much its eye wanders on ordinary days.`,
         ...(uncal ? [`${uncal} readings were taken before the camera was aimed — shown, never used for alerts.`] : []),
         ...(asideNote ? [asideNote] : []),
-        "Temperature alerts compare with the horse's own 7-day baseline, which needs ~3 days of readings.",
+        "The horse's own normal comes from its last 14 days of eye readings (3 days to start, settled at 7).",
       ] });
   } else add(1, "Body temperature", "not measured", thermal === false
     ? "Not measured on this stall — its camera has no thermal sensor (eye temperature needs one)."

@@ -274,5 +274,40 @@ check("a heat lamp is not an eye", v is None, why)
 v, why = eye_spot(grid(7, 7, lambda c, r: 27.0), 7, 7)
 check("the wall is not an eye", v is None and "eye-warm" in why, why)
 
+# ---- weight shifts while standing ------------------------------------------ #
+from behaviour import WeightShiftCounter  # noqa: E402
+
+
+def shifts(pattern, standing=True):
+    """pattern: one (leg, body) pair per second."""
+    wc = WeightShiftCounter()
+    for i, (leg, body) in enumerate(pattern):
+        wc.feed(float(i), standing, leg, body)
+    return wc.drain()
+
+
+QUIET, LIFT, WALK = (0.0, 0.0), (0.2, 0.01), (0.3, 0.2)
+out = shifts(([QUIET] * 9 + [LIFT]) * 12)                     # a foot lifted every 10 s for 2 min
+check("a foot lifted every 10 s, body still: 12 shifts", out["count"] == 11 or out["count"] == 12, out)
+check("standing time counted", 115 <= out["standingS"] <= 120, out)
+check("lifts 2 s apart are one shift, not two", shifts([QUIET, LIFT, QUIET, LIFT, QUIET, QUIET, QUIET])["count"] == 1)
+check("walking (the body moving too) is not a shift", shifts(([QUIET] * 5 + [WALK] * 3) * 5)["count"] == 0)
+check("pawing for 8 s is not a shift", shifts([QUIET] * 3 + [LIFT] * 8 + [QUIET] * 3)["count"] == 0)
+check("lying: nothing counted, no standing time", shifts(([QUIET] * 9 + [LIFT]) * 6, standing=False) == {"count": 0, "standingS": 0.0})
+check("standing still: no shifts", shifts([QUIET] * 120)["count"] == 0)
+
+mm = MotionMeter(w=W, h=H, mode="visible")
+frames = [bytes(100 for _ in range(W * H))] * 12
+for f in frames:
+    mm.feed(f)
+legs = bytearray(frames[0])
+for y in range(110, 130):
+    for x in range(60, 70):
+        legs[y * W + x] = 200
+mm.feed(bytes(legs))
+check("the leg band moved, the body did not", (mm.moved_share((40, 105, 120, 135), 10) or 0) > 0.05
+      and (mm.moved_share((40, 40, 120, 100), 10) or 0) == 0.0,
+      (mm.moved_share((40, 105, 120, 135), 10), mm.moved_share((40, 40, 120, 100), 10)))
+
 print("ALL PASS" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

@@ -132,22 +132,22 @@ test("wearable silent 20 min while the stall reports -> watch; a whole-site sile
 
 test("trot lameness vs own normal: +6 mm, or 12 mm with no normal -> a prototype watch note", () => {
   const history = [trot(6, dayAt(5, 9)), trot(8, dayAt(4, 9)), trot(7, dayAt(3, 9))];
-  const a = find([...camera(), ...history, trot(14, ago(1))], /^Possible lameness — /);
-  assert.equal(a.type, "Possible lameness — left fore");
+  const a = find([...camera(), ...history, trot(14, ago(1))], /^Uneven movement — /);
+  assert.equal(a.type, "Uneven movement — left fore");
   assert.equal(a.severity, "warn");
   assert.match(a.detail, /^Trot measure: 14\.0 mm asymmetry \(left fore\), \+7\.0 mm on its usual 7\.0 mm — from the wearable; trot the horse up/);
-  assert.equal(find([...camera(), ...history, trot(11, ago(1))], /^Possible lameness — /), undefined, "+4 mm");
-  assert.match(find([...camera(), trot(13, ago(1), "RH")], /^Possible lameness — /).detail, /no earlier trots to compare with/);
-  assert.equal(find([...camera(), trot(10, ago(1))], /^Possible lameness — /), undefined, "10 mm without a normal");
-  assert.equal(find([...camera(), trot(20, dayAt(4, 9))], /^Possible lameness — /), undefined, "a 4-day-old trot is not news");
-  assert.equal(find([...camera(), trot(13, ago(1), null)], /^Possible lameness — /).type, "Possible lameness — limb unclear");
+  assert.equal(find([...camera(), ...history, trot(11, ago(1))], /^Uneven movement — /), undefined, "+4 mm");
+  assert.match(find([...camera(), trot(13, ago(1), "RH")], /^Uneven movement — /).detail, /no earlier trots to compare with/);
+  assert.equal(find([...camera(), trot(10, ago(1))], /^Uneven movement — /), undefined, "10 mm without a normal");
+  assert.equal(find([...camera(), trot(20, dayAt(4, 9))], /^Uneven movement — /), undefined, "a 4-day-old trot is not news");
+  assert.equal(find([...camera(), trot(13, ago(1), null)], /^Uneven movement — /).type, "Uneven movement — limb unclear");
 });
 
 test("the legacy gait-asymmetry rule still stands beside the trot rule", () => {
   const rd = [...camera(), R("gait_asymmetry", 0.42, ago(0.5), {}, "test"), trot(14, ago(1))];
   const types = alerts(rd).map((a) => a.type);
-  assert.ok(types.includes("Possible lameness"));
-  assert.ok(types.includes("Possible lameness — left fore"));
+  assert.ok(types.includes("Uneven movement"));
+  assert.ok(types.includes("Uneven movement — left fore"));
 });
 
 test("wearable lying and activity are prototype: worded so, and never a colic alarm", () => {

@@ -26,6 +26,7 @@ export const DEFAULTS = {
     ],
     callAtMostEveryMin: 60,
     warnToStaff: true,          // watch-level alerts (e.g. a person at night) go to the first person, no further
+    trialUntil: null,           // a silent trial: nothing is sent before this time (alerts still show, to be reviewed)
   },
   // Security: people at the stall in the quiet hours (cameras whose
   // people-detection is trusted).
@@ -35,27 +36,33 @@ export const DEFAULTS = {
   send: {                       // which alert groups are sent
     temperature: true, breathing: true, colic: true, casting: true, activity: true,
     vices: true, sleep: true, elimination: true, lameness: true, water: true, monitoring: true,
-    foaling: true, security: true, heat: true, staff: true,
+    foaling: true, security: true, heat: true, staff: true, eating: true, checks: true, outbreak: true,
   },
   sensitivity: 50,              // 0 calm … 50 balanced … 100 sensitive
   privacy: { consentAt: null, consentBy: null },
+  // Outbreak mode (Health checks page): no horse in or out, every horse's
+  // temperature watched, a countdown from the last new case.
+  outbreak: { active: false, disease: "", startedAt: null, lastCaseAt: null, quarantineDays: 28 },
 };
 
 // Alert type -> send group. Types not listed are sent (fail open: an unknown
 // new alert must not be silently muted).
 const GROUPS = [
   ["staff", /^staff rule/i],              // first: a rule's name may say "colic" or "temperature"
-  ["temperature", /temperature/i],
+  ["outbreak", /several horses|outbreak/i],
+  ["checks", /isolation|vet check due/i], // before temperature: "Isolation: no temperature today"
+  ["temperature", /temperature|fever/i],
   ["breathing", /respirat|breathing/i],
   ["casting", /cast/i],
   ["colic", /colic|lying down and getting up|rolling|flat on the side|manure/i],
   ["activity", /activity unusual/i],
   ["vices", /vice|weaving|box walking|head tossing/i],
-  ["sleep", /lying-down time|lying down at night/i],
+  ["sleep", /lying-down time|lying down at night|hardly lying/i],
   ["elimination", /urination/i],
-  ["lameness", /lameness/i],
-  ["water", /water/i],
-  ["foaling", /foaling/i],
+  ["lameness", /lameness|uneven movement|shifting weight/i],
+  ["eating", /eating less|left feed|hay intake/i],
+  ["water", /water|drinking/i],
+  ["foaling", /foal|placenta/i],
   ["security", /person at the stall/i],
   ["heat", /heat in the stall|hot, humid/i],
   ["monitoring", /monitoring|device|camera not aimed|not reporting|edge box/i],
@@ -89,6 +96,11 @@ export function mergeSettings(cur, body, who) {
       }));
     if (d.callAtMostEveryMin !== undefined) s.delivery.callAtMostEveryMin = clampInt(d.callAtMostEveryMin, 10, 720, s.delivery.callAtMostEveryMin);
     if (typeof d.warnToStaff === "boolean") s.delivery.warnToStaff = d.warnToStaff;
+    if (d.trialUntil !== undefined) {
+      // a date (YYYY-MM-DD, to the end of that day) up to 120 days ahead; empty ends the trial
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(String(d.trialUntil)) ? new Date(`${d.trialUntil}T23:59:59`) : null;
+      s.delivery.trialUntil = day && day.getTime() > Date.now() && day.getTime() - Date.now() <= 120 * 86400000 ? day.toISOString() : null;
+    }
   }
   const sec = body?.security;
   if (sec && typeof sec === "object") {
@@ -121,6 +133,7 @@ export function currentSettings(store) {
     reports: { ...DEFAULTS.reports, ...row.reports },
     send: { ...DEFAULTS.send, ...row.send },
     privacy: { ...DEFAULTS.privacy, ...row.privacy },
+    outbreak: { ...DEFAULTS.outbreak, ...row.outbreak },
   };
 }
 

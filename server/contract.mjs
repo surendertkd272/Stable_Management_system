@@ -10,7 +10,12 @@
 export const METRICS = {
   // pt  point label                         key                    unit     source          kind
   steps:                { point: 1,  label: "Steps / locomotion",   unit: "count", source: "imu",           kind: "sample" },
-  body_temp_c:          { point: 2,  label: "Body temperature",     unit: "°C",    source: "thermal_camera", kind: "sample" },
+  // The eye's surface, by the thermal camera: about 2 °C below the body and
+  // not tracking it one-for-one across horses (CLINICAL_RESEARCH.md, part C).
+  // The body temperature is worked out from how far it is from the horse's
+  // own normal (server/core-temp.mjs). (The metric keeps its old name: stored
+  // readings use it.)
+  body_temp_c:          { point: 2,  label: "Eye temperature",      unit: "°C",    source: "thermal_camera", kind: "sample" },
   nostril_temp_c:       { point: 3,  label: "Respiration (raw)",    unit: "°C",    source: "thermal_camera", kind: "sample" },
   respiratory_rate_bpm: { point: 4,  label: "Respiratory rate",     unit: "bpm",   source: "thermal_camera", kind: "sample" },
   activity_index:       { point: 5,  label: "Activity",             unit: "0..1",  source: "thermal_video",  kind: "sample" },
@@ -85,6 +90,10 @@ export const METRICS = {
   // horse's gallery (0–1); meta.verdict match / other / unsure / learning,
   // meta.best(Name) the most alike enrolled horse.
   horse_identity:       { point: 5,  label: "Horse recognition",    unit: "score", source: "visible_video",  kind: "diagnostic" },
+  // Weight shifts while standing, per window (meta.standingS): a front or
+  // hind foot lifted and put down with the body still — the commonest early
+  // sign of laminitis (OR 17.7) and of limb pain. From the colour picture.
+  weight_shift_count:   { point: 7,  label: "Weight shifts (camera)", unit: "count", source: "visible_video", kind: "sample" },
   urination_event:      { point: 11, label: "Urination",            unit: "event", source: "thermal_video",  kind: "event" },
   excretion_event:      { point: 12, label: "Excretion",            unit: "event", source: "thermal_video",  kind: "event" },
 };

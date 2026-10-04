@@ -4,8 +4,10 @@
 // screening-grade (the camera is +-2 C), tune with vet input + learned baselines.
 
 import { METRICS, SOURCE_STATUS } from "./contract.mjs";
-import { namedAlerts, suppressed, unusualScore, configureNamedAlerts } from "./named-alerts.mjs";
+import { namedAlerts, suppressed, unusualScore, configureNamedAlerts, stableAlerts, foalingPlan, foalingWindow } from "./named-alerts.mjs";
 import { staffRuleAlerts } from "./staff-rules.mjs";
+import { temperatureAlerts, bodyTemperature } from "./core-temp.mjs";
+import { SCHEDULED_NOTE } from "./named-alerts.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 const BASELINE_TARGET_DAYS = 14;
@@ -131,17 +133,35 @@ export const uncalibrated = (r) => r?.meta?.calibrated === false;
  *  which was enough to raise "colic pattern" before this rule. */
 export const prototype = (r) => r?.meta?.prototype === true || SOURCE_STATUS[r?.source] === "prototype";
 
-/** This horse's usual eye temperature: the mean of calibrated camera readings
- *  from the last 7 days, excluding the last 6 h (so a fever building now does
- *  not raise its own baseline). Null until the readings span ~EYE_BASELINE_DAYS days. */
+/** This horse's usual eye temperature AT THIS TIME OF DAY: calibrated camera
+ *  readings within 2 h of the same clock time on earlier days (the body is
+ *  coolest before dawn and warmest in the evening), from the last 14 days,
+ *  excluding the last 6 h so a fever building now does not raise its own
+ *  baseline. Needs EYE_BASELINE_DAYS days; until then the plain 7-day mean
+ *  (once the readings span that long), else null. */
 export function eyeBaseline(rd, cur) {
-  const cutoff = Date.parse(cur.ts) - 6 * 3600 * 1000;
+  const at = Date.parse(cur.ts), cutoff = at - 6 * 3600 * 1000;
   const rows = rd.filter((r) => r.metric === "body_temp_c" && r.source === cur.source && !uncalibrated(r)
-    && Date.parse(r.ts) < cutoff && within(r, 7 * DAY_MS));
+    && Date.parse(r.ts) < cutoff && within(r, 14 * DAY_MS));
+  const hourOf = (ms) => { const d = new Date(ms); return d.getHours() + d.getMinutes() / 60; };
+  const h0 = hourOf(at);
+  const near = rows.filter((r) => { const dh = Math.abs(hourOf(Date.parse(r.ts)) - h0); return Math.min(dh, 24 - dh) <= 2; });
+  if (new Set(near.map((r) => dayKey(r.ts))).size >= EYE_BASELINE_DAYS) return near.reduce((a, r) => a + r.value, 0) / near.length;
+  const week = rows.filter((r) => within(r, 7 * DAY_MS));
   // Span in hours, not calendar dates: 41 h of data can touch 3 dates.
-  const ts = rows.map((r) => Date.parse(r.ts));
-  if (!rows.length || Math.max(...ts) - Math.min(...ts) < (EYE_BASELINE_DAYS - 0.5) * DAY_MS) return null;
-  return rows.reduce((a, r) => a + r.value, 0) / rows.length;
+  const ts = week.map((r) => Date.parse(r.ts));
+  if (!week.length || Math.max(...ts) - Math.min(...ts) < (EYE_BASELINE_DAYS - 0.5) * DAY_MS) return null;
+  return week.reduce((a, r) => a + r.value, 0) / week.length;
+}
+/** The eye reading now: the median of the last 2 h's readings (a single
+ *  reading can catch the eye at a bad angle), else the latest. */
+function eyeNow(rd, latestRow) {
+  const t = Date.parse(latestRow.ts);
+  const v = rd.filter((r) => r.metric === "body_temp_c" && r.source === latestRow.source && !uncalibrated(r)
+    && t - Date.parse(r.ts) <= 2 * 3600 * 1000 && Date.parse(r.ts) <= t).map((r) => r.value);
+  if (v.length < 2) return { value: latestRow.value, n: 1 };
+  const s = [...v].sort((a, b) => a - b), m = s.length >> 1;
+  return { value: s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2, n: v.length };
 }
 
 // ---- stall sensors and the wearable: shared helpers ---------------------- //
@@ -289,23 +309,19 @@ function evaluate(bio, rd) {
       `than the eye and nostril, so they are shown but not used for alerts. Aim it from the Hardware page.`,
       (temp || resp).ts);
   }
+  // Body temperature by the thermal camera, from this horse's own normal eye
+  // temperature (server/core-temp.mjs).
+  for (const a of temperatureAlerts(bio, rd, Date.now(), { scheduledNote: SCHEDULED_NOTE })) push(a.type, a.severity, a.detail, a.ts);
   if (temp && !uncalibrated(temp)) {
     if (temp.source === "thermal_camera") {
+      // Fever is judged on the camera's body temperature (core-temp.mjs,
+      // above). Here only a fall, which is usually the stall or the camera.
       const base = eyeBaseline(rd, temp);
-      const d = base === null ? null : temp.value - base;
-      const vs = base === null ? "" : ` (${d >= 0 ? "+" : ""}${d.toFixed(1)} C vs this horse's usual ${base.toFixed(1)} C)`;
-      const confirm = " Eye surface, screening-grade; confirm with a rectal thermometer.";
-      if (temp.value >= TEMP_FEVER || (d !== null && d >= EYE_RISE_ALERT)) {
-        // Say which line was crossed: a horse whose usual reading is itself
-        // high must not read "+0.0 C … well above normal".
-        const why = d !== null && d >= EYE_RISE_ALERT ? "well above normal"
-          : `above the ${TEMP_FEVER} C fever line${base !== null && base >= TEMP_FEVER - 0.3 ? ", and this horse's usual reading is high too" : ""}`;
-        push("Elevated body temperature", "alert", `Eye temperature ${temp.value.toFixed(1)} C${vs} — ${why}.${confirm}`, temp.ts);
-      }
-      else if (d !== null && d >= EYE_RISE_WARN) push("Body temperature rising", "warn",
-        `Eye temperature ${temp.value.toFixed(1)} C${vs} — watching the trend.${confirm}`, temp.ts);
-      else if (d !== null && d <= -EYE_DROP_WARN) push("Eye temperature below usual", "warn",
-        `Eye temperature ${temp.value.toFixed(1)} C${vs} — a cold stall, wet coat or a camera that has moved can do this; ` +
+      const now2 = eyeNow(rd, temp);
+      const d = base === null ? null : now2.value - base;
+      const vs = base === null ? "" : ` (${d >= 0 ? "+" : ""}${d.toFixed(1)} °C against this horse's usual ${base.toFixed(1)} °C at this time of day${now2.n > 1 ? `, ${now2.n} readings` : ""})`;
+      if (d !== null && d <= -EYE_DROP_WARN && now2.n >= 2) push("Eye temperature below usual", "warn",
+        `Eye temperature ${now2.value.toFixed(1)} °C${vs} — a cold stall, wet coat or a camera that has moved can do this; ` +
         `check the horse and the camera aim.`, temp.ts);
     } else {
       if (temp.value >= TEMP_FEVER) push("Elevated body temperature", "alert",
@@ -343,8 +359,9 @@ function evaluate(bio, rd) {
       ? " From the wearable — worth a look." : ""), now);
 
   const gait = latest(rd, "gait_asymmetry");
-  if (gait && gait.value >= GAIT_WATCH) push("Possible lameness", "warn",
-    `Gait asymmetry ${(gait.value * 100).toFixed(0)}% — limb-favouring pattern; review.`, gait.ts);
+  if (gait && gait.value >= GAIT_WATCH) push("Uneven movement", "warn",
+    `Gait asymmetry ${(gait.value * 100).toFixed(0)}% — trot the horse up in hand. Many sound horses move a little unevenly; ` +
+    "only a vet's examination says whether it is lame.", gait.ts);
 
   const waterToday = sumToday(rd, "water_ml");
   const waterBase = baselineDailyAvg(rd, "water_ml", 7);
@@ -354,7 +371,9 @@ function evaluate(bio, rd) {
 
   const vice = rd.filter((r) => r.metric === "vice_event" && within(r, DAY_MS)).slice(-1)[0];
   if (vice) push("Stable vice", "ok",
-    `${(vice.meta?.kind || "vice").replace("_", "-")} episodes detected — enrichment / routine review suggested.`, vice.ts);
+    `${(vice.meta?.kind || "vice").replace("_", "-")} seen — a welfare sign, not an illness warning. The usual causes: too little ` +
+    "forage (aim for at least 1.5% of body weight and 8 hours a day of eating), long gaps between feeds, and too little company. " +
+    "Preventing the habit does not fix the cause.", vice.ts);
 
   // ---- camera behaviour: watch notes, never alarms ---------------------- //
   const b = behaviourForHorse(rd);
@@ -535,11 +554,12 @@ function evaluate(bio, rd) {
     const vs = lamenessVsNormal(rd, trot);
     const limb = LIMB_NAME[trot.meta?.limb] || null;
     // The part before " — " is the horse card's status line: it says prototype.
-    if (vs.flagged) push(`Possible lameness — ${limb || "limb unclear"}`, "warn",
+    if (vs.flagged) push(`Uneven movement — ${limb || "limb unclear"}`, "warn",
       `Trot measure: ${trot.value.toFixed(1)} mm asymmetry (${limb || "limb unclear"}), ` +
       (vs.baselineMm === null ? "no earlier trots to compare with"
         : `+${(trot.value - vs.baselineMm).toFixed(1)} mm on its usual ${vs.baselineMm.toFixed(1)} mm`) +
-      " — from the wearable; trot the horse up in hand and ask the vet if it looks uneven. " +
+      " — from the wearable; trot the horse up in hand and ask the vet if it looks uneven. Many sound horses move a little " +
+      "unevenly, so this is a change to look at, not a diagnosis of lameness. " +
       `Our watch line: ${vs.baselineMm === null ? "12 mm while there is no normal yet" : "+6 mm on the median of its earlier trots (14 days)"}. ` +
       `Trot at ${relTime(trot.ts)}. Why: a lame horse moves its head (forelimb) or pelvis (hindlimb) unevenly at the trot; ` +
       "a rise on its own normal matters more than the number.", trot.ts);
@@ -610,6 +630,7 @@ export function summarizeHorse(bio, allReadings) {
   const top = checks.find((c) => c.severity === "alert") || checks.find((c) => c.severity === "warn");
   const seen = lastSeenMs(rd);
   const gaps = uninstrumented(rd);
+  const bodyTemp = bodyTemperature(bio, rd);
 
   return {
     ...bio,
@@ -629,7 +650,10 @@ export function summarizeHorse(bio, allReadings) {
     // tell you today, and a dashboard that headlines rest and water — neither
     // of which has a sensor yet — leads with its weakest claim.
     vitals: {
-      bodyTempC: latest(rd, "body_temp_c")?.value ?? null,
+      // body temperature: the thermal camera's, from this horse's own normal
+      // (core-temp.mjs); the eye's surface reading itself is eyeTempC
+      bodyTempC: bodyTemp.current?.value ?? null,
+      eyeTempC: (() => { const e = latest(rd, "body_temp_c"); return e?.source === "thermal_camera" ? e.value : null; })(),
       respRateBpm: latest(rd, "respiratory_rate_bpm")?.value ?? null,
       respConfidence: latest(rd, "respiratory_rate_bpm")?.confidence ?? null,
       // false when the latest camera reading came through un-aimed ROIs
@@ -638,9 +662,18 @@ export function summarizeHorse(bio, allReadings) {
     // what the UI should render as "not measured" rather than as a value
     uninstrumented: [...gaps].sort(),
     baselineProgress: Math.min(100, Math.round((distinctDays(rd.filter((r) => !uncalibrated(r))) / BASELINE_TARGET_DAYS) * 100)),
+    // body temperature in full: { current, camera: { value, rise, within, learning, days… }, measured }
+    bodyTemp,
     // 0–10, how far the latest day is from this horse's own normal (null while learning)
     unusual: unusualScore(bio, rd),
     mareAndFoal: suppressed(bio),
+    // the mare's foaling plan, worked out as the alerts do (named-alerts.mjs)
+    foaling: (() => {
+      const p = foalingPlan(bio);
+      if (!p || bio.foaledAt) return null;
+      return { due: new Date(p.due).toISOString(), watchFrom: new Date(p.from).toISOString(), expected: p.expected,
+        fromOwnHistory: p.fromOwnHistory, day: p.gestationDay(Date.now()), watching: foalingWindow(bio) };
+    })(),
     // data-freshness (extra fields; the SPA's Horse type ignores unknown keys)
     lastSeen: seen === null ? null : new Date(seen).toISOString(),
     monitoring: seen === null ? "no-data"
@@ -934,6 +967,12 @@ export function buildAlerts(roster, allReadings, isAcked) {
         _ts: c.ts,
       });
     }
+  }
+  // whole-stable alerts: several horses with fever, outbreak mode
+  for (const c of stableAlerts(roster, allReadings)) {
+    const key = `stable:${c.type}:${dayKey(c.ts)}`;
+    alerts.push({ id: key, horse: "Stable", type: c.type, severity: c.severity, time: relTime(c.ts),
+      detail: c.detail, acknowledged: isAcked(key), _ts: c.ts });
   }
   const rank = { alert: 0, warn: 1, ok: 2 };
   alerts.sort((a, b) => (rank[a.severity] - rank[b.severity]) || (b._ts.localeCompare(a._ts)));

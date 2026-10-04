@@ -33,7 +33,7 @@ const HI: Record<string, string> = {
   "Low body temperature": "शरीर का तापमान कम", "Eye temperature below usual": "आँख का तापमान सामान्य से कम",
   "High respiratory rate": "साँस की दर ज़्यादा", "Respiratory pattern": "साँस का पैटर्न",
   "Abnormal activity — colic pattern": "असामान्य गतिविधि — पेट दर्द (कॉलिक) का पैटर्न",
-  "Low lying-down time": "लेटने का समय कम", "Possible lameness": "लंगड़ापन संभव", "Low water intake": "पानी कम पिया",
+  "Low lying-down time": "लेटने का समय कम", "Uneven movement": "चाल असमान", "Low water intake": "पानी कम पिया",
   "Stable vice": "अस्तबल की आदत", "Activity unusual for this horse": "इस घोड़े के लिए असामान्य गतिविधि",
   "No manure seen": "लीद नहीं दिखी", "No urination seen": "पेशाब नहीं दिखा", "Less manure than usual": "सामान्य से कम लीद",
   "Lying down and getting up repeatedly": "बार-बार लेटना और उठना", "Possibly cast — check the horse now": "शायद फँसा हुआ — अभी घोड़े को देखें",
@@ -54,7 +54,7 @@ const HI: Record<string, string> = {
   "Respiratory rate · uncalibrated": "साँस की दर · कैलिब्रेट नहीं", "Daily rest · camera": "रोज़ का आराम · कैमरा",
   "Water intake": "पानी", "Time outside box": "बॉक्स के बाहर समय",
   // horse page — wearable (leg tag, halter hub, pelvis) and stall sensors (water, feeder, hay)
-  "Steps and lameness": "कदम और लंगड़ापन", "Steps today": "आज के कदम", Steps: "कदम", "Last 7 days": "पिछले 7 दिन",
+  "Steps and movement": "कदम और चाल", "Steps today": "आज के कदम", Steps: "कदम", "Last 7 days": "पिछले 7 दिन",
   today: "आज", "Latest trot": "आख़िरी दुलकी जाँच", "Recent trots": "हाल की दुलकी जाँचें",
   flagged: "चिह्नित", "not flagged": "चिह्नित नहीं", "own normal": "इसका सामान्य", "no leg singled out": "कोई एक पैर नहीं",
   "left front": "बायाँ अगला पैर", "right front": "दायाँ अगला पैर", "left hind": "बायाँ पिछला पैर", "right hind": "दायाँ पिछला पैर",

@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Play, RotateCcw } from "lucide-react";
 import * as api from "../data/api";
-import type { Agreement, CheckMoment } from "../data/api";
+import type { Agreement, CheckMoment, HitRates } from "../data/api";
 import { useStable, useToast } from "../store";
 
 const STATES = [["lying", "Lying down"], ["eating", "Eating at the hay"], ["resting", "Standing at rest"], ["moving", "Moving about"]] as const;
@@ -48,6 +48,7 @@ export default function Validation() {
 
   return (
     <div>
+      <AlertHitRates />
       <div className="card" style={{ marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "end" }}>
         <div className="field" style={{ margin: 0, minWidth: 180 }}>
           <label>Horse</label>
@@ -169,6 +170,46 @@ function AgreementCard({ r }: { r: Agreement | null }) {
         </>
       ) : <p className="muted" style={{ fontSize: 13 }}>No lying / eating / standing checks yet.</p>}
       <small className="muted" style={{ display: "block", marginTop: 10 }}>{r.note}</small>
+    </div>
+  );
+}
+
+/** How often each kind of alert was right, from staff's marks on the Alerts
+ *  page — what decides which alerts to trust, and when to end a silent trial. */
+function AlertHitRates() {
+  const [h, setH] = useState<HitRates | null>(null);
+  useEffect(() => { api.hitRates().then((r) => r.ok && setH(r.data)); }, []);
+  if (!h) return null;
+  const trial = h.trialUntil && Date.parse(h.trialUntil) > Date.now();
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-head">
+        <h3>How often each alert was right</h3>
+        <span className="sub">{trial ? `silent trial until ${new Date(h.trialUntil!).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "from staff's marks on the Alerts page"}</span>
+      </div>
+      {!h.types.length ? (
+        <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+          No alerts marked yet. On the Alerts page, after looking at the horse, mark each alert right or wrong — the share that were right shows here per kind.
+        </p>
+      ) : (
+        <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+          <thead><tr>{["Alert", "Right", "Wrong", "Unsure", "Right, of those judged"].map((x, i) => <th key={x} style={{ textAlign: i ? "right" : "left", padding: "4px 6px", fontWeight: 600 }}>{x}</th>)}</tr></thead>
+          <tbody>
+            {h.types.map((t) => (
+              <tr key={t.type} style={{ borderTop: "1px solid var(--border, rgba(0,0,0,.06))" }}>
+                <td style={{ padding: "4px 6px" }}>{t.type}</td>
+                <td style={{ padding: "4px 6px", textAlign: "right" }}>{t.right}</td>
+                <td style={{ padding: "4px 6px", textAlign: "right" }}>{t.wrong}</td>
+                <td style={{ padding: "4px 6px", textAlign: "right" }} className="muted">{t.unsure}</td>
+                <td style={{ padding: "4px 6px", textAlign: "right" }}>
+                  {t.rate === null ? "—" : <b style={{ color: t.judged < 10 ? undefined : t.rate >= 70 ? "var(--positive)" : t.rate < 40 ? "var(--alert)" : "var(--warn)" }}>{t.rate}%</b>}
+                  {t.judged > 0 && t.judged < 10 && <small className="muted"> · only {t.judged}</small>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

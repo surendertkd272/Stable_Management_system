@@ -8,7 +8,7 @@ import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, 
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
 import { NormalCard, GaitCheckButton } from "./HorseNormal";
-import { UnusualCard, FoalingCard } from "./HorseCare";
+import { UnusualCard, FoalingCard, BodyTempCard, HorseRecordCard, bodyTempWords } from "./HorseCare";
 import { DeleteHorseButton } from "./RecycleBin";
 import { useAuth } from "../auth";
 import { FEATURES } from "../features";
@@ -203,10 +203,19 @@ export default function HorseDetail() {
             </div>
           )}
           <div className="grid cols-4" style={{ marginBottom: 24 }}>
+            {/* body temperature by the cameras, from the horse's own normal eye (server/core-temp.mjs) */}
+            <MetricCard
+              icon={<Heart size={18} />}
+              label="Body temperature · camera"
+              value={bodyTempWords(horse).value === "—" ? null : bodyTempWords(horse).value.replace(" ", "")}
+              note={{ text: bodyTempWords(horse).note, stale: false }}
+              delta={null}
+              spark={[]}
+            />
             {live.vitals.body_temp_c ? (
               <MetricCard
                 icon={<Heart size={18} />}
-                label={live.vitals.body_temp_c.calibrated === false ? "Body temperature · uncalibrated" : "Body temperature"}
+                label={live.vitals.body_temp_c.calibrated === false ? "Eye temperature · uncalibrated" : "Eye temperature"}
                 muted={live.vitals.body_temp_c.calibrated === false}
                 value={`${live.vitals.body_temp_c.value.toFixed(1)}°C`}
                 note={readAt(live.vitals.body_temp_c.ts)}
@@ -214,7 +223,7 @@ export default function HorseDetail() {
                 spark={live.charts.body_temp_c}
               />
             ) : (
-              <MetricCard icon={<Heart size={18} />} label="Body temperature" value={null} delta={null} spark={[]} />
+              <MetricCard icon={<Heart size={18} />} label="Eye temperature" value={null} delta={null} spark={[]} />
             )}
             {live.vitals.respiratory_rate_bpm && (
               <MetricCard
@@ -312,9 +321,11 @@ export default function HorseDetail() {
         </div>
       )}
 
-      {horse && (horse.unusual || horse.sex === "Mare" || horse.foalingDue) && (
+      {horse && (
         <div className="grid cols-2" style={{ marginBottom: 24 }}>
+          <BodyTempCard horse={horse} />
           <UnusualCard horse={horse} />
+          <HorseRecordCard horse={horse} canEdit={!user || user.role !== "owner"} />
           <FoalingCard horse={horse} canEdit={!user || user.role !== "owner"} />
         </div>
       )}
@@ -520,7 +531,7 @@ export default function HorseDetail() {
             No live video is wired into this dashboard yet — the camera streams to the edge box
             for on-device analysis, not to this browser.{" "}
             {horse.vitals?.bodyTempC != null && horse.vitals?.respRateBpm != null
-              ? `Latest reading: ${horse.vitals.bodyTempC.toFixed(1)} °C, ${Math.round(
+              ? `Latest: body temperature ${horse.vitals.bodyTempC.toFixed(1)} °C (camera), ${Math.round(
                   horse.vitals.respRateBpm,
                 )} bpm.`
               : ""}
@@ -890,7 +901,7 @@ function MotionCard({ m }: { m: HorseMotion | null }) {
   if (!m)
     return (
       <NotMeasuredCard
-        title="Steps and lameness"
+        title="Steps and movement"
         text="No wearable readings for this horse. Steps, exercise and the trot check need its leg tag and halter hub (Hardware → Wearables)."
       />
     );
@@ -907,7 +918,7 @@ function MotionCard({ m }: { m: HorseMotion | null }) {
   return (
     <div className="card">
       <div className="card-head" style={{ gap: 8 }}>
-        <h3 className="flex center gap-sm"><Footprints size={16} /> {t("Steps and lameness")}</h3>
+        <h3 className="flex center gap-sm"><Footprints size={16} /> {t("Steps and movement")}</h3>
         <span className="pill ok">
           <FlaskConical size={12} /> {t("wearable")}
         </span>

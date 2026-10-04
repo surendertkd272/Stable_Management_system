@@ -22,6 +22,18 @@ test("alert types map to the Settings groups; unknown types are sent (fail open)
   assert.equal(groupOf("Person at the stall at night"), "security");
   assert.equal(groupOf("Dangerous heat in the stall"), "heat");
   assert.equal(groupOf("Hot, humid stall"), "heat");
+  assert.equal(groupOf("Possible fever"), "temperature");
+  assert.equal(groupOf("Several horses with fever"), "outbreak");
+  assert.equal(groupOf("Isolation: no temperature today"), "checks");
+  assert.equal(groupOf("Vet check due after a long journey"), "checks");
+  assert.equal(groupOf("Hardly lying down"), "sleep");
+  assert.equal(groupOf("Shifting weight more than usual"), "lameness");
+  assert.equal(groupOf("Uneven movement — left fore"), "lameness");
+  assert.equal(groupOf("Foal not nursing yet"), "foaling");
+  assert.equal(groupOf("Placenta not passed"), "foaling");
+  assert.equal(groupOf("Drinking less than usual"), "water");
+  assert.equal(groupOf("Eating less than usual"), "eating");
+  assert.equal(groupOf("Very hot, humid stall"), "heat");
   assert.equal(groupOf("Something new"), null);
 });
 
@@ -59,6 +71,23 @@ test("instant alerts: off sends nothing; a muted group is not sent; others are, 
   const off = mergeSettings(DEFAULTS, { delivery: { instant: false } });
   await dispatch([A("t2", "Elevated body temperature")], off);
   assert.equal(sent.length, 1);
+  configureNotify({});
+});
+
+test("the silent trial: alerts are shown, nothing is sent or escalated until the date", async () => {
+  resetNotify();
+  let t = Date.parse("2026-10-04T10:00:00");
+  const sent = [];
+  configureNotify({ send: async (p) => { sent.push(p); return "delivered"; }, clock: () => t });
+  const s = mergeSettings(DEFAULTS, { delivery: { escalation: true, recipients: { manager: "+91 1" } } });
+  s.delivery.trialUntil = "2026-10-18T18:29:59.000Z";
+  await tick({ alerts: [A("f1", "Possible fever")], settings: s });
+  t += 60 * 60000;
+  await tick({ alerts: [A("f1", "Possible fever")], settings: s });
+  assert.equal(sent.length, 0, "held during the trial");
+  t = Date.parse("2026-10-19T10:00:00");
+  await tick({ alerts: [A("f2", "Possible fever")], settings: s });
+  assert.deepEqual(sent.map((p) => p.id), ["f2"], "after the trial, new alerts go out");
   configureNotify({});
 });
 

@@ -103,6 +103,8 @@ export default function Dashboard() {
   const aimed = liveHorses.filter((h) => h.vitals?.calibrated !== false);
   const unaimed = liveHorses.filter((h) => h.vitals?.calibrated === false).length;
   const vitalsMissing = liveHorses.length ? "no camera reading yet" : "no live camera reading";
+  // body temperature by the camera needs 3 days of each horse's eye readings first
+  const tempMissing = aimed.some((h) => h.bodyTemp?.camera?.learning) ? "learning each horse's normal (3 days)" : vitalsMissing;
   const temps = aimed.map((h) => h.vitals?.bodyTempC).filter((n): n is number => n != null);
   const resps = aimed.map((h) => h.vitals?.respRateBpm).filter((n): n is number => n != null);
   const avgTemp = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
@@ -158,11 +160,11 @@ export default function Dashboard() {
       />
       <StatCard
         icon={<Thermometer size={20} />}
-        label={unaimed ? `Avg body temperature · ${unaimed} un-aimed camera${unaimed > 1 ? "s" : ""} excluded` : "Avg body temperature"}
+        label={unaimed ? `Avg body temperature · ${unaimed} un-aimed camera${unaimed > 1 ? "s" : ""} excluded` : "Avg body temperature · camera"}
         value={avgTemp === null ? null : avgTemp.toFixed(1)}
         unit="°C"
-        spark={series.bodyTemp ?? []}
-        missingNote={vitalsMissing}
+        spark={[]}
+        missingNote={tempMissing}
       />
       <StatCard
         icon={<Wind size={20} />}

@@ -264,6 +264,19 @@ class MotionMeter:
             body = self.envelope
         return min(1.0, moved / body), body_x
 
+    def moved_share(self, bounds, within_frames):
+        """Share (0..1) of the sample points inside `bounds` (pixels) that
+        moved in the last `within_frames` frames; None with too few points."""
+        x0, y0, x1, y1 = bounds
+        n = moved = 0
+        for k, fno in enumerate(self.last_moved):
+            x, y = self.xs[k], self.ys[k]
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                n += 1
+                if self.frame_no - fno <= within_frames:
+                    moved += 1
+        return moved / n if n >= 12 else None
+
     def moving_cells(self, bounds, cols, rows, within_frames):
         """Cells of a cols×rows grid over `bounds` (pixels) where something
         moved in the last `within_frames` frames — where the horse is."""

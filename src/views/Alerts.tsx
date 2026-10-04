@@ -2,8 +2,11 @@
 
 import { useT } from "../i18n";
 import { useState } from "react";
-import { AlertTriangle, Droplet, Sparkles, Activity, Check, Bell, Wind, Repeat, Moon } from "lucide-react";
-import { useStable } from "../store";
+import { AlertTriangle, Droplet, Sparkles, Activity, Check, Bell, Wind, Repeat, Moon, ThumbsUp, ThumbsDown, Thermometer } from "lucide-react";
+import { useStable, useToast } from "../store";
+import * as api from "../data/api";
+import type { Verdict } from "../data/api";
+import type { Alert } from "../data/mock";
 
 const ICON: Record<string, React.ReactNode> = {
   "Early colic pattern": <AlertTriangle size={19} />,
@@ -15,12 +18,28 @@ const ICON: Record<string, React.ReactNode> = {
   "Respiratory pattern": <Wind size={19} />,
   "Stable vice": <Repeat size={19} />,
   "Low lying-down time": <Moon size={19} />,
+  "Possible fever": <Thermometer size={19} />,
+  "Body temperature rising": <Thermometer size={19} />,
+  "Hardly lying down": <Moon size={19} />,
 };
+
+const VERDICT: Record<Verdict, string> = { right: "Marked right", wrong: "Marked wrong", unsure: "Marked unsure" };
 
 export default function Alerts() {
   const { alerts: list, acknowledge: ack } = useStable();
   const { t } = useT();
+  const notify = useToast();
   const [tab, setTab] = useState<"open" | "all">("open");
+  const [marks, setMarks] = useState<Record<string, Verdict>>({});
+  // Was it right? Counted per kind of alert on the Accuracy page — how the
+  // stable learns which alerts to trust (and ends a silent trial).
+  const mark = async (a: Alert, verdict: Verdict) => {
+    const r = await api.alertVerdict(a.id, { verdict, type: a.type, horse: a.horse });
+    if (!r.ok) { notify(r.error); return; }
+    setMarks((m) => ({ ...m, [a.id]: verdict }));
+    ack(a.id);
+    notify(verdict === "right" ? "Marked right — thank you" : verdict === "wrong" ? "Marked wrong — it counts against this kind of alert" : "Marked unsure");
+  };
 
   const shown = tab === "open" ? list.filter((a) => !a.acknowledged) : list;
   const open = list.filter((a) => !a.acknowledged).length;
@@ -80,7 +99,7 @@ export default function Alerts() {
             </div>
             <span style={{ marginTop: 4 }}>{a.detail}</span>
           </div>
-          <div style={{ flexShrink: 0 }}>
+          <div style={{ flexShrink: 0, display: "grid", gap: 6, justifyItems: "end" }}>
             {a.acknowledged ? (
               <span className="pill ok">
                 <Check size={13} /> {t("Acknowledged")}
@@ -90,6 +109,15 @@ export default function Alerts() {
                 {t("Acknowledge")}
               </button>
             )}
+            {(marks[a.id] ?? a.verdict) ? (
+              <span className={`pill ${(marks[a.id] ?? a.verdict) === "wrong" ? "warn" : "muted"}`}>{VERDICT[(marks[a.id] ?? a.verdict)!]}</span>
+            ) : a.horse !== "Stable" && a.severity !== "ok" && (
+              <span className="flex center" style={{ gap: 4, fontSize: 12 }}>
+                <span className="muted">Right?</span>
+                <button className="btn-ghost" style={{ padding: "3px 8px" }} title="The horse showed what the alert said" onClick={() => mark(a, "right")}><ThumbsUp size={13} /></button>
+                <button className="btn-ghost" style={{ padding: "3px 8px" }} title="Nothing was wrong with the horse" onClick={() => mark(a, "wrong")}><ThumbsDown size={13} /></button>
+              </span>
+            )}
           </div>
         </div>
       ))}
@@ -98,9 +126,9 @@ export default function Alerts() {
           the empty state carried it too) — the backend delivers one flat
           webhook per alert, not an escalation chain. See notify.mjs. */}
       <p className="muted" style={{ fontSize: 12, marginTop: 18, lineHeight: 1.5 }}>
-        EquiCare provides behavioural context, not diagnosis. Each new alert is delivered once,
-        by webhook, to whatever you have connected — it does not yet chase an unacknowledged
-        alert up a chain on its own.
+        EquiCare provides behavioural context, not diagnosis. Who is called, and when an unacknowledged
+        alert goes up the chain, is set in Settings. Marking each alert right or wrong after looking at
+        the horse shows, per kind of alert, how often it is right (Accuracy checks).
       </p>
     </>
   );

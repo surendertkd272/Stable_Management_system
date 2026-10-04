@@ -583,6 +583,56 @@ EYE_RING_C = 1.0                       # the skin round an eye is at least this 
 EYE_MAX_SHARE = 0.12                   # an eye covers little of the window around it
 
 
+class WeightShiftCounter:
+    """Weight shifts while the horse stands: a brief movement low in the
+    horse's box (the legs, its lowest 30 %) while the body above stays still —
+    a foot lifted and put down again. Shifting weight between the feet is the
+    commonest early sign of laminitis (owners' reports: OR 17.7) and of limb
+    pain; the server compares the rate per standing hour with the horse's own
+    (CLINICAL_RESEARCH.md, part B).
+
+    Our rule, not a published one, fed once a second with the share of the
+    leg and body sample points that moved in the last second:
+      a burst starts when the legs move (>= LEG_ON) with the body still
+        (<= BODY_STILL) — a moving body is walking, not shifting weight;
+      it counts when it ends within MAX_BURST_S (longer is pawing or
+        stamping), at least MIN_GAP_S after the last one counted.
+    Fly-stamping and tail-swishing low on the hocks look alike to it: the
+    count is compared with the horse's own usual, never judged alone."""
+
+    LEG_ON = 0.06
+    BODY_STILL = 0.03
+    MAX_BURST_S = 4.0
+    MIN_GAP_S = 5.0
+    MAX_DT = 3.0                  # a gap in the looks longer than this is not standing time
+
+    def __init__(self):
+        self.count, self.standing_s = 0, 0.0
+        self.burst_t, self.last_count_t, self.last_t = None, float("-inf"), None
+
+    def feed(self, t, standing, leg_share=0.0, body_share=0.0):
+        if self.last_t is not None and standing and 0 < t - self.last_t <= self.MAX_DT:
+            self.standing_s += t - self.last_t
+        self.last_t = t
+        if not standing or body_share is None or body_share > self.BODY_STILL:
+            self.burst_t = None                     # lying, out of view, or the whole horse moving
+            return
+        if leg_share is not None and leg_share >= self.LEG_ON:
+            if self.burst_t is None:
+                self.burst_t = t
+            return
+        # the legs settled: a shift if it was short, and not the same one again
+        if self.burst_t is not None and t - self.burst_t <= self.MAX_BURST_S and t - self.last_count_t >= self.MIN_GAP_S:
+            self.count += 1
+            self.last_count_t = t
+        self.burst_t = None
+
+    def drain(self):
+        out = {"count": self.count, "standingS": round(self.standing_s, 1)}
+        self.count, self.standing_s = 0, 0.0
+        return out
+
+
 def hotspot_candidates(vals, cols, rows, n=3):
     """Up to n (col, row, °C), hottest first, of the readings on a cols×rows
     grid that could be an eye on a head: 33–41 °C, not on the frame edge, with

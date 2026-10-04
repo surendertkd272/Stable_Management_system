@@ -1084,6 +1084,8 @@ class MtrpcCameraWorker(CameraWorker):
         self.horse_focus, self.people_px, self._focus_t = None, [], None   # last detection (colour pixels)
         self.people_s = 0                  # seconds with people at the stall, this window
         self.budget, self.where = {}, {}   # this window: seconds per state; seconds per 12x8 cell (where he stood)
+        from behaviour import WeightShiftCounter  # noqa
+        self.wshift = WeightShiftCounter()  # feet lifted and put down while standing still (behaviour.py)
         self.cfloor, self.cfloor_events = None, []
         # Recognition looks only when something may have changed (see _identity_due).
         self._idst = {"last_t": None, "verdict": None, "seen_t": None, "absent": False, "people_t": None,
@@ -1307,6 +1309,18 @@ class MtrpcCameraWorker(CameraWorker):
             moving = self.vanalyzer.motion.moving_cells(self.cfloor.bounds, self.cfloor.COLS, self.cfloor.ROWS, 30) \
                 if (self.vanalyzer and self.cfloor) else set()
         state = self._budget_state(best, motion, rois.get("hay"))
+        # Weight shifts: standing at rest (not eating — the head is low at the
+        # hay), hooves in the picture; the legs are the box's lowest 30 %, the
+        # body its middle (the head, higher up, moves on its own).
+        with self._lock:
+            if best and state == "resting" and best["y1"] < 0.99 and self.vanalyzer is not None:
+                bx0, by0, bx1, by1 = best["x0"] * vw, best["y0"] * vh, best["x1"] * vw, best["y1"] * vh
+                hgt, lag = by1 - by0, int(getattr(self.vanalyzer, "fs", 10))
+                leg = self.vanalyzer.motion.moved_share((int(bx0), int(by1 - 0.3 * hgt), int(bx1), int(by1)), lag)
+                body = self.vanalyzer.motion.moved_share((int(bx0), int(by0 + 0.25 * hgt), int(bx1), int(by0 + 0.65 * hgt)), lag)
+                self.wshift.feed(t, True, leg, body)
+            else:
+                self.wshift.feed(t, False)
         with self._lock:
             self.budget[state] = self.budget.get(state, 0) + self.DETECT_EVERY_S
             if best:                                         # where he stood: his hooves, the box's bottom middle
@@ -1652,7 +1666,13 @@ class MtrpcCameraWorker(CameraWorker):
         if self.HAS_THERMAL:
             grid = self.cam.read_pixels(grid_points({"x0": 0, "y0": 0, "x1": 10000, "y1": 10000}, 8))
             present, why = horse_present(grid, eye if eye is not None else box_peak)   # warm eye box: a head filling the view
+            # The stall's own temperature as the camera sees it (the cool tenth
+            # of the view: walls, floor): the body-temperature calibration
+            # allows for it (server/core-temp.mjs).
+            seen = sorted(v for v in grid if v is not None)
+            bg_c = seen[len(seen) // 10] if len(seen) >= 16 else None
         else:
+            bg_c = None
             # No temperatures: the colour picture alone. With the horse detector
             # a minute with no horse box and no movement is an empty stall.
             present = True if seen_colour else (False if self.detector is not None else None)
@@ -1675,7 +1695,8 @@ class MtrpcCameraWorker(CameraWorker):
         if head_in_view and self.HAS_THERMAL:                # vitals only when the head is in the thermal view
             if eye is not None:
                 add("body_temp_c", eye, "°C", conf=(0.95 if eye_method.startswith("eye box") else 0.7) if calibrated else 0.3,
-                    method=eye_method, readAt=round(eye_at, 1), where=eye_where, **vit)   # when the eye was read: a report's photo comes from then
+                    method=eye_method, readAt=round(eye_at, 1), where=eye_where,   # when the eye was read: a report's photo comes from then
+                    **({"bgC": round(bg_c, 2)} if bg_c is not None else {}), **vit)
             if nostril_c is not None and in_boxes:          # the nostril box is on the nostril only when the eye box is on the eye
                 add("nostril_temp_c", nostril_c, "°C", conf=0.9 if calibrated else 0.3, method="nostril box average", **vit)
         # Why the eye was (not) read this minute, and where it was found — the
@@ -1766,6 +1787,12 @@ class MtrpcCameraWorker(CameraWorker):
                 method="people seen in the colour picture, once a second")
             with self._lock:
                 budget, where = dict(self.budget), sorted(self.where.items())
+                wsh = self.wshift.drain()
+            if wsh["standingS"] >= 60:
+                add("weight_shift_count", wsh["count"], "count", source="visible_video", conf=0.4, windowMin=wmin,
+                    standingS=wsh["standingS"], prototype=True,
+                    method="once a second while standing at rest: a short movement in the lowest 30 % of the horse's box "
+                           "with the body still (a foot lifted and put down)")
             if budget:
                 add("time_budget", sum(budget.values()), "s", source="visible_video", conf=0.5, windowMin=wmin,
                     **{f"{k}S": budget.get(k, 0) for k in ("lying", "eating", "resting", "moving", "unseen")},

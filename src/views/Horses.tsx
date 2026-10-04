@@ -86,10 +86,11 @@ export default function Horses() {
               <div className="m">
                 <b title={h.vitals?.calibrated === false ? "Camera not aimed — reading unreliable" : undefined}
                    style={h.vitals?.calibrated === false ? { color: "var(--text-secondary)" } : undefined}>
-                  {h.vitals?.bodyTempC == null ? "—" : h.vitals.calibrated === false ? "not aimed" : `${h.vitals.bodyTempC.toFixed(1)}°`}
+                  {h.vitals?.calibrated === false ? "not aimed" : h.vitals?.bodyTempC != null ? `${h.vitals.bodyTempC.toFixed(1)}°`
+                    : h.bodyTemp?.camera?.learning ? <span style={{ fontSize: 12 }}>learning</span> : "—"}
                 </b>
-                <span>
-                  <Thermometer size={11} style={{ verticalAlign: "-1px" }} /> temp
+                <span title="Body temperature by the thermal camera, from this horse's own normal eye temperature">
+                  <Thermometer size={11} style={{ verticalAlign: "-1px" }} /> body temp
                 </span>
               </div>
               <div className="m">

@@ -29,7 +29,7 @@ export function NormalCard({ horseId, name, canEdit }: { horseId: string; name: 
     const r = await api.setBaseline(horseId, body);
     if (!r.ok) { notify(r.details?.[0] ?? r.error); return; }
     setC(r.data); setEditing(false);
-    notify("reset" in body ? "Back to the first days as the normal" : "Baseline set");
+    notify("reset" in body ? "Back to the latest settled days as the normal" : "Baseline set");
   };
   const rows = (c?.rows ?? []).filter((r) => r.baseline !== null || r.recent !== null);
   return (
@@ -43,12 +43,13 @@ export function NormalCard({ horseId, name, canEdit }: { horseId: string; name: 
         <p className="muted" style={{ fontSize: 13 }}>Learning {name}&apos;s normal — it needs a day with at least 4 hours watched.</p>
       ) : !c.window?.set && c.baselineDays < 3 && !c.comparedDays ? (
         <p className="muted" style={{ fontSize: 13 }}>
-          Learning {name}&apos;s normal: day {c.baselineDays} of 3. From day 4 each day is compared with these first days.
+          Learning {name}&apos;s normal: day {c.baselineDays} of 3. From day 4 each day is compared with the days before it.
         </p>
       ) : (
         <>
           <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
-            Normal: {c.window ? `${day(c.window.from)} – ${day(c.window.to)}` : "—"} ({c.baselineDays} day{c.baselineDays === 1 ? "" : "s"}{c.window?.set ? `, set by ${c.window.by ?? "the stable"}` : ", its first days monitored"}).
+            Normal: {c.window ? `${day(c.window.from)} – ${day(c.window.to)}` : "—"} ({c.baselineDays} day{c.baselineDays === 1 ? "" : "s"}{c.window?.set ? `, set by ${c.window.by ?? "the stable"}` : ", its latest settled days — up to 14, the first nights after a move left out"}).
+            {c.provisional ? " Provisional until it has 7 days." : ""}
             {c.comparedDays ? " Compared: the latest day." : " No day after the baseline yet."}
           </p>
           <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse", tableLayout: "fixed" }}>
@@ -70,7 +71,7 @@ export function NormalCard({ horseId, name, canEdit }: { horseId: string; name: 
       {editing && (
         <Modal open onClose={() => setEditing(false)} title={`${name}'s normal`}
           footer={<>
-            <button className="btn-ghost" onClick={() => save({ reset: true })}>Use the first days</button>
+            <button className="btn-ghost" onClick={() => save({ reset: true })}>Use the latest 14 days</button>
             <div className="grow" />
             <button className="btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
             <button className="btn-primary" disabled={!from || !to} onClick={() => save({ from: new Date(`${from}T12:00`).toISOString(), to: new Date(`${to}T12:00`).toISOString() })}>Save</button>
@@ -86,7 +87,8 @@ export function NormalCard({ horseId, name, canEdit }: { horseId: string; name: 
   );
 }
 
-const GRADES = [["sound", "Sound"], ["mild", "Mild asymmetry"], ["moderate", "Moderate"], ["severe", "Severe"]] as const;
+// Movement asymmetry, not a lameness grade: many sound horses move a little unevenly.
+const GRADES = [["sound", "Even"], ["mild", "Mild asymmetry"], ["moderate", "Moderate asymmetry"], ["severe", "Marked asymmetry"]] as const;
 const LIMBS = [["", "—"], ["LF", "left fore"], ["RF", "right fore"], ["LH", "left hind"], ["RH", "right hind"]] as const;
 
 export function GaitCheckButton({ horseId, name, onSaved }: { horseId: string; name: string; onSaved?: () => void }) {

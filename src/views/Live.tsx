@@ -14,6 +14,8 @@ import { Camera, Play, Square, FileText, Loader2, CircleDot, Thermometer, Wind, 
 import Link from "next/link";
 import * as api from "../data/api";
 import { useStable } from "../store";
+import { bodyTempWords } from "./HorseCare";
+import type { Horse } from "../data/mock";
 import { ZoomImage, WHOLE, type ZoomView } from "../components/Zoom";
 
 type Snap = { url?: string; error?: string; at?: number; live?: boolean };
@@ -129,7 +131,7 @@ function LivePicture({ camId, name, paused, view, onView, marks = [] }: {
   );
 }
 
-function CameraLive({ cam, horse }: { cam: api.ThermalCamera | api.IpCamera; horse: { id: string; name: string } | null }) {
+function CameraLive({ cam, horse }: { cam: api.ThermalCamera | api.IpCamera; horse: Horse | null }) {
   // A camera the stable already owns has the colour picture only.
   const thermal = cam.kind === "thermal_camera";
   const [paused, setPaused] = useState(false);
@@ -269,6 +271,11 @@ function CameraLive({ cam, horse }: { cam: api.ThermalCamera | api.IpCamera; hor
                 </span>
               )}
             </b></div>
+            {thermal && (
+              <div><span><Thermometer size={13} /> Body temperature</span><b>
+                {(() => { const w = bodyTempWords(horse); return w.state === "none" ? "not read in the last 30 min" : w.state === "learning" ? w.note : `${w.value} · ${w.note}`; })()}
+              </b></div>
+            )}
             <div><span><Wind size={13} /> Breathing</span><b>{rr ? `${Math.round(rr.value)} /min · ${ago(rr.ts)}${rr === rLive ? " · last 35 s" : b?.breathing?.regularity != null ? ` · regularity ${b.breathing.regularity.toFixed(2)}` : ""}` : thermal ? "no rate yet — needs 30 s with the head still" : "no rate yet — from the flank, when he stands still side-on (draw a flank box)"}
               {v.breathing_check && v.breathing_check.value === 0 && v.breathing_check.detail && (!rr || v.breathing_check.ts > rr.ts) && (
                 <span className="muted" style={{ display: "block", fontWeight: 400, fontSize: 12 }}>last minute: no rate — {v.breathing_check.detail} ({ago(v.breathing_check.ts)})</span>

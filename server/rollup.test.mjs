@@ -109,37 +109,44 @@ test("a healthy 35 C eye reading raises no low-temperature alarm", () => {
   assert.deepEqual(types(noBase), [], "no baseline yet: an eye reading cannot be called low");
 });
 
-test("eye +1.0 C over own baseline -> watch; +1.5 C -> urgent", () => {
-  const warn = [...eyeHistory(), R("body_temp_c", 36.1, 0, EYE)];
+// The camera's body temperature: 37.8 °C + how far the eye is from this
+// horse's own normal at this time of day (server/core-temp.mjs).
+test("eye +0.6 C over own normal -> rising (watch); +1.1 C -> possible fever (urgent)", () => {
+  const warn = [...eyeHistory(), R("body_temp_c", 35.6, 0, EYE)];
   assert.equal(statusOf(warn), "watch");
   assert.ok(types(warn).includes("Body temperature rising"));
-  const alert = [...eyeHistory(), R("body_temp_c", 36.6, 0, EYE)];
+  assert.equal(summarizeHorse(BIO, warn).vitals.bodyTempC, 38.4);
+  assert.equal(summarizeHorse(BIO, warn).vitals.eyeTempC, 35.6);
+  const alert = [...eyeHistory(), R("body_temp_c", 36.1, 0, EYE)];
   assert.equal(statusOf(alert), "urgent");
-  assert.ok(types(alert).includes("Elevated body temperature"));
+  assert.ok(types(alert).includes("Possible fever"));
+  assert.equal(summarizeHorse(BIO, alert).vitals.bodyTempC, 38.9);
 });
 
 test("eye 1.5 C below own baseline -> a check-the-horse note, not a hypothermia alarm", () => {
-  const rd = [...eyeHistory(), R("body_temp_c", 33.4, 0, EYE)];
+  const rd = [...eyeHistory(), R("body_temp_c", 33.4, 0.5, EYE), R("body_temp_c", 33.4, 0, EYE)];
   assert.equal(statusOf(rd), "watch");
   assert.ok(types(rd).includes("Eye temperature below usual"));
   assert.ok(!types(rd).includes("Low body temperature"));
 });
 
 test("fewer than 3 days of eye history is not a baseline", () => {
-  const rd = [...eyeHistory(35.0, 2), R("body_temp_c", 36.6, 0, EYE)];
+  const rd = [...eyeHistory(35.0, 1.25), R("body_temp_c", 36.6, 0, EYE)];   // under 24 h: at most 2 calendar days
   assert.deepEqual(types(rd), [], "1.6 C over two days of data is not judged");
+  assert.equal(summarizeHorse(BIO, rd).vitals.bodyTempC, null, "no body temperature while learning");
+  assert.equal(summarizeHorse(BIO, rd).bodyTemp.camera.learning, true);
 });
 
 test("an eye reading at the rectal fever line alerts even without a baseline", () => {
   const rd = [...healthy().filter((r) => r.metric !== "body_temp_c"), R("body_temp_c", 38.7, 0, EYE)];
-  assert.ok(types(rd).includes("Elevated body temperature"), "the eye is cooler than the core, so this is a fever");
+  assert.ok(types(rd).includes("Possible fever"), "the eye is cooler than the core, so this is a fever");
 });
 
 test("a fever building in the last 6 h does not raise its own baseline", () => {
   const rd = eyeHistory();
   for (let h = 0; h < 6; h++) rd.push(R("body_temp_c", 36.4 + h * 0.05, h, EYE));
   rd.push(R("body_temp_c", 36.6, 0, EYE));
-  assert.ok(types(rd).includes("Elevated body temperature"));
+  assert.ok(types(rd).includes("Possible fever"));
 });
 
 // ---- point 4: respiratory rate -------------------------------------------- //
@@ -180,7 +187,7 @@ test("low lying time alone -> watch, not colic", () => {
 // ---- point 7: lameness ---------------------------------------------------- //
 test("gait asymmetry >= 0.35 -> lameness watch", () => {
   const rd = [...healthy(), R("gait_asymmetry", 0.42, 0)];
-  assert.ok(types(rd).includes("Possible lameness"));
+  assert.ok(types(rd).includes("Uneven movement"));
   assert.equal(statusOf(rd), "watch");
 });
 
@@ -348,7 +355,7 @@ test("an uncalibrated fever reading does not raise a fever alert either", () => 
 test("a calibrated reading still alerts exactly as before", () => {
   const rd = [...healthy(), R("body_temp_c", 39.5, 0, { source: "thermal_camera", meta: { calibrated: true } })];
   const types = buildAlerts([BIO], rd, () => false).map((a) => a.type);
-  assert.ok(types.includes("Elevated body temperature"));
+  assert.ok(types.includes("Possible fever"));
   assert.ok(!types.includes("Camera not aimed"));
 });
 
@@ -360,7 +367,8 @@ test("readings with no calibration tag (simulator, older edge agents) are truste
 test("uncalibrated readings are shown but flagged, and kept out of charts and baselines", () => {
   const rd = [R("body_temp_c", 31.4, 0, UNCAL), R("respiratory_rate_bpm", 14, 0, UNCAL)];
   const h = summarizeHorse(BIO, rd);
-  assert.equal(h.vitals.bodyTempC, 31.4, "the value stays visible");
+  assert.equal(h.vitals.eyeTempC, 31.4, "the value stays visible");
+  assert.equal(h.vitals.bodyTempC, null, "but it is not a body temperature");
   assert.equal(h.vitals.calibrated, false, "and is flagged");
   assert.equal(vitalsForHorse(rd).body_temp_c.calibrated, false);
   assert.equal(h.baselineProgress, 0, "an un-aimed camera is not learning the horse");

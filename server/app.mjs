@@ -23,6 +23,7 @@ import { createStore, dataDir } from "./store.mjs";
 import { dispatch, notifyStatus, tick, ackValid } from "./notify.mjs";
 import { dailyTick, listDaily, dailyPath, dailyStatus } from "./daily-reports.mjs";
 import { rulesApi } from "./rules-api.mjs";
+import { careApi } from "./care-api.mjs";
 import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
 import { sessionReport } from "./session.mjs";
 import { clientReport, safeTimeZone } from "./client_report.mjs";
@@ -77,6 +78,9 @@ async function ready() {
     G.insights = insightsApi({ store: s, json, CORS, roster: () => s.list("horses") });
     G.recycle = recycleApi({ store: s, json });
     G.rules = rulesApi({ store: s, json, roster: () => s.list("horses") });
+    // the care log (new hay, journeys, arrivals…) and outbreak mode feed the alerts
+    G.care = careApi({ store: s, json, roster: () => s.list("horses"), readingsFor: (id) => s.readingsForHorse(id),
+      onChange: () => configureRollup(rollupConfig(s)) });
     G.devices.migrate();           // camera-only records from the first hardware version
     // A leg recording waits for the hub's own (head) recording, and the
     // pelvis sensor's when the hub has one paired.
@@ -92,6 +96,7 @@ async function ready() {
       G.notifyTimer = setInterval(() => {
         G.recycle?.purgeExpired();                    // horses past their 30 days in the bin
         configureRollup(rollupConfig(s));             // cameras' people-detection switches may have changed
+        G.care?.refresh();                            // horses' flags and arrivals may have changed
         const all = s.allReadings(), horses = s.list("horses");
         const alerts = buildAlerts(horses, all, s.isAcked);
         if (G.devices?.deviceAlerts) alerts.push(...G.devices.deviceAlerts(s.isAcked));
@@ -166,7 +171,7 @@ async function reportHtml(s, bio, from, to, { notes = "", tz } = {}) {
   const cam = camDevs[0] || s.list("devices").find((d) => (d.kind === "thermal_camera" || d.kind === "ip_camera") && d.stall === bio.stall) || null;
   const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
   const { html } = await clientReport({
-    horse: { id: bio.id, name: bio.name, stall: bio.stall }, readings: rd, from, to,
+    horse: { id: bio.id, name: bio.name, stall: bio.stall, species: bio.species }, readings: rd, from, to,
     floorWatched: camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : cam ? Boolean(cam.rois?.floor || cam.rois?.colourFloor) : null,
     notes, tz,
     grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
@@ -189,7 +194,7 @@ const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const rollupConfig = (s) => {
   const cur = currentSettings(s);
   return { activity: activityBands(cur.sensitivity),
-    named: { ...cur.security, untrusted: s.list("devices").filter((d) => d.peopleTrusted === false).map((d) => d.id) } };
+    named: { ...cur.security, outbreak: cur.outbreak, untrusted: s.list("devices").filter((d) => d.peopleTrusted === false).map((d) => d.id) } };
 };
 const bearer = (req) => (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
 const authed = (req, token) => !token || bearer(req) === token;   // machine tokens (edge ingest)
@@ -633,11 +638,49 @@ h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%
       if (who?.role !== "owner" && devices?.deviceAlerts)
         alerts.push(...devices.deviceAlerts(store.isAcked));
       dispatch(alerts, currentSettings(store)).catch((e) => console.error("[notify]", e.message));
-      return json(200, alerts);
+      // was it right? (staff mark it; the silent trial and the accuracy page count these)
+      const marks = new Map(store.list("alert_reviews").map((r) => [r.alertId, r.verdict]));
+      return json(200, alerts.map((a) => (marks.has(a.id) ? { ...a, verdict: marks.get(a.id) } : a)));
     }
 
     const ack = path.match(/^\/api\/alerts\/(.+)\/ack$/);
     if (ack && method === "POST") { store.ackAlert(decodeURIComponent(ack[1])); return json(200, { ok: true }); }
+
+    // POST /api/alerts/:id/verdict { verdict: right | wrong | unsure, type, horse, note }
+    const verdict = path.match(/^\/api\/alerts\/(.+)\/verdict$/);
+    if (verdict && method === "POST") {
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      let b;
+      try { b = JSON.parse((await req.text()) || "{}"); } catch { return json(400, { error: "malformed JSON" }); }
+      if (!["right", "wrong", "unsure"].includes(b.verdict)) return json(400, { error: "verdict: right, wrong or unsure" });
+      const alertId = decodeURIComponent(verdict[1]);
+      const row = { alertId, verdict: b.verdict, type: String(b.type ?? "").slice(0, 120), horse: String(b.horse ?? "").slice(0, 80),
+        note: String(b.note ?? "").trim().slice(0, 300), by: who?.username || who?.name || "admin", at: new Date().toISOString() };
+      const old = store.list("alert_reviews").find((r) => r.alertId === alertId);
+      const saved = old ? store.update("alert_reviews", old.id, row) : store.create("alert_reviews", row);
+      store.ackAlert(alertId);
+      return json(200, saved);
+    }
+    // GET /api/alerts/hit-rates: per kind of alert, how often staff found it right
+    if (path === "/api/alerts/hit-rates" && method === "GET") {
+      if (who?.role === "owner") return json(404, { error: "not found" });
+      const by = new Map();
+      for (const r of store.list("alert_reviews")) {
+        const k = r.type.replace(/^Staff rule: .*/, "Staff rules") || "Other";
+        const e = by.get(k) ?? { type: k, right: 0, wrong: 0, unsure: 0 };
+        e[r.verdict]++; by.set(k, e);
+      }
+      const s = currentSettings(store);
+      return json(200, { trialUntil: s.delivery.trialUntil, held: notifyStatus().trialHeld,
+        types: [...by.values()].map((e) => ({ ...e, judged: e.right + e.wrong, rate: e.right + e.wrong ? Math.round((100 * e.right) / (e.right + e.wrong)) : null }))
+          .sort((a, b) => b.judged - a.judged) });
+    }
+
+    // ---- the Health checks page and care log (server/care-api.mjs) -------- //
+    if (path.startsWith("/api/care")) {
+      const res = await G.care.handle(req, url, who);
+      if (res) return res;
+    }
 
     if (path === "/api/series" && method === "GET") {
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days")) || 7));
@@ -688,7 +731,7 @@ h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%
       const camDevs = store.list("devices").filter((d) => cams.has(d.id));
       const floorWatched = camDevs.length ? camDevs.some((d) => d.rois?.floor || d.rois?.colourFloor) : null;
       return json(200, sessionReport({ readings: rd, from, to, clips, alerts, floorWatched, thermal: thermalAt(store, bio, camDevs),
-        horse: { id: bio.id, name: bio.name, stall: bio.stall } }));
+        horse: { id: bio.id, name: bio.name, stall: bio.stall, species: bio.species } }));
     }
 
     // ---- client report: the designed A4 report for a horse's owner or vet --- //
@@ -932,6 +975,7 @@ h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%
           seedRow = { ...body, password: hashPassword(body.password) };
         }
         const created = store.create(kind, seedRow);
+        if (kind === "horses") G.care?.refresh();
         return json(201, kind === "users" ? publicUser(created) : created);
       }
 
@@ -944,6 +988,7 @@ h1{font-size:21px;margin:0 0 10px}button{font:inherit;font-weight:600;width:100%
           : body;
         const row = store.update(kind, id, patch);
         if (!row) return json(404, { error: "not found", kind, id });
+        if (kind === "horses") G.care?.refresh();     // colic-risk flags, arrival, species
         return json(200, kind === "users" ? publicUser(row) : row);
       }
 

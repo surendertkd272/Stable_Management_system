@@ -111,6 +111,8 @@ export default function SettingsPage() {
               </div>
             )}
             {!isAdmin && <p className="muted" style={{ fontSize: 12 }}>Only an administrator can change these.</p>}
+            <TrialRow until={d!.trialUntil} held={st.notify.trialHeld ?? 0} disabled={off}
+              onSave={(v) => save({ delivery: { trialUntil: v } }, v ? "Silent trial on — nothing is sent until then" : "Silent trial ended — alerts are sent")} />
             <Row label="Instant alerts" desc={`Each urgent alert, once, to ${d!.chain[0]?.name || d!.chain[0]?.role || "the first person"} below — a phone call, SMS or WhatsApp, with a link to say "seen".`}
               on={d!.instant} flip={() => !off && save({ delivery: { instant: !d!.instant } })} />
             <Row label="Watch notes by text" desc={`Watch-level notes (a person at the stall at night, a hot stall) as a text to ${d!.chain[0]?.name || d!.chain[0]?.role || "the first person"} — never a call, never passed on.`}
@@ -197,17 +199,20 @@ export default function SettingsPage() {
           source here yet and cannot fire.
         </p>
         {st && ([
-          ["temperature", "Temperature", "Eye temperature against the horse's own baseline.", readiness("thermal_camera", "thermal camera")],
+          ["temperature", "Temperature", "Possible fever and a rising body temperature, by the thermal camera against the horse's own normal.", readiness("thermal_camera", "thermal camera")],
           ["breathing", "Breathing", "Resting breathing rate from the nostril or flank.", readiness("thermal_camera", "thermal camera")],
           ["casting", "Possibly cast", "Down with repeated struggling and not getting up (from the camera).", readiness("visible_video", "camera")],
-          ["colic", "Colic", "Possible colic when two signs come together — lying down and getting up again and again, rolling, long flat lying, eating less, no droppings, restlessness.", readiness("visible_video", "camera")],
-          ["foaling", "Foaling", "A mare in her foaling window showing signs of labour (set the due date on her page).", readiness("visible_video", "camera")],
+          ["colic", "Colic", "Possible colic when two signs come together — lying down and getting up again and again, rolling, long flat lying, eating less, no droppings, restlessness, unusually quiet — or one sign in a risk period (Health checks → care log).", readiness("visible_video", "camera")],
+          ["foaling", "Foaling", "A mare in her foaling watch showing two signs of labour; after foaling, a foal not standing or nursing, or the placenta not passed, in time.", readiness("visible_video", "camera")],
+          ["eating", "Eating less", "A whole day at the hay well below this horse's usual, and feed left.", readiness("visible_video", "camera")],
+          ["checks", "Health checks", "A new arrival not read by the thermal camera today; a vet check due after a long journey.", undefined],
+          ["outbreak", "Several horses with fever", "Two or more horses with a fever at once, and the outbreak-mode countdown.", readiness("thermal_camera", "thermal camera")],
           ["activity", "Activity unusual", "Well above or below this horse's own normal.", readiness("visible_video", "camera")],
           ["vices", "Stable vices", "New or increased weaving, box walking, head tossing (crib-biting not detected yet).", readiness("visible_video", "camera")],
-          ["sleep", "Sleep / lying", "Little lying at night; low lying time.", readiness("visible_video", "camera")],
+          ["sleep", "Sleep / lying", "Little lying at night; hardly lying down for 3 days.", readiness("visible_video", "camera")],
           ["elimination", "Urination", "No urination seen for a long time.", readiness("visible_video", "camera")],
-          ["lameness", "Gait & lameness", "Movement asymmetry.", readiness("imu_optical", "IMU tag")],
-          ["water", "Low water intake", "Below this horse's own normal.", readiness("flow_meter", "flow meter")],
+          ["lameness", "Uneven movement", "Movement asymmetry at the trot (wearable), and shifting weight far more than usual while standing (camera).", undefined],
+          ["water", "Drinking less", "Below this horse's own normal, two days running.", readiness("flow_meter", "flow meter")],
           ["security", "Person at night", "Someone at a stall in the quiet hours (Night security).", readiness("visible_video", "camera")],
           ["heat", "Stall heat", "The stall's heat index (temperature + humidity) at 130 watch, 150 danger.", undefined],
           ["staff", "Staff rules", "Alerts from the rules your staff set (Alert rules page).", undefined],
@@ -426,6 +431,35 @@ function CoverageCard() {
             </span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** A silent trial: alerts show and are marked right or wrong, nothing is sent
+ *  until the date — so the stable knows which alerts to trust first. */
+function TrialRow({ until, held, disabled, onSave }: { until: string | null; held: number; disabled: boolean; onSave: (v: string | null) => void }) {
+  const active = until !== null && Date.parse(until) > Date.now();
+  const [d, setD] = useState(() => new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10));
+  return (
+    <div className={active ? "row watch" : ""} style={{ padding: active ? "10px 12px" : "6px 0", marginBottom: 8, display: "block" }}>
+      <div className="flex between center wrap" style={{ gap: 8 }}>
+        <div>
+          <b style={{ fontSize: 13.5 }}>Silent trial</b>
+          <div className="muted" style={{ fontSize: 12, maxWidth: 560 }}>
+            {active
+              ? `On until ${new Date(until!).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}: alerts show here and are marked right or wrong on the Alerts page, but nobody is called or texted${held ? ` (${held} held so far)` : ""}. Accuracy checks shows how often each kind was right.`
+              : "For the first weeks: alerts show and staff mark each one right or wrong, but nothing is sent — then switch on only the kinds that proved right."}
+          </div>
+        </div>
+        {active ? (
+          <button className="btn-ghost" disabled={disabled} onClick={() => onSave(null)}>End the trial</button>
+        ) : (
+          <div className="flex center" style={{ gap: 6 }}>
+            <input type="date" value={d} min={new Date().toISOString().slice(0, 10)} disabled={disabled} onChange={(e) => setD(e.target.value)} />
+            <button className="btn-ghost" disabled={disabled || !d} onClick={() => onSave(d)}>Start</button>
+          </div>
+        )}
       </div>
     </div>
   );

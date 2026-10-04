@@ -17,6 +17,11 @@
 // A hardcoded WhatsApp integration needs an account, a verified sender and
 // templates, which is a commercial decision, so none is baked in.
 //
+// A silent trial (delivery.trialUntil): until that date nothing is sent — the
+// alerts show in the app as always, and staff mark each one right or wrong on
+// the Events page, so the stable knows how often each kind is right before
+// anyone's phone rings for it.
+//
 //   NOTIFY_WEBHOOK_URL   POST JSON here
 //   NOTIFY_MIN_SEVERITY  "alert" (default) | "warn" | "ok" — for instant alerts
 //   NOTIFY_DISABLED=1    log only
@@ -39,8 +44,9 @@ const S = (globalThis.__equicareNotify ??= {
   failed: 0, notified: 0, escalated: 0, digests: 0,
   send: null, clock: null,
   phone: null, lastCall: new Map(),   // number -> time of the last call
-  calls: 0, texts: 0, phoneFailed: 0,
+  calls: 0, texts: 0, phoneFailed: 0, trialHeld: 0,
 });
+S.trialHeld ??= 0;
 S.lastCall ??= new Map();
 
 async function webhook(payload) {
@@ -69,7 +75,7 @@ export function resetNotify() {
   S.lastCall.clear();
   S.lastDigestDay = null;
   S.failed = S.notified = S.escalated = S.digests = 0;
-  S.calls = S.texts = S.phoneFailed = 0;
+  S.calls = S.texts = S.phoneFailed = S.trialHeld = 0;
 }
 const now = () => (S.clock ? S.clock() : Date.now());
 async function send(payload) {
@@ -79,6 +85,8 @@ async function send(payload) {
   return outcome;
 }
 
+/** In the silent trial: alerts are shown and reviewed, not sent. */
+export const inTrial = (settings, t = now()) => { const u = Date.parse(settings?.delivery?.trialUntil ?? ""); return Number.isFinite(u) && t < u; };
 const allowed = (a, settings) => {
   const g = groupOf(a.type);
   return g === null || settings?.send?.[g] !== false;
@@ -140,10 +148,12 @@ async function phoneSend(d, person, a, { level, minutes, textOnly = false }) {
 export async function dispatch(alerts, settings = null) {
   const { min } = env();
   const d = settings?.delivery ?? { instant: true };
+  const trial = inTrial(settings);
   const fresh = alerts.filter((a) => !a.acknowledged && !S.sent.has(a.id) && RANK[a.severity] <= RANK[min]);
   for (const a of fresh) {
     S.sent.set(a.id, { at: now(), level: 1 });
     if (d.instant === false || !allowed(a, settings)) continue;
+    if (trial) { S.trialHeld++; console.log(`[notify] trial, not sent: ${a.horse ?? ""} ${a.type}`); continue; }
     await send({ kind: "alert", level: 1, to: toAt(d, 1), ...(personAt(d, 1) ? { role: personAt(d, 1).role } : {}), ...payloadOf(a) });
     await phoneSend(d, personAt(d, 1), a, { level: 1 });
     S.notified++;
@@ -154,6 +164,7 @@ export async function dispatch(alerts, settings = null) {
     for (const a of notes) {
       S.sent.set(a.id, { at: now(), level: 1, note: true });
       if (!allowed(a, settings)) continue;
+      if (trial) { S.trialHeld++; continue; }
       await phoneSend(d, personAt(d, 1), a, { level: 1, textOnly: true });
     }
   }
@@ -170,8 +181,9 @@ export async function tick({ alerts, horses = [], settings }) {
   await dispatch(alerts, settings);
   const d = settings?.delivery ?? {};
   const t = now();
+  const trial = inTrial(settings, t);
   // Escalation: urgent alerts nobody acknowledged.
-  if (d.escalation) {
+  if (d.escalation && !trial) {
     const open = new Map(alerts.filter((a) => !a.acknowledged).map((a) => [a.id, a]));
     for (const [id, rec] of S.sent) {
       const a = open.get(id);
@@ -191,7 +203,7 @@ export async function tick({ alerts, horses = [], settings }) {
     }
   }
   // Digest: once a day, at or after the chosen local hour.
-  if (d.digest) {
+  if (d.digest && !trial) {
     const local = new Date(t);
     const day = `${local.getFullYear()}-${local.getMonth() + 1}-${local.getDate()}`;
     if (local.getHours() >= (d.digestHour ?? 7) && S.lastDigestDay !== day) {
@@ -214,5 +226,5 @@ export const notifyStatus = () => {
   return { transport: url ? "webhook" : "log-only", minSeverity: min, disabled,
     phones: provider() ?? "not connected", publicUrl: publicUrl() || null,
     notified: S.notified, escalated: S.escalated, digests: S.digests, failed: S.failed,
-    calls: S.calls, texts: S.texts, phoneFailed: S.phoneFailed };
+    calls: S.calls, texts: S.texts, phoneFailed: S.phoneFailed, trialHeld: S.trialHeld };
 };
