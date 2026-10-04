@@ -1016,7 +1016,7 @@ function initialForm(kind: DeviceKind, dev: Device | undefined, stall: string, e
     case "thermal_camera": return {
       ...common, stall, edgeId, host: "", httpPort: 80, https: false, rtspPort: 554, modbusPort: 502,
       username: "admin", password: "", variant: "640", thermalLens: "13", visibleLens: "4", distanceM: 3.5, emissivity: 0.98,
-      protocol: "auto", record: false, behaviourStream: "visible", colourStream: "sub",
+      protocol: "auto", record: false, behaviourStream: "visible", colourStream: "sub", peopleTrusted: true,
     };
     case "modbus_sensor": return {
       ...common, stall, edgeId, transport: "tcp", host: "", port: 502,
@@ -1272,6 +1272,11 @@ function DeviceForm({ kind, dev, edges, stalls, horses, onClose, onSaved }: {
                     <input type="checkbox" checked={Boolean(f.record)} onChange={(e) => set("record", e.target.checked)} /> Record
                     video for training — the edge box keeps this camera&apos;s thermal and visible video in 10-minute clips
                     (about 0.4 GB an hour; oldest deleted past 100 GB), to label in Footage &amp; labels
+                  </label>
+                  <label className="hw-check" style={{ marginTop: 8 }}>
+                    <input type="checkbox" checked={f.peopleTrusted !== false} onChange={(e) => set("peopleTrusted", e.target.checked)} /> Count
+                    visits from people seen in the colour picture — switch off if this camera takes the horse for a person (it happens at
+                    night); then only visits confirmed on the recording are reported
                   </label>
                 </>
               )}

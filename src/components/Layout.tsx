@@ -31,7 +31,6 @@ import {
   LucideIcon,
   Clapperboard,
   Gauge,
-  ShieldQuestion,
 } from "lucide-react";
 import { useTheme } from "../theme";
 import { useAuth } from "../auth";
@@ -62,7 +61,6 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/reports", label: "Reports", icon: FileText },
       { to: "/diary", label: "Care Diary", icon: NotebookPen },
       { to: "/guide", label: "Behaviour guide", icon: BookOpen },
-      { to: "/limits", label: "What it can't do", icon: ShieldQuestion },
       { to: "/session", label: "Session report", icon: ClipboardList, staffOnly: true },
     ],
   },
@@ -272,7 +270,6 @@ function TopBar() {
     "/guide": { h1: "Behaviour guide", p: "What horse behaviour patterns may mean — from open veterinary sources" },
     "/footage": { h1: "Footage & labels", p: "Recorded camera video — mark what the horse does, for training" },
     "/events": { h1: "Events & clips", p: "What happened, with a clip, a verdict and what to do — confirm or correct each one" },
-    "/limits": { h1: "What EquiCare can't do", p: "Plainly: what is measured, what is a prototype, and what nobody can measure yet" },
     "/validation": { h1: "Accuracy checks", p: "People count, the system measures — how closely they agree" },
   };
 

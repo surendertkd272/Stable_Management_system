@@ -251,3 +251,10 @@ test("a too-hot 'eye' (people, sun) is a picture to check, not a fever; system t
     { from: DAY0 - H, to: DAY0 + H, eyeBaseline: 36.0, alerts: [{ id: "a", type: "Monitoring offline", severity: "alert", detail: "no data" }] });
   assert.deepEqual(ev.map((e) => [e.kind, e.verdict]).sort(), [["alert", "watch"], ["eye_odd", "watch"]]);
 });
+
+test("a camera whose people-detection is not trusted lists no visits", () => {
+  const rd = [R("people_in_view_s", 40, DAY0, { deviceId: "cam" })];
+  const at = (trusted) => buildEvents({ id: "zarina", name: "Zarina" }, rd, { from: DAY0 - H, to: DAY0 + H, peopleTrusted: () => trusted });
+  assert.equal(at(true).filter((e) => e.kind === "visit").length, 1);
+  assert.equal(at(false).filter((e) => e.kind === "visit").length, 0);
+});

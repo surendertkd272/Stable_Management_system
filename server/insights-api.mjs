@@ -87,11 +87,13 @@ export function insightsApi({ store, json, CORS, roster }) {
       const reviews = new Map(store.list("event_reviews").map((r) => [r.eventId, r]));
       const clipsAt = listClips();
       const all = store.allReadings();
+      const untrusted = new Set(store.list("devices").filter((d) => d.peopleTrusted === false).map((d) => d.id));
+      const peopleTrusted = (cam) => !untrusted.has(cam);
       const out = [];
       for (const h of horses) {
         const rd = all.filter((r) => r.horseId === h.id);
         const alerts = buildAlerts([h], all, store.isAcked).map((a) => ({ ...a, ts: undefined }));
-        for (const e of buildEvents(h, rd, { from, to, alerts: only ? alerts : [], eyeBaseline: eyeBase(h, rd, tz) })) {
+        for (const e of buildEvents(h, rd, { from, to, alerts: only ? alerts : [], eyeBaseline: eyeBase(h, rd, tz), peopleTrusted })) {
           const t = Date.parse(e.at);
           const video = e.camera ? clipsAt.some((c) => c.camera === e.camera && c[e.stream] && Date.parse(c.at) <= t && t < Date.parse(c.end)) : false;
           out.push({ ...e, video, review: reviews.get(e.id) ?? null });

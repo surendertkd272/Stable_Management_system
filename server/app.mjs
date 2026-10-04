@@ -620,6 +620,7 @@ export async function handle(req) {
         grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
         clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
         baseline: baselineCompare(bio, rd, { tz: safeTimeZone(body.tz), from, to }),
+        autoVisits: camDevs.every((d) => d.peopleTrusted !== false),
       });
       if (url.searchParams.get("format") === "pdf") {
         try {

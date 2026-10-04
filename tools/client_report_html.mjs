@@ -133,7 +133,7 @@ const { html, ref, photos } = await clientReport({
   grabFull: cam && clips.length ? frameGrabber(cam.id, "visible", undefined, { crop }) : null,
   mapCrop: crop || [0, 0.09, 1, 0.91],
   client: arg("client", ""),
-  review, marks, lastLive, autoVisits: !flag("no-auto-visits"),
+  review, marks, lastLive, autoVisits: !flag("no-auto-visits") && cams.every((d) => d.peopleTrusted !== false),
   boxes: arg("boxes") ? JSON.parse(readFileSync(arg("boxes"), "utf8")) : null,
   trough: arg("trough") ? arg("trough").split(",").map(Number) : null,
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),

@@ -172,6 +172,11 @@ export function validateDevice(kind, body, existing = {}, all = [], { horses = [
       // Keep thermal + visible video on the edge box for labelling and
       // training (off by default: it is continuous footage, and disk).
       record: pick("record", false) === true,
+      // Whether people found in the colour picture are counted as visits. Off
+      // where the detector takes the horse for a person (1–2 Oct, RVC, at
+      // night: the horse's dark hindquarters) — then only visits a person
+      // confirms on the recording are reported.
+      peopleTrusted: pick("peopleTrusted", true) !== false,
       // Which picture behaviour (activity, lying, vices) is read from.
       // Colour is the default: more detail, and the horse detector runs on
       // it. (On the demo unit both pictures show about the same ~25° view.)

@@ -49,7 +49,7 @@ export const EVENT_KINDS = {
 const VERDICT_RANK = { vet: 0, watch: 1, normal: 2 };
 
 /** The events in [from, to) from a horse's readings (and its current alerts). */
-export function buildEvents(horse, readings, { from, to, alerts = [], eyeBaseline = null } = {}) {
+export function buildEvents(horse, readings, { from, to, alerts = [], eyeBaseline = null, peopleTrusted = () => true } = {}) {
   const inWin = readings.filter((r) => { const t = Date.parse(r.ts); return t >= from && t < to; })
     .sort((a, b) => a.ts.localeCompare(b.ts));
   const out = [];
@@ -85,7 +85,7 @@ export function buildEvents(horse, readings, { from, to, alerts = [], eyeBaselin
         detail: `${r.value.toFixed(1)} °C, ${(r.value - eyeBaseline).toFixed(1)} °C above this horse's normal` });
     else if (m === "horse_identity" && r.meta?.verdict === "other")
       push("other_horse", r, { detail: `looks like ${r.meta?.bestName ?? r.meta?.best ?? "another horse"} (${r.meta?.bestScore ?? "?"})` });
-    else if (m === "people_in_view_s" && r.value >= 20) {
+    else if (m === "people_in_view_s" && r.value >= 20 && peopleTrusted(r.meta?.deviceId)) {
       const last = out.findLast((e) => e.kind === "visit");
       if (!last || Date.parse(r.ts) - Date.parse(last.at) > 10 * 60000) push("visit", r);
     }
