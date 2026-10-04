@@ -406,6 +406,97 @@ for t in range(122, 160):
 check("box swapping (bottom jumps): not a buckle", [e["kind"] for e in tr.drain()["events"]] == [])
 check("dozing after a quiet minute", (lambda t: (play(t, doze(0, 90)), t.dozing(89.0))[1])(tracker()))
 
+# ---- the lying model's three guards (1 Oct night) -------------------------- #
+from behaviour import view_signature, view_same  # noqa: E402
+
+
+def lying_events(seq):
+    tr = tracker()
+    for t, h, score in seq:
+        b = bx(h, 0.45 if h > 0.35 else 0.7)
+        b["score"] = score
+        tr.feed(t, b, 0.05)
+    return [e["kind"] for e in tr.drain()["events"]], tr
+
+
+# eating head-down at the back: two minutes on the split (0.33–0.37 of 0.35), never clearly below
+seq = [(float(t), 0.44, 0.8) for t in range(0, 60)] + [(float(t), 0.33 + 0.04 * ((t * 7) % 5) / 4, 0.8) for t in range(60, 200)]
+seq += [(float(t), 0.44, 0.8) for t in range(200, 260)]
+ev, _ = lying_events(seq)
+check("head down on the split for 2 min: not lying down", ev == [], ev)
+# lying, then flat on its side: a few unsure boxes a little above the split
+seq = [(float(t), 0.44, 0.8) for t in range(0, 40)] + [(float(t), 0.25, 0.8) for t in range(40, 160)]
+seq += [(float(t), 0.37, 0.33) for t in range(160, 240, 3)] + [(float(t), 0.25, 0.8) for t in range(240, 300)]
+ev, _ = lying_events(seq)
+check("flat on its side (unsure boxes): no get-up", ev == ["lie_down"], ev)
+# a real lie-down and get-up still pass the band
+seq = [(float(t), 0.44, 0.8) for t in range(0, 40)] + [(float(t), 0.25, 0.8) for t in range(40, 160)] + [(float(t), 0.45, 0.8) for t in range(160, 230)]
+ev, _ = lying_events(seq)
+check("real lie-down and get-up still counted", ev == ["lie_down", "get_up"], ev)
+
+# another camera's picture: nothing judged until the view is back
+W0, H0 = 88, 72
+stall = bytes((40 + (x // 8) * 9 + (y // 9) * 5) % 256 for y in range(H0) for x in range(W0))
+other = bytes((200 - (x // 5) * 13 + (y // 4) * 17) % 256 for y in range(H0) for x in range(W0))
+lit = bytes(min(255, v + 25) for v in stall)
+sa, so, sl = view_signature(stall, W0, H0), view_signature(other, W0, H0), view_signature(lit, W0, H0)
+check("the same view is the same view (and brighter)", view_same(sa, sa) and view_same(sl, sa))
+check("another camera is another view", not view_same(so, sa))
+tr = tracker()
+for i in range(6):
+    tr.see_view(sa)
+check("the model takes the view it was learned in", tr.view_ref is not None and tr.view_ok)
+tr.see_view(so)
+check("another view: not ok", not tr.view_ok)
+for t in range(0, 120):
+    tr.feed(float(t), bx(0.25, 0.7), 0.05)                       # 'lying' in the other camera's picture
+check("nothing judged in another view", [e["kind"] for e in tr.drain()["events"]] == [] and tr.head_rel(bx(0.44)) is None)
+tr.see_view(sa)
+check("back in its view: judging again", tr.view_ok and tr.head_rel(bx(0.44)) is not None)
+check("the view is kept with the model", tracker().to_state().get("view", "missing") is None and "view" in tr.to_state())
+
+# lying, seen unclearly (unsure boxes) for a minute: the minute still counts as lying
+seq = [(float(t), 0.44, 0.8) for t in range(0, 40)] + [(float(t), 0.25, 0.8) for t in range(40, 100)]
+seq += [(float(t), 0.25, 0.3) for t in range(100, 160)] + [(float(t), 0.25, 0.8) for t in range(160, 200)]
+tr = tracker()
+for t, h, sc in seq:
+    b2 = bx(h, 0.45 if h > 0.35 else 0.7)
+    b2["score"] = sc
+    tr.feed(t, b2, 0.05)
+lying_s = tr.drain()["lying_s"]
+check("down and seen unclearly: still lying time", lying_s >= 150, lying_s)
+# lying, out of sight for 20 s, seen lying again: the 20 s count as lying
+tr = tracker()
+for t in range(0, 40):
+    tr.feed(float(t), bx(0.44), 0.05)
+for t in range(40, 100):
+    tr.feed(float(t), bx(0.25, 0.7), 0.05)
+for t in range(100, 120):
+    tr.feed(float(t), None, 0.05)
+for t in range(120, 180):
+    tr.feed(float(t), bx(0.25, 0.7), 0.05)
+lying_s = tr.drain()["lying_s"]
+# lying from ~42 s (when the posture turned) to 180 s, the 20 s out of sight included: ~138 s (without it ~118)
+check("out of sight for 20 s while lying: counted", lying_s >= 135, lying_s)
+
+
+def roll_then(get_up):
+    """Lying, a burst with the box swinging, then (or not) getting up."""
+    tr = tracker()
+    rows = [(float(t), 0.44, 0.02) for t in range(0, 40)] + [(float(t), 0.25, 0.02) for t in range(40, 200)]
+    rows += [(200.0 + i, (0.25, 0.36, 0.22, 0.38, 0.24)[i % 5], 0.6) for i in range(8)]
+    after = 0.45 if get_up else 0.25
+    rows += [(float(t), after, 0.05) for t in range(208, 300)]
+    for t, h, m in rows:
+        tr.feed(t, bx(h, 0.45 if h > 0.35 else 0.7), m)
+    return [e["kind"] for e in tr.drain()["events"]]
+
+
+ev = roll_then(True)
+check("a 'roll' that was getting up is not a roll", "possible_roll" not in ev and ev[-1] == "get_up", ev)
+ev = roll_then(False)
+check("a roll while staying down is still a roll", "possible_roll" in ev and "get_up" not in ev, ev)
+
 # ---- withdrawn: head low and still, and reactions to people --------------- #
 from behaviour import DemeanourWatch  # noqa: E402
 

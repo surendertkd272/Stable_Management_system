@@ -325,6 +325,53 @@ def _median(v):
     return 0.0 if not n else (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2)
 
 
+# The view a posture model belongs to: a 64x48 grey picture, compared by the
+# correlation of the pictures (1 Oct: the same view 0.85–0.99, another
+# camera's clips about 0.0) or of their edges, which survive the infrared
+# lamp switching (same view 0.76–0.94, the other camera 0.57–0.63).
+VIEW_W, VIEW_H = 64, 48
+
+
+def view_signature(frame, w, h, channels=1):
+    """64x48 grey picture of a frame (bytes, grey or 3-channel)."""
+    out = []
+    for j in range(VIEW_H):
+        y = int((j + 0.5) * h / VIEW_H)
+        for i in range(VIEW_W):
+            x = int((i + 0.5) * w / VIEW_W)
+            k = (y * w + x) * channels
+            out.append(sum(frame[k:k + channels]) // channels)
+    return out
+
+
+def _zs(v):
+    n = len(v)
+    m = sum(v) / n
+    sd = math.sqrt(sum((x - m) ** 2 for x in v) / n) or 1.0
+    return [(x - m) / sd for x in v]
+
+
+def _edges(sig):
+    w = VIEW_W
+    return [abs(sig[r * w + c + 1] - sig[r * w + c]) + abs(sig[(r + 1) * w + c] - sig[r * w + c])
+            for r in range(VIEW_H - 1) for c in range(VIEW_W - 1)]
+
+
+def view_same(a, b):
+    """Is picture a the same camera view as picture b?"""
+    if not a or not b or len(a) != len(b):
+        return True                                             # nothing to compare: do not block
+    za, zb = _zs(a), _zs(b)
+    if sum(x * y for x, y in zip(za, zb)) / len(za) >= 0.5:
+        return True
+    ea, eb = _zs(_edges(a)), _zs(_edges(b))
+    return sum(x * y for x, y in zip(ea, eb)) / len(ea) >= 0.72
+
+
+def _median_sig(sigs):
+    return [sorted(col)[len(col) // 2] for col in zip(*sigs)]
+
+
 class PostureTracker:
     """Standing vs lying from the horse's box over time, learned per stall.
 
@@ -363,6 +410,20 @@ class PostureTracker:
     the door, where lying was 66–72 % of the head-up height and standing
     81–109 % only once a person had marked a lying stretch).
 
+    Three guards, each from the 1 Oct night (lying 02:59–04:22 seen on the
+    recording):
+      a band around the split — going down needs the box clearly below it,
+        getting up clearly above it (15 % of the gap between this view's
+        lying and standing heights each side): eating head-down at the back
+        of the stall sat on the split for two minutes and read as lying;
+      low-confidence boxes (score < 0.4) do not move the posture: a horse
+        flat on its side is the one the detector half loses (0.30–0.37 at
+        04:04, when a few such boxes read as getting up);
+      the view: a model fits the picture it was learned in. The recorder
+        interleaved another camera's clips that night ("Camera 01", another
+        stall), which read as lying down; a minute-by-minute check of the
+        picture against the model's view stops all judging in any other.
+
     The detector sometimes swaps between two boxes for one horse from one
     look to the next (1 Oct, 05:19: the horse alone, and a box twice as tall
     reaching the bottom of the picture). Hooves do not jump: a buckle must
@@ -391,6 +452,8 @@ class PostureTracker:
     PREP_S = 45.0           # no circling / pawing / sniffing in this long before
     PREP_MOTION = 0.15
     FAST_KEEP_S = 150.0
+    BAND = 0.15             # the split's band: this share of the lying–standing gap each side
+    MIN_SCORE = 0.4         # boxes the detector is less sure of do not move the posture
 
     def __init__(self, state=None):
         st = state or {}
@@ -406,14 +469,34 @@ class PostureTracker:
         self.bursts = []
         self.last_roll = self.last_cast = -1e18
         self.fast = []                                           # (t, head_rel, motion, y1, x0, x1) every sample
+        self.rolls_held = []                                     # possible rolls waiting to see whether he got up
         self.last_buckle = self.last_collapse = -1e18
         self.stand_top = st.get("standTop")                      # his standing height, head up (normalised)
         self.ref_cache = (self.model or {}).get("ref")
+        self.view_ref = st.get("view")                           # the picture the model was learned in (64x48 grey)
+        self.view_sigs = []                                      # the last hour's pictures, a minute apart
+        self.view_ok = True
         self.drain()
 
     # -- persistence ------------------------------------------------------- #
     def to_state(self):
-        return {"hist": self.hist[-self.HISTORY:], "model": self.model, "posture": self.state, "standTop": self.stand_top}
+        return {"hist": self.hist[-self.HISTORY:], "model": self.model, "posture": self.state, "standTop": self.stand_top,
+                "view": self.view_ref}
+
+    # -- the view ------------------------------------------------------------ #
+    def see_view(self, sig):
+        """Once a minute, the picture (view_signature): is it the view the
+        model was learned in? A model learned without one takes the view of
+        the hour it was learned in."""
+        self.view_sigs = (self.view_sigs + [sig])[-60:]
+        if self.view_ref is None:
+            if self.model is not None and len(self.view_sigs) >= 5:
+                self.view_ref = _median_sig(self.view_sigs[-30:])
+            return
+        same = view_same(sig, self.view_ref)
+        if same != self.view_ok:
+            self.view_ok = same
+            self.cand, self.cand_t = None, None                   # a change seen across views is no change
 
     def drain(self):
         """Per-window totals, then start a new window."""
@@ -484,6 +567,8 @@ class PostureTracker:
         self.model = {"split": split, "stand_h": stand_h, "lie_h": lie_h, "lie_ar": ars[len(ars) // 2], "ref": ref, "labelled": True,
                       "agreement": round(1 - (sum(v >= split for v in lh) / len(lh) + sum(v < split for v in sh) / len(sh)) / 2, 3)}
         self._learn_top(ref)
+        if self.view_sigs:
+            self.view_ref = _median_sig(self.view_sigs[-30:])
         return self.model
 
     def _learn_top(self, ref):
@@ -530,16 +615,39 @@ class PostureTracker:
             self.model = None
             return
         self.model = {"split": (lie_h + stand_h) / 2, "stand_h": stand_h, "lie_h": lie_h, "lie_ar": lie_ar, "ref": ref}
+        if self.view_ref is None and len(self.view_sigs) >= 5:
+            self.view_ref = _median_sig(self.view_sigs[-30:])
 
     # -- per sample --------------------------------------------------------- #
     def feed(self, t, box, motion=0.0):
         """box: {x0,y0,x1,y1} 0..1 (None = no horse box this sample)."""
         dt = 0.0 if self.last_t is None else max(0.0, min(5.0, t - self.last_t))
         self.last_t = t
+        if not self.view_ok:
+            return                                              # another view: nothing judged, nothing learned
+        if box is not None and box.get("edges", 0) < 3 and box.get("score", 1.0) < self.MIN_SCORE:
+            # A box the detector is unsure of: a horse half lost — flat on its
+            # side, usually. It does not move the posture, but a horse down
+            # and seen unclearly is still down: its time counts as lying.
+            if self.state == "lying":
+                self.acc["lying_s"] += dt
+                self.acc["lateral_s"] += dt
+                self.acc["observed_s"] += dt
+                self._lying_checks(t, motion)
+            self._release_rolls(t)
+            return
         if box is None or box.get("edges", 0) >= 3:
             # A box touching 3 edges is a head filling the view, not a posture.
             self._lost(t, dt, motion)
+            self._release_rolls(t)
             return
+        if self.lost_since is not None and self.state == "lying":
+            # Seen again after a spell out of sight while lying: the first
+            # LOST_LATERAL_S of it (which _lost does not count) was lying too —
+            # a horse half lost while down is the one flat on its side.
+            gap = min(t - self.lost_since, self.LOST_LATERAL_S)
+            self.acc["lying_s"] += gap
+            self.acc["observed_s"] += gap
         self.lost_since = None
         hgt = box["y1"] - box["y0"]
         wid = box["x1"] - box["x0"]
@@ -562,8 +670,15 @@ class PostureTracker:
         ref = self.model.get("ref")
         med_h = sorted(self._norm(r[1], r[4], ref) for r in self.recent[-5:])[len(self.recent[-5:]) // 2]
         med_ar = sorted(r[2] for r in self.recent[-5:])[len(self.recent[-5:]) // 2]
-        now = "lying" if med_h < self.model["split"] else "standing"
+        band = self.BAND * max(0.0, self.model["stand_h"] - self.model["lie_h"])
+        if med_h < self.model["split"] - band:
+            now = "lying"
+        elif med_h > self.model["split"] + band:
+            now = "standing"
+        else:
+            now = self.state or ("lying" if med_h < self.model["split"] else "standing")   # in the band: no change
         self._advance(t, now)
+        self._release_rolls(t)
         if self.state == "lying":
             self.acc["lying_s"] += dt
             if med_ar >= self.model["lie_ar"] * 1.2 and med_h <= self.model["lie_h"] * 0.9:
@@ -602,6 +717,8 @@ class PostureTracker:
             kind = "lie_down" if now == "lying" else "get_up"
             if now == "lying":
                 self._collapse_check(self.cand_t, recovered=False)
+            else:                                               # a "roll" just before getting up was the getting up
+                self.rolls_held = [r for r in self.rolls_held if r["t"] < self.cand_t - self.ROLL_HOLD_S]
             # The change began at cand_t: back-date the lying time to it.
             if now == "lying":
                 self.acc["lying_s"] += t - self.cand_t
@@ -617,7 +734,7 @@ class PostureTracker:
         """The box's height as a share of his standing height with the head
         up, at that spot (1.0 head up, ~0.8 head at the withers, lying lower).
         None unless the whole horse is in the picture."""
-        if (not box or self.stand_top is None or self.model is None
+        if (not box or self.stand_top is None or self.model is None or not self.view_ok
                 or box.get("edges", 0) > 1 or box["y0"] <= 0.01 or box["y1"] >= 0.99):
             return None                                         # no model: height says nothing about posture here
         ref = (self.model or {}).get("ref") if self.model else self.ref_cache
@@ -633,7 +750,8 @@ class PostureTracker:
     def watch(self, t, box, motion=0.0):
         """An extra sample between the once-a-second ones, for the fast checks
         only (the standing / lying model is fed by feed())."""
-        if box is not None and box.get("edges", 0) < 3 and box["y1"] > box["y0"]:
+        if (self.view_ok and box is not None and box.get("edges", 0) < 3 and box["y1"] > box["y0"]
+                and box.get("score", 1.0) >= self.MIN_SCORE):
             self._fast_sample(t, box, motion)
 
     def dozing(self, t):
@@ -723,6 +841,24 @@ class PostureTracker:
         self.acc["events"].append({"t": up[0], "kind": "possible_collapse", "fallS": round(low[0] - up[0], 1),
                                    "recovered": recovered})
 
+    ROLL_HOLD_S = 20.0
+
+    def _release_rolls(self, t):
+        """Possible rolls that were not the start of getting up: one is
+        released once he has stayed down (no get-up begun) ROLL_HOLD_S after it."""
+        if not self.rolls_held:
+            return
+        getting_up = self.cand == "standing"
+        keep = []
+        for r in self.rolls_held:
+            if getting_up and self.cand_t - r["t"] <= self.ROLL_HOLD_S:
+                keep.append(r)                                   # wait: is this the get-up?
+            elif t - r["t"] >= self.ROLL_HOLD_S and not getting_up:
+                self.acc["events"].append(r)
+            else:
+                keep.append(r)
+        self.rolls_held = keep
+
     def _lying_checks(self, t, motion):
         if motion >= 0.4:
             if not self.bursts or t - self.bursts[-1][1] > 5:
@@ -736,7 +872,8 @@ class PostureTracker:
             sd = math.sqrt(sum((v - m) ** 2 for v in hs) / len(hs))
             if m > 0 and sd / m >= 0.15 and t - self.last_roll >= 60:
                 self.last_roll = t
-                self.acc["events"].append({"t": t, "kind": "possible_roll"})
+                # held: getting up swings the box the same way (1 Oct, 04:23)
+                self.rolls_held.append({"t": t, "kind": "possible_roll"})
         long_bursts = [b for b in self.bursts if b[1] - b[0] >= 5]
         if (self.lying_since is not None and t - self.lying_since >= 600 and len(long_bursts) >= 3
                 and t - self.last_cast >= 1800):

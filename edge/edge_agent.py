@@ -1306,6 +1306,13 @@ class MtrpcCameraWorker(CameraWorker):
             self.detector, self.detector_note = None, f"detector failed: {e}"
             return False
         best = pick_horse(boxes, st.setdefault("scene", []))   # not the stall's opening (see pick_horse)
+        # Once a minute: is this still the view the lying model was learned in?
+        if self.posture is not None and snap[1] - st.get("view_t", -1e18) >= 60:
+            from behaviour import view_signature  # noqa
+            st["view_t"] = snap[1]
+            sig = view_signature(look, vw, vh, 3 if len(look) >= vw * vh * 3 else 1)
+            with self._lock:
+                self.posture.see_view(sig)
         if best:
             best["edges"] = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
             self.boxes_seen += 1
@@ -1598,6 +1605,9 @@ class MtrpcCameraWorker(CameraWorker):
                 out.append(f"{name}: connected but no frames yet")
         if self.behaviour_stream() == "visible" and self.detector_note:
             out.append(f"lying and colour floor not measured — {self.detector_note}")
+        if self.posture is not None and not self.posture.view_ok:
+            out.append("lying not judged — the picture is not the view lying was learned in (camera moved or another "
+                       "camera's stream); aim it back, or teach it lying again")
         return out[:4]
 
     def _log_warnings(self):

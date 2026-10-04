@@ -351,23 +351,54 @@ def run_chunk(job):
 
 
 def posture_samples(job):
-    """First pass: the horse box every 2 s, for learning this view's model."""
+    """First pass: the horse box every 2 s, for learning this view's model, and
+    the picture once a minute (behaviour.view_signature) — so the model is
+    learned from one camera view only. → (hist, sigs)"""
     vis, t0, t1, model = job
     from detector import load, pick_horse  # noqa
+    from behaviour import PostureTracker, view_signature  # noqa
     vw, vh = 352, 288
     det, why = load(model)
     if det is None:
-        return []
-    hist, scene = [], []
+        return [], []
+    hist, sigs, scene, last_sig = [], [], [], -1e18
     for t, _, fr in frames(vis, vw, vh, 0.5, t0, t1, "visible", "bgr24"):     # colour: see detector.py
+        if t - last_sig >= 60:
+            last_sig = t
+            sigs.append((t, view_signature(fr, vw, vh, 3)))
         best = pick_horse(det.detect(fr, vw, vh), scene)
-        if not best:
+        if not best or best.get("score", 1.0) < PostureTracker.MIN_SCORE:
             continue
         edges = (best["x0"] <= 0.01) + (best["y0"] <= 0.01) + (best["x1"] >= 0.99) + (best["y1"] >= 0.99)
         hgt, wid = best["y1"] - best["y0"], best["x1"] - best["x0"]
         if edges < 3 and hgt > 0:
             hist.append((t, [round(hgt, 4), round(wid / hgt, 3), round(best["y1"], 4)]))
-    return hist
+    return hist, sigs
+
+
+def main_view(sigs, spans=()):
+    """The view to learn in: the pictures from the stretches a person marked
+    lying, if any — else the one most of the night's pictures match. →
+    (view, test(t) -> the picture at t is that view)"""
+    from behaviour import view_same, _median_sig  # noqa
+    if not sigs:
+        return None, (lambda t: True)
+    marked = [s for t, s in sigs if any(x <= t <= y for x, y in spans)]
+    if marked:
+        view = _median_sig(marked)
+    else:
+        step = max(1, len(sigs) // 120)                          # a medoid over a sample of the night
+        cand = [s for _, s in sigs[::step]]
+        view = max(cand, key=lambda c: sum(view_same(o, c) for o in cand))
+        view = _median_sig([s for _, s in sigs if view_same(s, view)])
+    times = [t for t, _ in sigs]
+    ok = [view_same(s, view) for _, s in sigs]
+
+    def test(t):
+        import bisect
+        i = max(0, bisect.bisect_right(times, t) - 1)
+        return ok[i]
+    return view, test
 
 
 # --------------------------------------------------------------------------- #
@@ -463,12 +494,11 @@ def main():
         parts = chunks(vis, a.jobs * 2)
         with ctx.Pool(a.jobs) as pool:
             got = pool.map(posture_samples, [(p, lo, hi, model) for p in parts])
-        timed = sorted((x for g in got for x in g), key=lambda x: x[0])
-        hist = [h for _, h in timed]
+        timed = sorted((x for g in got for x in g[0]), key=lambda x: x[0])
+        sigs = sorted((x for g in got for x in g[1]), key=lambda x: x[0])
         from behaviour import PostureTracker  # noqa
-        pt = PostureTracker({"hist": hist})
+        spans = []
         if a.review_lying:
-            spans = []
             for w in a.review_lying.split(","):
                 x, y = (dt.datetime.fromisoformat(f"{dt.datetime.fromtimestamp(lo, tz).date()}T{v}").replace(tzinfo=tz).timestamp()
                         for v in w.split("-"))
@@ -477,6 +507,16 @@ def main():
                 while y < x:
                     y += 86400
                 spans.append((x, y))
+        # One camera view only: a night may hold another camera's clips (1 Oct).
+        view, in_view = main_view(sigs, spans)
+        n_all = len(timed)
+        timed = [(t, h) for t, h in timed if in_view(t)]
+        hist = [h for _, h in timed]
+        pt = PostureTracker({"hist": hist})
+        pt.view_ref = view
+        if n_all - len(timed):
+            print(f"[replay]   {n_all - len(timed)} of {n_all} boxes were in another camera view — left out", flush=True)
+        if a.review_lying:
             # Lying: inside the stretches; standing: away from them (a margin
             # of 10 minutes either side, for lying down and getting up).
             lying = [h for t, h in timed if any(x <= t <= y for x, y in spans)]
@@ -492,7 +532,7 @@ def main():
                 print(f"[replay]   posture model kept for this camera: {st}", flush=True)
         else:
             pt.learn()
-        posture_state = {"hist": pt.hist, "model": pt.model, "posture": None, "standTop": pt.stand_top}
+        posture_state = {"hist": pt.hist, "model": pt.model, "posture": None, "standTop": pt.stand_top, "view": pt.view_ref}
         print(f"[replay]   {len(hist)} horse boxes; " + (
             f"standing ~{pt.model['stand_h']:.2f}, lying ~{pt.model['lie_h']:.2f} of the frame height" if pt.model
             else "only one posture seen — lying is not measured"), flush=True)
