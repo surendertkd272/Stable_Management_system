@@ -299,7 +299,7 @@ function TopBar() {
       age: form.age.trim() || "—",
       sex: form.sex,
       stall: form.stall.trim() || "—",
-      owner: form.owner.trim() || "Bharat Sports Venture",
+      owner: FEATURES.horseOwner ? form.owner.trim() || "Bharat Sports Venture" : "—",
     });
     notify(`${form.name.trim()} added to the yard`);
     setForm(EMPTY);
@@ -370,10 +370,12 @@ function TopBar() {
             <input value={form.stall} onChange={(e) => setForm({ ...form, stall: e.target.value })} placeholder="A-10" />
           </div>
         </div>
-        <div className="field">
-          <label>Owner</label>
-          <input value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })} />
-        </div>
+        {FEATURES.horseOwner && (
+          <div className="field">
+            <label>Owner</label>
+            <input value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })} />
+          </div>
+        )}
       </Modal>
 
       <Modal open={searchOpen} onClose={() => setSearchOpen(false)} title="Find a horse">

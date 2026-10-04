@@ -4,4 +4,5 @@
 export const FEATURES = {
   billing: false,      // invoices, GST, UPI payments (/billing)
   ownerPortal: false,  // horse owners' read-only view of their own horses (/portal)
+  horseOwner: false,   // the "Owner" on each horse: its page, the Reports heading, the Add-horse form
 } as const;

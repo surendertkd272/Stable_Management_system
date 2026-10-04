@@ -11,6 +11,7 @@ import { NormalCard, GaitCheckButton } from "./HorseNormal";
 import { UnusualCard, FoalingCard } from "./HorseCare";
 import { DeleteHorseButton } from "./RecycleBin";
 import { useAuth } from "../auth";
+import { FEATURES } from "../features";
 import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour, type HorseMotion, type HorseIntake } from "../data/api";
 import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand, details } from "../components/ui";
 
@@ -135,9 +136,11 @@ export default function HorseDetail() {
             <p className="muted" style={{ marginTop: 4 }}>
               {details(horse.breed, horse.sex, horse.age, `Stall ${horse.stall}`)}
             </p>
-            <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
-              Owner: {horse.owner}
-            </p>
+            {FEATURES.horseOwner && (
+              <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+                Owner: {horse.owner}
+              </p>
+            )}
             <div
               className="row"
               style={{

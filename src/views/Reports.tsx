@@ -11,6 +11,7 @@ import { useStable, useToast } from "../store";
 import * as api from "../data/api";
 import { exportReadingsCsv, listDailyReports, downloadDailyReport, type DailyReports } from "../data/api";
 import { useAuth } from "../auth";
+import { FEATURES } from "../features";
 import { details } from "../components/ui";
 import { SessionBody, readNotes } from "./Session";
 
@@ -122,7 +123,7 @@ export default function Reports() {
             <div className="chip"><FileText size={20} /></div>
             <div>
               <b style={{ fontSize: 17, color: "var(--ink)", fontFamily: "var(--font-display)" }}>{horse.name} — {label}</b>
-              <p className="muted" style={{ fontSize: 13 }}>{details(horse.breed, horse.sex, `Stall ${horse.stall}`, `for ${horse.owner}`)}</p>
+              <p className="muted" style={{ fontSize: 13 }}>{details(horse.breed, horse.sex, `Stall ${horse.stall}`, FEATURES.horseOwner ? `for ${horse.owner}` : null)}</p>
             </div>
           </div>
           <div className="flex gap-sm wrap">
