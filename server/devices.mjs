@@ -24,6 +24,7 @@ import { readRegisters, readSensor, TYPES, WORD_ORDERS } from "./modbus.mjs";
 import { startBreathingCheck, breathingJob, jobView } from "./thermal-video.mjs";
 import { liveResponse } from "./live-video.mjs";
 import { startCoolingTest, coolingJob, coolingView, splitFromCalib } from "./cooling.mjs";
+import { OnvifPtz, validateViews, stallsOf } from "./onvif-ptz.mjs";
 
 export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device", "wearable_hub"];
 const POLLED = new Set(["thermal_camera", "modbus_sensor"]);
@@ -516,6 +517,11 @@ export function deviceApi({ store, json, CORS }) {
           r.source = "imu";
           if (!WEARABLE_DEVICE_METRICS.has(r.metric)) r.meta.prototype = true;
           if (needsSensor) (statusFor.get(dev.id) ?? statusFor.set(dev.id, []).get(dev.id)).push(r);
+        } else if (dev.kind === "thermal_camera" && dev.views?.length) {
+          // A camera watching several stalls says which stall each reading is
+          // from — only one it watches; anything else is its own stall.
+          r.stallId = stallsOf(dev).includes(r.stallId) ? r.stallId : dev.stall;
+          r.meta.stall = r.stallId;                           // two horses' readings of one second are not duplicates
         } else {
           r.stallId = dev.stall || r.stallId;
         }
@@ -528,7 +534,12 @@ export function deviceApi({ store, json, CORS }) {
           // validated measurement (it would then count towards the colic alarm).
           r.source = VIDEO_SOURCES.has(r.source) ? r.source : "thermal_camera";
           // Only the vitals depend on where the ROIs are aimed.
-          if (AIMED_METRICS.has(r.metric) && (!dev.rois || dev.rois.stale)) r.meta.calibrated = false;
+          if (AIMED_METRICS.has(r.metric)) {
+            // Aimed: the stall's close-up (a multi-stall camera) or the camera's own ROIs.
+            const close = dev.views?.find((v) => v.kind === "close" && v.stall === r.stallId);
+            const aimed = dev.views?.length ? Boolean(close && (close.rois?.eye || close.rois?.nostril)) || r.meta?.view === "wide" : Boolean(dev.rois && !dev.rois.stale);
+            if (!aimed) r.meta.calibrated = false;
+          }
         }
         seen.set(dev.id, r.ts || now());
       }
@@ -719,6 +730,12 @@ export function deviceApi({ store, json, CORS }) {
             // The horse the roster puts in this stall: recognition checks it is
             // the one standing there, and learns its look (edge/identity.py).
             stallHorse: (({ id, name } = {}) => (id ? { id, name } : null))(horses.find((h) => stallOf(h) && stallOf(h) === d.stall)),
+            // A camera watching several stalls (edge/multistall.py): its views,
+            // its zoom, and the horse in each stall it watches.
+            ...(d.views?.length ? {
+              views: d.views, ptz: d.ptz ?? null, schedule: d.schedule ?? { closeEveryMin: 5 },
+              stallHorses: Object.fromEntries(stallsOf(d).map((s) => [s, (({ id, name } = {}) => (id ? { id, name } : null))(horses.find((h) => stallOf(h) === s))])),
+            } : {}),
             colourStream: d.colourStream || "sub",
             // Urine/manure split from the floor cooling test (null = the
             // edge agent's default guess).
@@ -833,7 +850,7 @@ export function deviceApi({ store, json, CORS }) {
       return json(405, { error: "method not allowed" });
     }
 
-    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|live|rois|temps|token|events|verification|breathing|cooling))?$/);
+    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|live|rois|temps|token|events|verification|breathing|cooling|views|ptz))?$/);
     if (!m) return null;
     const dev = byId(decodeURIComponent(m[1]));
     if (!dev) return json(404, { error: "unknown device" });
@@ -947,6 +964,67 @@ export function deviceApi({ store, json, CORS }) {
         return json(200, { at: now(), ...roiReadings(temps), all: temps });
       } catch (e) {
         return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message, code: e.code });
+      }
+    }
+
+    // ---- a camera watching several stalls, zooming in on each horse --------- //
+    // views: the wide view with each stall drawn on it, and a close-up per
+    // horse (edge/multistall.py). ptz: moving the camera while setting them up.
+    if (action === "views") {
+      const bad = cameraOnly();
+      if (bad) return bad;
+      if (method === "GET") return json(200, { ptz: dev.ptz ?? null, views: dev.views ?? [], schedule: dev.schedule ?? { closeEveryMin: 5 }, stalls: stallsOf(dev) });
+      if (method === "DELETE") {
+        store.update("devices", dev.id, { ptz: null, views: null, schedule: null, updatedAt: now() });
+        event(dev, actorOf(who), "views removed", "back to one stall");
+        return json(200, publicDevice(byId(dev.id), list(), horses));
+      }
+      if (method === "PUT") {
+        const { body, error } = await readBody(req);
+        if (error) return error;
+        const { out, errs } = validateViews(body, now());
+        if (errs.length) return json(400, { error: "the zoom-camera setup is not complete", details: errs });
+        store.update("devices", dev.id, { ...out, updatedAt: now() });
+        const stalls = stallsOf({ ...dev, ...out });
+        event(dev, actorOf(who), "views set", `${out.views.length} views; stalls ${stalls.join(", ")}; close-up every ${out.schedule.closeEveryMin} min`);
+        return json(200, publicDevice(byId(dev.id), list(), horses));
+      }
+    }
+    if (action === "ptz") {
+      const bad = cameraOnly();
+      if (bad) return bad;
+      const cred = cameraPassword(dev);
+      if (cred.error) return json(400, { error: cred.error });
+      const host = await checkHost(dev.host);
+      if (!host.ok) return json(400, { error: host.error });
+      const p = new OnvifPtz({ host: dev.host, username: dev.username || "admin", password: cred.password,
+        port: Number(dev.ptz?.port ?? dev.httpPort ?? 80), path: dev.ptz?.path });
+      try {
+        if (method === "GET") {
+          const profiles = await p.profiles();
+          const presets = {};
+          for (const pr of profiles.filter((x) => x.ptz)) presets[pr.token] = await p.presets(pr.token).catch(() => []);
+          return json(200, { profiles, presets });
+        }
+        if (method === "POST") {
+          const { body, error } = await readBody(req);
+          if (error) return error;
+          const prof = String(body.profile ?? "");
+          if (!/^[A-Za-z0-9 ._:-]{1,64}$/.test(prof)) return json(400, { error: "profile (the lens's profile token) is required" });
+          const n = (v) => (v === undefined || v === null || v === "" ? null : Number(v));
+          if (body.action === "nudge") await p.nudge(prof, { pan: n(body.pan) ?? 0, tilt: n(body.tilt) ?? 0, zoom: n(body.zoom) ?? 0, seconds: n(body.seconds) ?? 0.4 });
+          else if (body.action === "absolute") await p.absolute(prof, { pan: n(body.pan), tilt: n(body.tilt), zoom: n(body.zoom) });
+          else if (body.action === "goto") await p.gotoPreset(prof, String(body.preset));
+          else if (body.action === "save") {
+            const name = String(body.name ?? "equicare").slice(0, 40);
+            const token = await p.savePreset(prof, name, body.token ? String(body.token) : null);
+            event(dev, actorOf(who), "zoom position saved", `${name} on ${prof}`);
+            return json(200, { token, status: await p.status(prof).catch(() => null) });
+          } else if (body.action !== "status") return json(400, { error: "action must be nudge, absolute, goto, save or status" });
+          return json(200, { status: await p.status(prof).catch(() => null) });
+        }
+      } catch (e) {
+        return json(502, { error: `zoom control: ${e.message}` });
       }
     }
 

@@ -29,6 +29,21 @@ import { frameGrabber, listClips } from "../server/footage.mjs";
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
 const flag = (k) => process.argv.includes(`--${k}`);
 const HOME = join(homedir(), "EquiCare-demo");
+// --horses a,b: one report per horse for the same window (e.g. two horses one
+// camera watches) — this script once for each.
+if (arg("horses")) {
+  const { spawnSync } = await import("node:child_process");
+  const rest = process.argv.slice(2);
+  const i = rest.indexOf("--horses");
+  rest.splice(i, 2);
+  let failed = 0;
+  for (const id of arg("horses").split(",").map((s) => s.trim()).filter(Boolean)) {
+    console.log(`— ${id}`);
+    const r = spawnSync(process.execPath, [process.argv[1], "--horse", id, ...rest], { stdio: "inherit" });
+    if (r.status) failed += 1;
+  }
+  process.exit(failed ? 1 : 0);
+}
 const horseId = arg("horse");
 const from = Date.parse(arg("from", ""));
 if (!horseId || !from) {
@@ -50,7 +65,10 @@ const camsFor = (a, b) => {
   const cs = devices.filter((d) => ids.has(d.id));
   return { cs, cam: cs[0] || devices.find((d) => d.kind === "thermal_camera" && d.stall === horse.stall) || null };
 };
-const floorOf = (cs, c) => (cs.length ? cs.some((d) => d.rois?.floor || d.rois?.colourFloor) : c ? Boolean(c.rois?.floor || c.rois?.colourFloor) : null);
+// A camera watching several stalls: this horse's stall on its wide view.
+const zoneOf = (c) => c?.views?.find((v) => v.kind === "wide")?.zones?.find((z) => z.stall === horse.stall) || null;
+const floorIn = (d) => Boolean(d.rois?.floor || d.rois?.colourFloor || zoneOf(d)?.rois?.floor || zoneOf(d)?.rois?.colourFloor);
+const floorOf = (cs, c) => (cs.length ? cs.some(floorIn) : c ? floorIn(c) : null);
 const { cs: cams, cam } = camsFor(from, to);
 const clips = cam ? listClips().filter((c) => c.camera === cam.id && Date.parse(c.end) >= from && Date.parse(c.at) <= to) : [];
 
@@ -97,7 +115,11 @@ if (arg("last-live")) {
   if (vals.length) lastLive = { median: vals[Math.floor(vals.length / 2)], n: vals.length, where: arg("last-live-where", "the warmest point of the head"),
     date: flag("last-live-no-date") ? "" : new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short" }).format(a) };
 }
-const crop = arg("colour-crop") ? arg("colour-crop").split(",").map(Number) : null;
+// Colour photos: the crop asked for, else this horse's own stall when the
+// camera watches several (its zone on the wide view).
+const zone = zoneOf(cam);
+const crop = arg("colour-crop") ? arg("colour-crop").split(",").map(Number)
+  : zone ? [zone.colour.x0, zone.colour.y0, zone.colour.x1, zone.colour.y1].map((v) => v / 10000) : null;
 const notes = arg("notes-file") ? readFileSync(arg("notes-file"), "utf8") : arg("notes", "");
 
 const { html, ref, photos } = await clientReport({

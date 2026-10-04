@@ -1783,6 +1783,13 @@ class MtrpcCameraWorker(CameraWorker):
 
 def camera_worker_for(dev, sink, window_s):
     """ISAPI or JSON-RPC, as the portal detected it; asks the camera if unknown."""
+    if dev.get("views"):
+        # A camera watching several stalls (with or without zoom): one worker
+        # per stall behind one connection (edge/multistall.py).
+        sys.modules.setdefault("edge_agent", sys.modules[__name__])   # one copy of this module, run as a script or not
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from multistall import ZoomCameraHub  # noqa
+        return ZoomCameraHub(dev, sink, window_s)
     proto = dev.get("protocol") or "auto"
     if proto == "auto":
         sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1947,7 +1954,7 @@ class EdgeRuntime:
     def _fingerprint(d):
         keys = ("kind", "host", "httpPort", "https", "username", "password", "port", "unitId",
                 "function", "addressing", "pollSeconds", "registers", "serial", "configError", "protocol", "rtspPort",
-                "behaviourStream", "colourStream", "transport", "serialPort", "baud", "parity", "stopBits")
+                "behaviourStream", "colourStream", "transport", "serialPort", "baud", "parity", "stopBits", "ptz")
         return hashlib.sha256(json.dumps({k: d.get(k) for k in keys}, sort_keys=True).encode()).hexdigest()
 
     def apply(self, cfg):

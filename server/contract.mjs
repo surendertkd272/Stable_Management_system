@@ -136,7 +136,10 @@ export function dedupKey(r) {
   const t = Date.parse(r.ts);
   const ts = Number.isFinite(t) ? new Date(t).toISOString() : String(r.ts ?? "");
   const m = r.meta;
-  return `${dev}|${r.metric}|${ts}|${m.sensor ?? ""}|${m.kind ?? ""}|${m.seq ?? ""}`;
+  // A camera watching several stalls sends each horse's reading of the same
+  // second: the stall keeps them apart (only those carry meta.stall, so other
+  // devices' keys are as they always were).
+  return `${dev}|${r.metric}|${ts}|${m.sensor ?? ""}|${m.kind ?? ""}|${m.seq ?? ""}${m.stall ? `|${m.stall}` : ""}`;
 }
 
 /** Where a wearable sensor sits: the leg tag (left front cannon), the halter

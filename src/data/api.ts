@@ -368,7 +368,23 @@ export interface ThermalCamera extends DeviceCommon {
   /** The last aim check: breathing found by the edge agent's own algorithm,
    *  against a hand count. Applies only while `roisAt` matches rois.pushedAt. */
   verification?: CameraVerification | null;
+  /** A camera watching several stalls (and zooming in on each horse). */
+  views?: ZoomView[] | null; ptz?: PtzSettings | null; schedule?: { closeEveryMin: number } | null;
 }
+// ---- one camera, several stalls (edge/multistall.py) ------------------------- //
+export interface PtzSettings { protocol: "onvif"; port: number; path?: string }
+/** One lens's part of a camera position: a preset saved on the camera, or pan/tilt/zoom. */
+export interface PtzMove { profile: string; preset?: string; pan?: number | null; tilt?: number | null; zoom?: number | null }
+export interface PtzPosition { moves: PtzMove[]; settleS?: number }
+export interface ZoomZone {
+  stall: string; colour: RoiBox; thermal?: RoiBox | null;
+  rois?: { hay?: RoiBox | null; colourFloor?: RoiBox | null; flank?: RoiBox | null; floor?: RoiBox | null };
+}
+export type ZoomView =
+  | { id: "wide"; kind: "wide"; position?: PtzPosition | null; zones: ZoomZone[]; pushedAt?: string }
+  | { id: string; kind: "close"; stall: string; position?: PtzPosition | null; rois: { eye?: RoiBox | null; nostril?: RoiBox | null }; pushedAt?: string };
+export interface ZoomSetup { ptz: PtzSettings | null; views: ZoomView[]; schedule: { closeEveryMin: number }; stalls?: string[] }
+export interface PtzProfile { token: string; name: string; ptz: boolean; source: string | null }
 export interface CameraVerification {
   at: string; by: string;
   breathing: { bpm: number; periodicity: number | null; seconds: number | null; samples: number | null };
@@ -450,6 +466,14 @@ export const updateDevice = (id: string, d: Partial<DeviceInput>) => call<Device
 export const deleteDevice = (id: string, force = false) =>
   call<{ ok: true }>("DELETE", dpath(id) + (force ? "?force=1" : ""));
 export const rotateToken = (id: string) => call<{ token: string }>("POST", dpath(id, "token"));
+export const getZoomSetup = (id: string) => call<ZoomSetup>("GET", dpath(id, "views"));
+export const putZoomSetup = (id: string, s: ZoomSetup) => call<Device>("PUT", dpath(id, "views"), s);
+export const deleteZoomSetup = (id: string) => call<Device>("DELETE", dpath(id, "views"));
+export const ptzInfo = (id: string) => call<{ profiles: PtzProfile[]; presets: Record<string, { token: string; name: string }[]> }>("GET", dpath(id, "ptz"), undefined, 30000);
+/** nudge (move a moment), absolute, goto (a preset), save (where the lens is now, as a preset) or status. */
+export const ptzAction = (id: string, body: { action: "nudge" | "absolute" | "goto" | "save" | "status"; profile: string;
+  pan?: number; tilt?: number; zoom?: number; seconds?: number; preset?: string; name?: string; token?: string }) =>
+  call<{ status: { pan: number | null; tilt: number | null; zoom: number | null; moving: boolean } | null; token?: string }>("POST", dpath(id, "ptz"), body, 30000);
 export const deviceEvents = (id: string) => call<DeviceEvent[]>("GET", dpath(id, "events"));
 /** Camera connection test, or a Modbus test read. `acceptIdentity` confirms a replacement camera. */
 export const probeDevice = (id: string, acceptIdentity = false) =>

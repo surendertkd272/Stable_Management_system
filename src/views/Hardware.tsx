@@ -32,6 +32,7 @@ import { SC_IT6420_HB_V2 as SPEC, assessOptics, focusFor, lensesFor, variants } 
 import { METRICS } from "../../server/contract.mjs";
 import { computeRespRate } from "../../server/respiration.mjs";
 import { Modal, Sparkline } from "../components/ui";
+import ZoomSetupModal from "./ZoomSetup";
 import { useStable, useToast } from "../store";
 import { useAuth } from "../auth";
 
@@ -124,6 +125,7 @@ export default function Hardware() {
   const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState<{ kind: DeviceKind; dev?: Device } | null>(null);
   const [calibrating, setCalibrating] = useState<ThermalCamera | null>(null);
+  const [zoomSetup, setZoomSetup] = useState<ThermalCamera | null>(null);
   const [token, setToken] = useState<{ dev: Device; token: string } | null>(null);
   const [history, setHistory] = useState<Device | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -225,6 +227,7 @@ export default function Hardware() {
     onToken: () => rotate(dev),
     onHistory: () => setHistory(dev),
     onCalibrate: dev.kind === "thermal_camera" ? () => setCalibrating(dev) : undefined,
+    onStalls: dev.kind === "thermal_camera" ? () => setZoomSetup(dev) : undefined,
   });
 
   const canEdit = isAdmin && !api.demoMode;
@@ -325,6 +328,9 @@ export default function Hardware() {
       )}
       {token && <TokenModal dev={token.dev} token={token.token} onClose={() => setToken(null)} />}
       {history && <HistoryModal dev={history} onClose={() => setHistory(null)} />}
+      {zoomSetup && (
+        <ZoomSetupModal cam={zoomSetup} stalls={stalls} onClose={() => { setZoomSetup(null); load(); }} />
+      )}
       {calibrating && (
         <CalibrateModal
           cam={calibrating}
@@ -398,6 +404,8 @@ type CardActions = {
   onToggleProbe: () => void; onProbe: (acceptIdentity?: boolean) => void; onEdit: () => void;
   onRemove: () => void; onToggle: () => void; onToken: () => void; onHistory: () => void;
   onCalibrate?: () => void;
+  /** One camera watching several stalls (zooming in on each horse). */
+  onStalls?: () => void;
 };
 
 function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardActions }) {
@@ -477,6 +485,11 @@ function DeviceCard({ dev, all, a }: { dev: Device; all: Device[]; a: CardAction
           {a.onCalibrate && (
             <button className="btn-ghost" onClick={a.onCalibrate}>
               <Crosshair size={15} /> Calibrate ROIs
+            </button>
+          )}
+          {a.onStalls && a.isAdmin && (
+            <button className="btn-ghost" onClick={a.onStalls} title="One camera watching two or more horses, zooming in on each">
+              <CameraIcon size={15} /> {dev.kind === "thermal_camera" && dev.views?.length ? `Stalls: ${dev.views.find((v) => v.kind === "wide")?.zones?.map((z) => z.stall).join(", ") ?? ""}` : "Several stalls"}
             </button>
           )}
           {TOKEN_KINDS.has(dev.kind) && (
