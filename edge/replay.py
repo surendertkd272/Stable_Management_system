@@ -389,7 +389,8 @@ def device_from_state(state_file, dev_id):
             "calibratedAt": (d.get("rois") or {}).get("pushedAt"),
             "calibrated": not (d.get("rois") or {}).get("stale"), "behaviourStream": d.get("behaviourStream"),
             "colourStream": None, "floorCalib": d.get("floorCalib") or {},
-            "stallHorse": {"id": horse["id"], "name": horse.get("name") or horse["id"]} if horse else None, "identityLearn": False}
+            "stallHorse": {"id": horse["id"], "name": horse.get("name") or horse["id"]} if horse else None,
+            "identityLearn": False, "identityHd": False}
 
 
 def post(server, token, readings, batch=500):

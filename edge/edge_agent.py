@@ -1084,6 +1084,9 @@ class MtrpcCameraWorker(CameraWorker):
         self.people_s = 0                  # seconds with people at the stall, this window
         self.budget, self.where = {}, {}   # this window: seconds per state; seconds per 12x8 cell (where he stood)
         self.cfloor, self.cfloor_events = None, []
+        # Recognition looks only when something may have changed (see _identity_due).
+        self._idst = {"last_t": None, "verdict": None, "seen_t": None, "absent": False, "people_t": None,
+                      "due": None, "busy": False}
         self._lock = threading.Lock()
 
     # -- which stream does behaviour ------------------------------------------ #
@@ -1283,24 +1286,55 @@ class MtrpcCameraWorker(CameraWorker):
         if evs:
             with self._lock:
                 self.cfloor_events += evs
-        if best and look is not snap[0]:                     # recognition needs the colour frame
-            self._identity_step(look, vw, vh, best, persons, t)
+        if look is not snap[0] and self._identity_due(best, persons, t):   # recognition needs colour
+            self._identity_step(look, vw, vh, best, t, st.setdefault("scene", []))
         return True
 
-    IDENTITY_EVERY_S = 120.0           # a look at who the horse is, every 2 min of video
+    # When recognition looks: not on a clock, when the answer may have changed —
+    # the first look, the horse back in view after being out of it, people
+    # gone after a visit (someone may have swapped horses), and a routine
+    # check every 20 min. While the answer is not settled (learning, unsure,
+    # another horse) it looks again every 2 min, so a swapped horse is
+    # confirmed within minutes. About 90% fewer looks than every 2 min.
+    IDENTITY_SETTLE_S = 120.0
+    IDENTITY_HEARTBEAT_S = 1200.0
+    ABSENT_S = 60.0                    # out of view this long, then back: look again
+    VISIT_GONE_S = 30.0                # people gone this long after a visit: look again
     LEARN_UP_TO = 60                   # gallery size learned automatically for the stall's horse
 
-    def _identity_step(self, frame, w, h, best, persons, t):
-        """Is the horse in this stall the one the roster puts here? Every
-        IDENTITY_EVERY_S with a clear view (whole horse, no people): its
+    def _identity_due(self, best, persons, t):
+        """Called every detector look: keeps track of the horse and of people,
+        and says whether recognition should look now (a clear view needed)."""
+        s = self._idst
+        if persons:
+            s["people_t"] = t
+        if not best:
+            if s["seen_t"] is not None and t - s["seen_t"] >= self.ABSENT_S:
+                s["absent"] = True
+            return False
+        s["seen_t"] = t
+        if s["absent"]:
+            s["absent"], s["due"] = False, s["due"] or "back in view"
+        if s["last_t"] is None:
+            s["due"] = s["due"] or "first look"
+        else:
+            if s["people_t"] is not None and s["people_t"] > s["last_t"] and t - s["people_t"] >= self.VISIT_GONE_S:
+                s["due"] = s["due"] or "after a visit"
+            every = self.IDENTITY_HEARTBEAT_S if s["verdict"] == "match" else self.IDENTITY_SETTLE_S
+            if t - s["last_t"] >= every:
+                s["due"] = s["due"] or ("routine check" if s["verdict"] == "match" else "settling")
+        clear = not persons and best.get("edges", 0) <= 1 and (best["x1"] - best["x0"]) * (best["y1"] - best["y0"]) >= 0.03
+        return bool(s["due"]) and clear and not s["busy"] and bool((self.dev.get("stallHorse") or {}).get("id"))
+
+    def _identity_step(self, frame, w, h, best, t, scene):
+        """Is the horse in this stall the one the roster puts here? Its
         fingerprint against the enrolled horses (edge/identity.py), sent as
-        horse_identity. While the stall's horse has a small gallery, clear
-        looks that are not clearly another enrolled horse are added to it."""
-        mine = self.dev.get("stallHorse") or {}
-        if persons or best.get("edges", 0) >= 2 or (best["x1"] - best["x0"]) * (best["y1"] - best["y0"]) < 0.03:
-            return
-        if t - getattr(self, "_id_last", -1e9) < self.IDENTITY_EVERY_S or not mine.get("id"):
-            return
+        horse_identity. Live, from a full-HD still taken now (far more detail
+        than the analysis picture, above all at night), in the background;
+        the analysis frame when that fails or in a replay. While the stall's
+        horse has a small gallery, looks that are not clearly another
+        enrolled horse are added to it."""
+        s = self._idst
         if getattr(self, "identifier", None) is None:
             if getattr(self, "identity_note", None):
                 return
@@ -1310,21 +1344,52 @@ class MtrpcCameraWorker(CameraWorker):
                 print(f"[edge] {self.name}: {self.identity_note} — horse recognition off")
                 return
             self.gallery = Gallery(STATE_DIR / "identity.json")
+        why, s["due"], s["last_t"] = s["due"], None, t
+        if self.dev.get("identityHd", True):
+            s["busy"] = True
+            threading.Thread(target=self._identity_look, args=(frame, w, h, best, why, scene),
+                             daemon=True, name=f"identity:{self.name}").start()
+        else:
+            self._identity_look(frame, w, h, best, why, scene, hd=False)
+
+    def _identity_look(self, frame, w, h, best, why, scene, hd=True):
+        from detector import pick_horse  # noqa
         from identity import decide  # noqa
         import numpy as np
-        self._id_last = t
+        s = self._idst
+        mine = self.dev.get("stallHorse") or {}
         try:
-            vec = self.identifier.embed(np.frombuffer(frame, dtype=np.uint8).reshape(h, w, 3), best)
+            img, box, src = np.frombuffer(frame, dtype=np.uint8).reshape(h, w, 3), best, "analysis picture"
+            if hd:
+                from video_analytics import grab_still  # noqa
+                d = self.dev
+                got = grab_still(d["host"], d.get("username", "admin"), d.get("password") or "", port=d.get("rtspPort", 554))
+                if got[0] is not None:
+                    bgr, gw, gh = got
+                    boxes, persons = self.detector.detect_all(bgr, gw, gh)
+                    hb = pick_horse(boxes, list(scene))
+                    if hb and not persons:
+                        hb["edges"] = (hb["x0"] <= 0.01) + (hb["y0"] <= 0.01) + (hb["x1"] >= 0.99) + (hb["y1"] >= 0.99)
+                        if hb["edges"] <= 1:
+                            img, box, src = np.frombuffer(bgr, dtype=np.uint8).reshape(gh, gw, 3), hb, f"full-HD still {gw}×{gh}"
+                elif not getattr(self, "_hd_warned", False):
+                    print(f"[edge] {self.name}: no full-HD still for recognition ({got[1]}) — using the analysis picture")
+                    self._hd_warned = True
+            vec = self.identifier.embed(img, box)
         except Exception as e:                              # noqa: BLE001
             print(f"[edge] {self.name}: horse recognition failed ({e}) — off")
             self.identifier, self.identity_note = None, f"recognition failed: {e}"
+            s["busy"] = False
             return
+        s["busy"] = False
         if vec is None:
             return
         res = decide(self.gallery, vec, mine["id"])
+        s["verdict"] = res["verdict"]
+        res.update(why=why, picture=src)
         names = {k: h.get("name", k) for k, h in self.gallery.data["horses"].items()}
         if self.dev.get("identityLearn", True) and res["verdict"] != "other" and res["samples"] < self.LEARN_UP_TO:
-            if self.gallery.add(mine["id"], vec, t=t, name=mine.get("name"), src=self.dev["id"]):
+            if self.gallery.add(mine["id"], vec, t=time.time(), name=mine.get("name"), src=self.dev["id"]):
                 self.gallery.save()
                 res["learned"] = True
         res.update(assignedName=mine.get("name") or mine["id"], bestName=names.get(res["best"]) if res["best"] else None)

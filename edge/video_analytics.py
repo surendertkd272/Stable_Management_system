@@ -678,6 +678,66 @@ class VideoStream(threading.Thread):
 ThermalStream = VideoStream
 
 
+def read_ppm(data):
+    """(bgr bytes, w, h) from a binary PPM (P6, 8-bit), or None."""
+    if not data or not data.startswith(b"P6"):
+        return None
+    fields, i = [], 2
+    while len(fields) < 3 and i < len(data):
+        while i < len(data) and data[i:i + 1].isspace():
+            i += 1
+        if data[i:i + 1] == b"#":                            # a comment line
+            while i < len(data) and data[i:i + 1] != b"\n":
+                i += 1
+            continue
+        j = i
+        while j < len(data) and not data[j:j + 1].isspace():
+            j += 1
+        fields.append(int(data[i:j]))
+        i = j
+    if len(fields) < 3 or fields[2] != 255:
+        return None
+    w, h = fields[0], fields[1]
+    rgb = data[i + 1:i + 1 + w * h * 3]
+    if len(rgb) < w * h * 3:
+        return None
+    if np is not None:
+        bgr = np.frombuffer(rgb, dtype=np.uint8).reshape(-1, 3)[:, ::-1].tobytes()
+    else:
+        b = bytearray(rgb)
+        b[0::3], b[2::3] = rgb[2::3], rgb[0::3]
+        bgr = bytes(b)
+    return bgr, w, h
+
+
+def grab_still(host, username, password, port=554, path="/media/live/101", width=1920, timeout_s=20):
+    """One frame from the camera, as (bgr bytes, w, h) — or (None, why).
+    /media/live/101 is the full-HD colour stream (2688×1520 on the 13 mm
+    unit), scaled to `width`: horse recognition wants the detail, once in a
+    while, not 5 frames a second."""
+    if not password:
+        return None, "no camera password"
+    stop = threading.Event()
+    try:
+        lport = local_relay(host, port, stop)
+        cred = f"{urllib.parse.quote(username)}:{urllib.parse.quote(password)}"
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "8000000",
+               "-i", f"rtsp://{cred}@127.0.0.1:{lport}{path}", "-map", "0:v:0", "-an", "-frames:v", "1",
+               "-vf", f"scale={width}:-2", "-f", "image2pipe", "-vcodec", "ppm", "pipe:1"]
+        try:
+            out = subprocess.run(cmd, capture_output=True, timeout=timeout_s)
+        except FileNotFoundError:
+            return None, "ffmpeg is not installed"
+        except subprocess.TimeoutExpired:
+            return None, f"no frame from {path} within {timeout_s} s"
+        got = read_ppm(out.stdout)
+        if got is None:
+            return None, clean_ffmpeg_error(out.stderr.decode(errors="replace")) or "no frame"
+        return got
+    finally:
+        stop.set()
+
+
 from floor import FloorTracker  # noqa: E402,F401  (urination / manure from the floor)
 
 
