@@ -25,6 +25,7 @@ import { startBreathingCheck, breathingJob, jobView } from "./thermal-video.mjs"
 import { liveResponse } from "./live-video.mjs";
 import { startCoolingTest, coolingJob, coolingView, splitFromCalib } from "./cooling.mjs";
 import { OnvifPtz, validateViews, stallsOf } from "./onvif-ptz.mjs";
+import { setupChecklist } from "./setup-check.mjs";
 
 export const KINDS = ["edge_box", "thermal_camera", "modbus_sensor", "push_device", "wearable_hub"];
 const POLLED = new Set(["thermal_camera", "modbus_sensor"]);
@@ -850,7 +851,7 @@ export function deviceApi({ store, json, CORS }) {
       return json(405, { error: "method not allowed" });
     }
 
-    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|live|rois|temps|token|events|verification|breathing|cooling|views|ptz))?$/);
+    const m = path.match(/^\/api\/devices\/([^/]+)(?:\/(probe|snapshot|live|rois|temps|token|events|verification|breathing|cooling|views|ptz|checklist))?$/);
     if (!m) return null;
     const dev = byId(decodeURIComponent(m[1]));
     if (!dev) return json(404, { error: "unknown device" });
@@ -988,6 +989,23 @@ export function deviceApi({ store, json, CORS }) {
         const stalls = stallsOf({ ...dev, ...out });
         event(dev, actorOf(who), "views set", `${out.views.length} views; stalls ${stalls.join(", ")}; close-up every ${out.schedule.closeEveryMin} min`);
         return json(200, publicDevice(byId(dev.id), list(), horses));
+      }
+    }
+    // Is the horse where the boxes are? Checked before a calibration is saved.
+    // GET ?eye=x0,y0,x1,y1&nostril=…&flank=1&hay=1&colourFloor=1
+    if (action === "checklist" && method === "GET") {
+      const bad = cameraOnly();
+      if (bad) return bad;
+      const q = url.searchParams;
+      const inRange = (v) => Number.isFinite(v) && v >= 0 && v <= 10000;
+      const box = (k) => { const v = q.get(k)?.split(",").map(Number); return v?.length === 4 && v.every(inRange) && v[2] > v[0] && v[3] > v[1] ? { x0: v[0], y0: v[1], x1: v[2], y1: v[3] } : null; };
+      if (await protocolOf(dev) !== "mtrpc") return json(400, { error: "the setup check reads the camera's pixels — JSON-RPC cameras only" });
+      try {
+        const r = await camera(dev, (c) => setupChecklist(c, { eye: box("eye"), nostril: box("nostril"),
+          extras: { flank: q.get("flank") === "1", hay: q.get("hay") === "1", colourFloor: q.get("colourFloor") === "1" } }));
+        return json(200, r);
+      } catch (e) {
+        return json(e instanceof IdentityMismatch ? 409 : 502, { error: e.message });
       }
     }
     if (action === "ptz") {

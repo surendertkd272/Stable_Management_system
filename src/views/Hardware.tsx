@@ -33,6 +33,7 @@ import { METRICS } from "../../server/contract.mjs";
 import { computeRespRate } from "../../server/respiration.mjs";
 import { Modal, Sparkline } from "../components/ui";
 import ZoomSetupModal from "./ZoomSetup";
+import { SetupChecklist, failing } from "./SetupChecklist";
 import { useStable, useToast } from "../store";
 import { useAuth } from "../auth";
 
@@ -1601,7 +1602,22 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
     return () => clearInterval(t);
   }, []);
 
+  // Is the horse where the boxes are? Checked on the camera before saving.
+  const [setup, setSetup] = useState<{ items: api.SetupItem[]; ready: boolean; at: string } | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
+  const runSetupCheck = async () => {
+    setSetupBusy(true);
+    busyCam.current = true;
+    const r = await api.setupChecklist(cam.id, { eye: rois.eye, nostril: rois.nostril, flank: Boolean(rois.flank), colourFloor: Boolean(rois.colourFloor) });
+    busyCam.current = false;
+    setSetupBusy(false);
+    if (r.ok) setSetup(r.data); else notify(`Setup check: ${r.error}`);
+    return r.ok ? r.data : null;
+  };
+  useEffect(() => { setSetup(null); }, [rois]);                 // the boxes moved: check again
   const push = async () => {
+    const check = setup ?? (cam.protocol === "isapi" ? null : await runSetupCheck());
+    if (check && !check.ready && !confirm(`The setup check did not pass:\n${failing(check.items)}\n\nSave these boxes anyway?`)) return;
     setBusy(true);
     busyCam.current = true;
     setPushError("");
@@ -1832,6 +1848,7 @@ function CalibrateModal({ cam, onClose }: { cam: ThermalCamera; onClose: () => v
               <span style={{ fontSize: 12.5 }}>{pushError}</span>
             </div>
           )}
+          {cam.protocol !== "isapi" && <SetupChecklist items={setup?.items ?? null} at={setup?.at} busy={setupBusy} onRun={runSetupCheck} />}
           {!pushed ? (
             <p className="muted" style={{ fontSize: 12.5 }}>Draw both boxes, then <b>Push ROIs to camera</b>.</p>
           ) : (

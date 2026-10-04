@@ -58,7 +58,7 @@ const countsAsVice = (r) => r.meta?.kind !== "box_walking" || /consecutive/.test
 // an earlier session (its report's `summary`), for a page comparing the horse
 // across the two sessions.
 export async function clientReport({ horse, readings, from, to, floorWatched = null, notes = "", away = [], paused = [], tz, grab = null,
-  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", review = [], marks = [], lastLive = null, autoVisits = true, boxes = null, trough = null, now = Date.now() }) {
+  grabThermal = null, grabFull = null, mapCrop = [0, 0.09, 1, 0.91], previous = null, clipCount = 0, client = "", review = [], marks = [], lastLive = null, autoVisits = true, boxes = null, trough = null, baseline = null, now = Date.now() }) {
   tz = safeTimeZone(tz);
   from = Math.floor(from / 60000) * 60000;                        // minutes on the clock: 23:24 reads 23:24, not 23:23
   const minutes = Math.max(1, Math.round((to - from) / 60000));
@@ -573,6 +573,10 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   const kg = (g) => `${f1(g / 1000)} kg`;
   const nSteps = stepsTotal(of("steps")), exMin = Math.round(total(of("exercise_session")));
   const trots = of("lameness_result"), trot = trots.at(-1), gaitV = of("gait_asymmetry").map((r) => r.value);
+  // A trot-up checked elsewhere (RealHorse, Sleip, a vet) and entered by hand:
+  // the latest within 30 days before the session's end.
+  const gaitCheck = readings.filter((r) => r.metric === "gait_check" && Date.parse(r.ts) <= to && to - Date.parse(r.ts) <= 30 * 86400000)
+    .sort((a, b) => a.ts.localeCompare(b.ts)).at(-1) || null;
   const limb = LIMB_NAME[trot?.meta?.limb];
   const drinks = of("water_visit").length, waterIn = of("water_ml").length > 0 || drinks > 0;
   const waterSeen = seenNear(["water_ml", "water_visit", "water_refill"]);
@@ -603,7 +607,11 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
       ? [9, "Steps / locomotion", S.part, `${hmText(tbTot.moving)} moving`, `Time walking about the stall, from the video${moves ? `; changed place ${plural(moves, "time")}` : ""}. Steps are not counted.`]
       : [9, "Steps / locomotion", nSteps !== null || exMin ? S.ok : S.no, nSteps !== null ? nSteps.toLocaleString("en-GB") : exMin ? `${exMin} min` : "—",
       nSteps !== null ? `One leg's hoof strikes × 4${exMin ? `; exercise ${exMin} min` : ""}.` : exMin ? "Exercise time; no step counts." : "Not monitored in this session."],
-    [10, "Lameness (trot)", trot || gaitV.length ? S.ok : S.no, trot ? `${f1(trot.value)} mm` : gaitV.length ? `${Math.round(med(gaitV) * 100)}%` : "—",
+    !trot && !gaitV.length && gaitCheck
+      ? [10, "Lameness (trot)", S.ok, String(gaitCheck.meta?.grade ?? "checked").replace(/^./, (c) => c.toUpperCase()),
+        `Trot-up checked with ${gaitCheck.meta?.tool ?? "a handheld tool"} on ${T({ day: "numeric", month: "short" }).format(Date.parse(gaitCheck.ts))}`
+        + `${gaitCheck.meta?.limb ? `, ${LIMB_NAME[gaitCheck.meta.limb] ?? gaitCheck.meta.limb}` : ""}${gaitCheck.meta?.asymmetryMm !== null && gaitCheck.meta?.asymmetryMm !== undefined ? `, ${f1(gaitCheck.meta.asymmetryMm)} mm asymmetry` : ""}. Entered by the stable; a vet should confirm any lameness.`]
+      : [10, "Lameness (trot)", trot || gaitV.length ? S.ok : S.no, trot ? `${f1(trot.value)} mm` : gaitV.length ? `${Math.round(med(gaitV) * 100)}%` : "—",
       trot ? `${limb ? `${limb[0].toUpperCase()}${limb.slice(1)} favoured` : "No limb singled out"} (${plural(trots.length, "trot")}). A screening measure being validated; a vet should confirm.`
         : gaitV.length ? "Gait asymmetry index; a vet should confirm." : "Not monitored in this session."],
     [11, "Watering", waterIn || waterSeen ? S.ok : S.no, waterIn ? `${f1(total(of("water_ml")) / 1000)} L` : waterSeen ? "None" : "—",
@@ -618,6 +626,16 @@ export async function clientReport({ horse, readings, from, to, floorWatched = n
   // A review of recorded video covers the camera's points (1–8) and what the
   // video adds to the others; a sensor point with nothing is left out of it.
   const points = anyRec ? pointsAll.filter((x) => x[0] <= 8 || x[2] !== S.no) : pointsAll;
+  // Against the horse's own normal (server/baseline.mjs) — when there is one
+  // and this session is not inside it.
+  const baseRows = baseline && !baseline.learning && !baseline.sameAsBaseline
+    ? baseline.rows.filter((r) => r.baseline !== null && r.recent !== null) : [];
+  const dmy = (iso) => T({ day: "numeric", month: "short" }).format(Date.parse(iso));
+  const baseWin = baseline?.window ? `${dmy(baseline.window.from)} – ${dmy(baseline.window.to)}${baseline.baselineDays ? ` (${plural(baseline.baselineDays, "day")})` : ""}${baseline.window.set ? ", chosen by the stable's vet" : ", its first days monitored"}` : "";
+  const fmtBase = (r, v) => (v === null ? "—" : r.unit.startsWith("%") ? `${Math.round(v)}%` : r.key === "activity" ? v.toFixed(2)
+    : r.key === "eye" ? `${v.toFixed(1)} °C` : r.key === "breathing" ? `${v.toFixed(1)} /min` : `${Math.round(v)} ${r.unit}`);
+  const changeText = (r) => (r.change === null ? "—" : r.change === 0 ? "same"
+    : `${r.change > 0 ? "▲" : "▼"} ${r.unit.startsWith("%") ? `${Math.abs(Math.round(r.change))} points` : r.key === "activity" ? Math.abs(r.change).toFixed(2) : `${Math.abs(r.change).toFixed(1)}${r.key === "eye" ? " °C" : r.key === "breathing" ? " /min" : ""}`}${r.pct !== null && !r.unit.startsWith("%") && r.key !== "eye" ? ` (${r.pct > 0 ? "+" : ""}${r.pct}%)` : ""}`);
   // For the owner: what to do for the horse. Setting up the equipment is not
   // the reader's business and is left out.
   const recs = [
@@ -1047,6 +1065,13 @@ ${hayKnown ? `<div class="find">${svgIcon("check")}<div><b>Eating</b><span>${eat
 <table style="margin-top:10px"><thead><tr><th>Hour</th>${hayKnown ? "<th>Eating</th>" : ""}<th>At rest</th>${lyingKnown ? "<th>Lying</th>" : ""}<th>Moving</th><th>Avg activity</th>${peopleSeen ? "<th>Visits</th>" : ""}</tr></thead><tbody>
 ${hours.filter((h) => h.seen > 0).map((h) => `<tr><td class="num">${esc(h.from)}</td>${hayKnown ? `<td class="num">${Math.round(h.share("eating") * 100)}%</td>` : ""}<td class="num">${Math.round(h.share("resting") * 100)}%</td>${lyingKnown ? `<td class="num">${h.s.lying ? `${Math.round(h.share("lying") * 100)}%` : "—"}</td>` : ""}<td class="num">${Math.round(h.share("moving") * 100)}%</td><td class="num">${f2(h.avg)}</td>${peopleSeen ? `<td class="num">${h.people ? `${h.people} min` : "—"}</td>` : ""}</tr>`).join("")}
 </tbody></table></section>
+${pg()}</div>` : ""}
+${baseRows.length ? `<div class="page">
+<section class="card"><div class="sh">${sn()}<h2>Compared with ${esc(name)}'s normal</h2></div><p class="sub">${esc(name)}'s own normal: ${esc(baseWin)}. Horses differ far more from each other than one horse does from night to night, so a change against its own normal matters more than a textbook range.</p>
+<table style="margin-top:10px"><thead><tr><th>Measure</th><th>${esc(name)}'s normal</th><th>This ${overnight ? "night" : "session"}</th><th>Change</th></tr></thead><tbody>
+${baseRows.map((r) => `<tr><td><b>${esc(r.label)}</b></td><td class="num">${esc(fmtBase(r, r.baseline))}</td><td class="num">${esc(fmtBase(r, r.recent))}</td><td>${r.notable ? `<span class="st part"><i>◐</i>${esc(changeText(r))}</span>` : esc(changeText(r))}</td></tr>`).join("")}
+</tbody></table>
+<p class="note" style="font-size:11px;color:var(--muted);margin-top:8px">Marked changes are at EquiCare's own thresholds (no published ones exist for most of these) — a reason to look at the horse, not a diagnosis.</p></section>
 ${pg()}</div>` : ""}
 ${healthOk ? `<div class="page">
 <section class="card"><div class="sh">${sn()}<h2>Rest, sleep and health indicators</h2></div><p class="sub">${esc(name)}'s ${overnight ? "night" : "session"} beside what is typical for a healthy adult horse.</p>

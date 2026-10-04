@@ -23,7 +23,10 @@ import { createStore, dataDir } from "./store.mjs";
 import { dispatch, notifyStatus, tick } from "./notify.mjs";
 import { currentSettings, mergeSettings, saveSettings, activityBands } from "./settings.mjs";
 import { sessionReport } from "./session.mjs";
-import { clientReport } from "./client_report.mjs";
+import { clientReport, safeTimeZone } from "./client_report.mjs";
+import { insightsApi } from "./insights-api.mjs";
+import { htmlToPdf } from "./pdf.mjs";
+import { compare as baselineCompare } from "./baseline.mjs";
 import { ensureAdmin, createSession, getSession, destroySession, sessionCount,
          verifyPassword, hashPassword, publicUser, ROLES } from "./auth.mjs";
 import {
@@ -62,6 +65,7 @@ async function ready() {
     s.seed("horses", SEED_ROSTER);
     ensureAdmin(s);   // first boot only; prints a generated password once
     G.devices = deviceApi({ store: s, json, CORS });
+    G.insights = insightsApi({ store: s, json, CORS, roster: () => s.list("horses") });
     G.devices.migrate();           // camera-only records from the first hardware version
     // A leg recording waits for the hub's own (head) recording, and the
     // pelvis sensor's when the hub has one paired.
@@ -478,6 +482,9 @@ export async function handle(req) {
       }
     }
 
+    // A short clip around a moment (events, accuracy checks): <video> again, so a ticket.
+    if (path === "/api/clip" && method === "GET") return G.insights.clip(req, url, G.videoTickets);
+
     // ---- query (SPA -> cloud) -------------------------------------------- //
     const who = principal(req);
     if (path.startsWith("/api/") && authRequired() && !who)
@@ -612,7 +619,18 @@ export async function handle(req) {
         notes: typeof body.notes === "string" ? body.notes : "", tz: body.tz,
         grab: cam && clips.length ? frameGrabber(cam.id, "visible") : null,
         clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
+        baseline: baselineCompare(bio, rd, { tz: safeTimeZone(body.tz), from, to }),
       });
+      if (url.searchParams.get("format") === "pdf") {
+        try {
+          const pdf = await htmlToPdf(html);
+          const name = `${bio.name.replace(/[^A-Za-z0-9 _-]/g, "")} - EquiCare report ${new Date(from).toISOString().slice(0, 10)}.pdf`;
+          return new Response(pdf, { status: 200, headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store",
+            "Content-Disposition": `attachment; filename="${name}"`, ...CORS } });
+        } catch (e) {
+          return json(501, { error: e.message });
+        }
+      }
       return new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...CORS } });
     }
 
@@ -677,6 +695,13 @@ export async function handle(req) {
     if (path === "/api/hardware/spec" && method === "GET") return json(200, SC_IT6420_HB_V2);
     if (path === "/api/devices" || path.startsWith("/api/devices/")) {
       const res = await devices.handleDevices(req, url, who, visibleRoster);
+      if (res) return res;
+    }
+
+    // ---- baseline, events, accuracy checks, gait checks ------------------- //
+    // Before the generic record routes: /api/horses/:id/baseline is not a horse.
+    if (/^\/api\/(horses\/[^/]+\/(baseline|gait)|events|validation)(\/|$)/.test(path)) {
+      const res = await G.insights.handle(req, url, who);
       if (res) return res;
     }
 

@@ -44,6 +44,10 @@ export const METRICS = {
   // (mm); meta { limb LF|RF|LH|RH|null, head/pelvis { minDiffMm, maxDiffMm }|null,
   // strides, durationS, prototype }.
   lameness_result:      { point: 7,  label: "Lameness (trot)",      unit: "mm",    source: "imu",            kind: "event" },
+  // A gait check done elsewhere and entered by hand: a phone app (RealHorse,
+  // Sleip) or a vet's trot-up. value 0 sound, 1 mild, 2 moderate, 3 severe;
+  // meta.tool, meta.limb, meta.asymmetryMm.
+  gait_check:           { point: 7,  label: "Gait check (trot-up)", unit: "grade", source: "manual",         kind: "event" },
   // value = minutes; meta { start, end, steps, distanceM|null, trotMin, prototype }.
   exercise_session:     { point: 5,  label: "Exercise session",     unit: "min",   source: "imu",            kind: "event" },
   // value = battery %; meta { sensor, hardwareId, signalDbm|null, attached|null, firmware|null }.

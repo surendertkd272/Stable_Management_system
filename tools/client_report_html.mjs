@@ -25,6 +25,7 @@ import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { clientReport, safeTimeZone } from "../server/client_report.mjs";
 import { frameGrabber, listClips } from "../server/footage.mjs";
+import { compare as baselineCompare } from "../server/baseline.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
 const flag = (k) => process.argv.includes(`--${k}`);
@@ -136,6 +137,7 @@ const { html, ref, photos } = await clientReport({
   boxes: arg("boxes") ? JSON.parse(readFileSync(arg("boxes"), "utf8")) : null,
   trough: arg("trough") ? arg("trough").split(",").map(Number) : null,
   clipCount: clips.reduce((n, c) => n + (c.thermal ? 1 : 0) + (c.visible ? 1 : 0), 0),
+  baseline: baselineCompare(horse, readings, { tz, from, to }),
 });
 const outDir = arg("out", join(HOME, "research", "reports"));
 mkdirSync(outDir, { recursive: true });

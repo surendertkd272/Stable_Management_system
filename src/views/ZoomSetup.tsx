@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as RPointer
 import * as api from "../data/api";
 import type { PtzProfile, RoiBox, ThermalCamera, ZoomSetup as Setup, ZoomView, ZoomZone } from "../data/api";
 import { Modal } from "../components/ui";
+import { SetupChecklist, failing } from "./SetupChecklist";
 import { useToast } from "../store";
 
 type Snap = { url?: string; error?: string };
@@ -182,7 +183,32 @@ export default function ZoomSetupModal({ cam, stalls, onClose }: { cam: ThermalC
     else if (zone) setZone(zoneIdx, (z) => (draw === "colour" ? { ...z, colour: b } : draw === "thermal" ? { ...z, thermal: b } : { ...z, rois: { ...z.rois, [draw]: b } }));
   };
 
+  // What must be in place before saving (static), and the live check of the
+  // close-up the camera is at (eye and nostril on the horse's head).
+  const [live, setLive] = useState<{ items: api.SetupItem[]; ready: boolean; at: string } | null>(null);
+  const [liveBusy, setLiveBusy] = useState(false);
+  const runLive = async () => {
+    if (view.kind !== "close") return;
+    setLiveBusy(true);
+    const r = await api.setupChecklist(cam.id, { eye: view.rois.eye, nostril: view.rois.nostril });
+    setLiveBusy(false);
+    if (r.ok) setLive(r.data); else notify(`Setup check: ${r.error}`);
+  };
+  useEffect(() => { setLive(null); }, [tab]);
+  const staticItems: api.SetupItem[] = [
+    ...(zooms ? [{ key: "wide", label: "Wide view position saved", ok: Boolean(wide?.position?.moves.length), required: true, detail: wide?.position?.moves.length ? "saved" : "zoom out so every stall is in view, then save the position" }] : []),
+    ...zones.map((z) => ({ key: `zone-${z.stall}`, label: `Stall ${z.stall} drawn on the colour picture`, ok: Boolean(z.colour), required: true, detail: z.colour ? "drawn" : "draw it" })),
+    ...zones.map((z) => ({ key: `zt-${z.stall}`, label: `Stall ${z.stall} drawn on the thermal picture`, ok: Boolean(z.thermal), required: false, detail: z.thermal ? "drawn" : "optional — needed for warm floor patches" })),
+    ...(zooms ? zones.map((z) => {
+      const v = setup.views.find((x) => x.kind === "close" && x.stall === z.stall);
+      const ok = Boolean(v && v.position?.moves.length && v.kind === "close" && v.rois.eye);
+      return { key: `close-${z.stall}`, label: `Close-up of ${z.stall}: position saved, eye box drawn`, ok, required: false,
+        detail: ok ? "ready" : "without it this horse has no eye temperature or nostril breathing" };
+    }) : []),
+  ];
   const save = async () => {
+    const missing = staticItems.filter((i) => i.required && !i.ok);
+    if (missing.length && !confirm(`Not ready yet:\n${failing(missing)}\n\nSave anyway?`)) return;
     setErrors([]);
     setBusy(true);
     const r = await api.putZoomSetup(cam.id, setup);
@@ -324,6 +350,10 @@ export default function ZoomSetupModal({ cam, stalls, onClose }: { cam: ThermalC
           </label>
         )}
       </div>
+      <SetupChecklist title="Ready to save?" items={staticItems} />
+      {view.kind === "close" && (
+        <SetupChecklist title={`Live check · close-up of ${view.stall}`} items={live?.items ?? null} at={live?.at} busy={liveBusy} onRun={runLive} />
+      )}
       {errors.length > 0 && (
         <div className="card" style={{ marginTop: 10, padding: 10, borderColor: "var(--warn)" }}>
           {errors.map((e) => <div key={e} style={{ fontSize: 12.5, color: "var(--warn)" }}>⚠ {e}</div>)}

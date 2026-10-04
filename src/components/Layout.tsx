@@ -29,6 +29,9 @@ import {
   Cpu,
   Film,
   LucideIcon,
+  Clapperboard,
+  Gauge,
+  ShieldQuestion,
 } from "lucide-react";
 import { useTheme } from "../theme";
 import { useAuth } from "../auth";
@@ -48,6 +51,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/live", label: "Live view", icon: Video, adminOnly: true },
       { to: "/horses", label: "Horses", icon: Heart },
       { to: "/alerts", label: "Alerts", icon: Bell },
+      { to: "/events", label: "Events & clips", icon: Clapperboard, staffOnly: true },
       { to: "/yard", label: "Yard View", icon: Map },
       { to: "/breeding", label: "Breeding", icon: Sparkles },
     ],
@@ -58,6 +62,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/reports", label: "Reports", icon: FileText },
       { to: "/diary", label: "Care Diary", icon: NotebookPen },
       { to: "/guide", label: "Behaviour guide", icon: BookOpen },
+      { to: "/limits", label: "What it can't do", icon: ShieldQuestion },
       { to: "/session", label: "Session report", icon: ClipboardList, staffOnly: true },
     ],
   },
@@ -81,6 +86,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/hardware", label: "Hardware", icon: Cpu, adminOnly: true },
       { to: "/footage", label: "Footage & labels", icon: Film, staffOnly: true },
+      { to: "/validation", label: "Accuracy checks", icon: Gauge, staffOnly: true },
     ],
   },
 ];
@@ -265,6 +271,9 @@ function TopBar() {
     "/session": { h1: "Session report", p: "The 8 points over a window — a practice demo, a night" },
     "/guide": { h1: "Behaviour guide", p: "What horse behaviour patterns may mean — from open veterinary sources" },
     "/footage": { h1: "Footage & labels", p: "Recorded camera video — mark what the horse does, for training" },
+    "/events": { h1: "Events & clips", p: "What happened, with a clip, a verdict and what to do — confirm or correct each one" },
+    "/limits": { h1: "What EquiCare can't do", p: "Plainly: what is measured, what is a prototype, and what nobody can measure yet" },
+    "/validation": { h1: "Accuracy checks", p: "People count, the system measures — how closely they agree" },
   };
 
   const base = "/" + (pathname.split("/")[1] || "");

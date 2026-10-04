@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Printer, Loader2, Film, AlertTriangle, CheckCircle2, FileText } from "lucide-react";
+import { Printer, Loader2, Film, AlertTriangle, CheckCircle2, FileText, Download } from "lucide-react";
 import * as api from "../data/api";
 import { useStable } from "../store";
 
@@ -38,6 +38,7 @@ export default function Session() {
   const [err, setErr] = useState("");
   const [notes, setNotes] = useState("");
   const [building, setBuilding] = useState(false);
+  const [pdfing, setPdfing] = useState(false);
   const [reportErr, setReportErr] = useState("");
   useEffect(() => { if (horseId) setNotes(readNotes(horseId)); }, [horseId]);
   const clientReport = async () => {
@@ -45,6 +46,13 @@ export default function Session() {
     setReportErr("");
     const e = await api.openClientReport(horseId, rep?.window.from ?? from, to, notes);
     setBuilding(false);
+    if (e) setReportErr(e);
+  };
+  const pdf = async () => {
+    setPdfing(true);
+    setReportErr("");
+    const e = await api.downloadClientReportPdf(horseId, rep?.window.from ?? from, to, notes);
+    setPdfing(false);
     if (e) setReportErr(e);
   };
   useEffect(() => {
@@ -81,6 +89,9 @@ export default function Session() {
         <button className="btn-ghost" onClick={() => window.print()}><Printer size={15} /> Print this page</button>
         <button className="btn-primary" disabled={!rep || building} onClick={clientReport}>
           {building ? <Loader2 className="spin" size={15} /> : <FileText size={15} />} Client report
+        </button>
+        <button className="btn-ghost" disabled={!rep || pdfing} onClick={pdf} title="The same report as a PDF file, ready to send">
+          {pdfing ? <Loader2 className="spin" size={15} /> : <Download size={15} />} Download PDF
         </button>
       </div>
       <div className="card no-print" style={{ marginBottom: 14 }}>

@@ -7,6 +7,8 @@ import Link from "next/link";
 import { ChevronLeft, Moon, Droplet, Sun, Activity, Heart, Play, Plus, WifiOff, Gauge, Crosshair, FlaskConical, Footprints } from "lucide-react";
 import { DiaryEntry } from "../data/mock";
 import { useStable, useToast } from "../store";
+import { NormalCard, GaitCheckButton } from "./HorseNormal";
+import { useAuth } from "../auth";
 import { getHorseDetail, type HorseDetail as HorseVitals, type HorseBehaviour, type HorseMotion, type HorseIntake } from "../data/api";
 import { StatusPill, MonitoringPill, isBlind, RadialGauge, Sparkline, Delta, Modal, riskScore, riskBand, details } from "../components/ui";
 
@@ -42,6 +44,7 @@ export default function HorseDetail() {
   const { horses, alerts, diary, addDiary, series } = useStable();
   const { t } = useT();
   const notify = useToast();
+  const { user } = useAuth();
   const [cam, setCam] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
@@ -290,6 +293,15 @@ export default function HorseDetail() {
         <div className="grid cols-2" style={{ marginBottom: 24, alignItems: "start" }}>
           {live.motion !== undefined && <MotionCard m={live.motion} />}
           {live.intake !== undefined && <IntakeCard x={live.intake} />}
+        </div>
+      )}
+
+      {/* against its own normal (server/baseline.mjs), and gait checks done elsewhere */}
+      {horse && <NormalCard horseId={horse.id} name={horse.name} canEdit={!user || user.role !== "owner"} />}
+      {horse && (!user || user.role !== "owner") && (
+        <div className="flex" style={{ gap: 8, marginTop: -12, marginBottom: 24 }}>
+          <GaitCheckButton horseId={horse.id} name={horse.name} />
+          <Link className="btn-ghost" href={`/events?horse=${encodeURIComponent(horse.id)}`}>Events &amp; clips</Link>
         </div>
       )}
 

@@ -466,6 +466,14 @@ export const updateDevice = (id: string, d: Partial<DeviceInput>) => call<Device
 export const deleteDevice = (id: string, force = false) =>
   call<{ ok: true }>("DELETE", dpath(id) + (force ? "?force=1" : ""));
 export const rotateToken = (id: string) => call<{ token: string }>("POST", dpath(id, "token"));
+export interface SetupItem { key: string; label: string; ok: boolean; required: boolean; detail: string }
+/** Is the horse where the boxes are? Read off the camera (JSON-RPC cameras). */
+export const setupChecklist = (id: string, r: { eye?: RoiBox | null; nostril?: RoiBox | null; flank?: boolean; hay?: boolean; colourFloor?: boolean }) => {
+  const b = (x?: RoiBox | null) => (x ? `${x.x0},${x.y0},${x.x1},${x.y1}` : "");
+  const q = new URLSearchParams({ ...(r.eye ? { eye: b(r.eye) } : {}), ...(r.nostril ? { nostril: b(r.nostril) } : {}),
+    ...(r.flank ? { flank: "1" } : {}), ...(r.hay ? { hay: "1" } : {}), ...(r.colourFloor ? { colourFloor: "1" } : {}) });
+  return call<{ at: string; items: SetupItem[]; ready: boolean }>("GET", `${dpath(id, "checklist")}?${q}`, undefined, 45000);
+};
 export const getZoomSetup = (id: string) => call<ZoomSetup>("GET", dpath(id, "views"));
 export const putZoomSetup = (id: string, s: ZoomSetup) => call<Device>("PUT", dpath(id, "views"), s);
 export const deleteZoomSetup = (id: string) => call<Device>("DELETE", dpath(id, "views"));
@@ -598,6 +606,51 @@ export interface FootageLabel {
 }
 export const listFootage = () => call<{ clips: FootageClip[]; cameras: { id: string; name: string; stall: string | null }[] }>("GET", "/api/footage");
 export const footageTicket = () => call<{ ticket: string; expiresInS: number }>("GET", "/api/footage/ticket");
+
+// ---- each horse's own normal (server/baseline.mjs) ---------------------------- //
+export interface BaselineRow { key: string; label: string; unit: string; baseline: number | null; recent: number | null;
+  change: number | null; pct: number | null; notable: boolean; direction: "up" | "down" | "same" | null; pattern: string }
+export interface BaselineCompare { window: { from: string; to: string; set: boolean; by?: string | null; at?: string | null; days?: number } | null;
+  learning: boolean; comparedDays: number; baselineDays: number; sameAsBaseline: boolean; rows: BaselineRow[];
+  days: Record<string, number | string | null>[]; note: string }
+const tzq = () => `tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`;
+export const getBaseline = (horse: string) => call<BaselineCompare>("GET", `/api/horses/${encodeURIComponent(horse)}/baseline?${tzq()}`);
+export const setBaseline = (horse: string, b: { from: string; to: string } | { reset: true }) =>
+  call<BaselineCompare>("PUT", `/api/horses/${encodeURIComponent(horse)}/baseline?${tzq()}`, b);
+
+// ---- events with a verdict, clips, reviews (server/events.mjs) ---------------- //
+export interface HorseEvent { id: string; horse: string; horseName: string; kind: string; title: string; at: string;
+  verdict: "normal" | "watch" | "vet"; next: string; pattern: string | null; label: string | null; camera: string | null; stall: string | null;
+  stream: "visible" | "thermal"; where: { x: number; y: number } | null; box: RoiBox | null; detail: string | null; prototype: boolean;
+  video: boolean; review: { verdict: "confirmed" | "wrong"; note: string; by: string; reviewedAt: string } | null }
+export const listEvents = (p: { horse?: string; from?: string; to?: string }) =>
+  call<HorseEvent[]>("GET", `/api/events?${new URLSearchParams(Object.entries(p).filter(([, v]) => v) as [string, string][]).toString()}&${tzq()}`);
+export const reviewEvent = (e: HorseEvent, verdict: "confirmed" | "wrong", note: string) =>
+  call<{ review: unknown; trainingLabel: boolean }>("POST", `/api/events/${encodeURIComponent(e.id)}/review?${tzq()}`, { horse: e.horse, at: e.at, verdict, note });
+/** A short clip a <video> can play (ticket, not the session). */
+export const clipUrl = (ticket: string, p: { camera: string; at: string; stream?: "visible" | "thermal"; stall?: string | null;
+  mark?: RoiBox | { x: number; y: number } | null; slow?: boolean; before?: number; after?: number }) =>
+  `${BASE}/api/clip?${new URLSearchParams({ vt: ticket, camera: p.camera, at: p.at, stream: p.stream ?? "visible",
+    ...(p.stall ? { stall: p.stall } : {}), ...(p.mark ? { mark: JSON.stringify(p.mark) } : {}), ...(p.slow ? { slow: "1" } : {}),
+    before: String(p.before ?? 10), after: String(p.after ?? 20) }).toString()}`;
+export const eventReviewsCsvUrl = () => `${BASE}/api/events/reviews/export`;
+
+// ---- accuracy checks ---------------------------------------------------------- //
+export interface CheckMoment { at: string; camera: string; stall: string | null; kind: "breathing" | "state"; stream: "visible" | "thermal" }
+export interface Agreement {
+  breathing: { n: number; bias: number; sd: number; limits: [number, number]; mae: number; within2: number; nights: number; nightMae: number | null; enough: boolean } | null;
+  state: { n: number; agree: number; table: Record<string, Record<string, number>>; enough: boolean } | null;
+  checks: number; note: string;
+}
+export const validationSample = (horse: string, kind: "breathing" | "state", n = 10) =>
+  call<CheckMoment[]>("GET", `/api/validation/sample?horse=${encodeURIComponent(horse)}&kind=${kind}&n=${n}`);
+export const postValidation = (c: { horse: string; camera: string; at: string; kind: "breathing" | "state"; breaths?: number; seconds?: number; state?: string }) =>
+  call<{ value: number | string; system: number | string | null }>("POST", "/api/validation", c);
+export const validationReport = (horse?: string) => call<Agreement>("GET", `/api/validation/report${horse ? `?horse=${encodeURIComponent(horse)}` : ""}`);
+
+// ---- gait checks done elsewhere ------------------------------------------------ //
+export const addGaitCheck = (horse: string, g: { at?: string; tool: string; grade: string; limb?: string | null; mm?: number | null; note?: string }) =>
+  call<{ ts: string }>("POST", `/api/horses/${encodeURIComponent(horse)}/gait`, g);
 export const labelVocabulary = () => call<LabelDef[]>("GET", "/api/footage/labels/meta");
 export const footageLabels = (camera: string, from?: string, to?: string) => {
   const q = new URLSearchParams({ camera });
@@ -708,6 +761,30 @@ export interface SessionReport {
  * tab, where "Save as PDF" prints it. The endpoint is authenticated, so the
  * page is fetched and shown from a blob. Returns an error message, or null.
  */
+/** The client report as a PDF file (made by the site server), downloaded. */
+export async function downloadClientReportPdf(horse: string, from: string | undefined, to: string | undefined, notes: string): Promise<string | null> {
+  if (!apiConfigured) return "No backend configured";
+  try {
+    const res = await fetch(`${BASE}/api/session/report?format=pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ horse, from, to, notes, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return body.error ?? `The PDF could not be made (${res.status})`;
+    }
+    const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "")?.[1] || "EquiCare report.pdf";
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return null;
+  } catch {
+    return "cannot reach the server";
+  }
+}
+
 export async function openClientReport(horse: string, from: string | undefined, to: string | undefined, notes: string): Promise<string | null> {
   if (!apiConfigured) return "No backend configured";
   // Opened now, inside the click, so the browser does not block it as a pop-up.
