@@ -668,8 +668,12 @@ def retry_wait(err, failures):
     return 5
 
 
-def local_relay(host, port, stop_evt):
-    """A 127.0.0.1 TCP port that forwards to host:port, until stop_evt. ffmpeg
+def local_relay(host, port, stop_evt, done=None):
+    """A 127.0.0.1 TCP port that forwards to host:port, until stop_evt (or
+    `done`, the end of this one attempt: a caller that retries passes a fresh
+    `done` each time and sets it when ffmpeg exits — otherwise every retry
+    left a listening socket and its thread behind, and an edge box retrying
+    an unreachable camera every 5 s ran out of files within the hour). ffmpeg
     cannot use an IPv6 zone (fe80::…%en8) in a URL; this lets it reach a
     camera on a direct cable. Returns the local port."""
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -695,8 +699,11 @@ def local_relay(host, port, stop_evt):
                 except OSError:
                     pass
 
+    def over():
+        return stop_evt.is_set() or (done is not None and done.is_set())
+
     def serve():
-        while not stop_evt.is_set():
+        while not over():
             try:
                 srv.settimeout(1.0)
                 c, _ = srv.accept()
@@ -707,6 +714,7 @@ def local_relay(host, port, stop_evt):
                 r.connect(target)
             except OSError:
                 c.close()
+                r.close()
                 continue
             threading.Thread(target=pipe, args=(c, r), daemon=True).start()
             threading.Thread(target=pipe, args=(r, c), daemon=True).start()
@@ -741,8 +749,8 @@ class VideoStream(threading.Thread):
         self.frames = 0
         self.failures = 0
 
-    def _relay(self):
-        return local_relay(self.host, self.port, self.stop_evt)
+    def _relay(self, done=None):
+        return local_relay(self.host, self.port, self.stop_evt, done)
 
     def run(self):
         if not self.password:
@@ -750,7 +758,8 @@ class VideoStream(threading.Thread):
             return
         while not self.stop_evt.is_set():
             frames_before = self.frames
-            port = self._relay()
+            attempt = threading.Event()                    # this connection's relay closes with it
+            port = self._relay(attempt)
             cred = f"{urllib.parse.quote(self.username)}:{urllib.parse.quote(self.password)}"
             url = f"rtsp://{cred}@127.0.0.1:{port}{self.path}"
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-timeout", "8000000",
@@ -759,6 +768,7 @@ class VideoStream(threading.Thread):
             try:
                 self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             except FileNotFoundError:
+                attempt.set()
                 self.error = "ffmpeg is not installed — install it to measure breathing and behaviour from video"
                 return
             size = self.w * self.h * (3 if self.on_colour else 1)
@@ -774,7 +784,13 @@ class VideoStream(threading.Thread):
                 self.on_frame(chunk, t)
             if self.proc.poll() is None:
                 self.proc.kill()
+            attempt.set()
             err = clean_ffmpeg_error((self.proc.stderr.read() or b"").decode(errors="replace"))
+            for f in (self.proc.stdout, self.proc.stderr):
+                try:
+                    f.close()
+                except OSError:
+                    pass
             if not self.stop_evt.is_set():
                 self.failures = 0 if self.frames > frames_before else self.failures + 1
                 wait = retry_wait(err, self.failures - 1)

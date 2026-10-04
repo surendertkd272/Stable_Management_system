@@ -138,7 +138,8 @@ class StreamRecorder(threading.Thread):
             print(f"[edge] {self.name}: {self.error}")
             return
         while not self.stop_evt.is_set():
-            port = local_relay(d["host"], d.get("rtspPort") or 554, self.stop_evt)
+            attempt = threading.Event()                    # this attempt's relay closes with it
+            port = local_relay(d["host"], d.get("rtspPort") or 554, self.stop_evt, attempt)
             cred = f"{urllib.parse.quote(d.get('username', 'admin'))}:{urllib.parse.quote(d.get('password') or '')}"
             url = f"rtsp://{cred}@127.0.0.1:{port}{stream_path(d, self.stream)}"
             # Video only. record_cmd(..., audio=True) keeps the camera's microphone
@@ -147,10 +148,12 @@ class StreamRecorder(threading.Thread):
             try:
                 self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             except FileNotFoundError:
+                attempt.set()
                 self.error = "ffmpeg is not installed — recording needs it"
                 return
             self.started_at = time.time()
             _, err = self.proc.communicate()
+            attempt.set()
             if self.stop_evt.is_set():
                 break
             text = clean_ffmpeg_error((err or b'').decode(errors='replace'))
