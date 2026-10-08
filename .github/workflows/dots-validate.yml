@@ -1,0 +1,110 @@
+name: Dots isolated validation
+on:
+  workflow_call:
+    outputs:
+      passed:
+        value: ${{ jobs.validate.outputs.passed }}
+    inputs:
+      base_sha:
+        type: string
+        required: true
+      controller_sha:
+        type: string
+        required: true
+      sha256:
+        type: string
+        required: true
+      artifact:
+        type: string
+        required: true
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      passed: ${{ steps.outcome.outputs.passed }}
+    env:
+      CI: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      NEXT_TELEMETRY_DISABLED: '1'
+      NOTIFY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.controller_sha }}
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.base_sha }}
+          path: repo
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: candidate
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Reject protected paths, binaries, links and suspected credentials
+        env:
+          PATCH_HASH: ${{ inputs.sha256 }}
+        run: node controller/tools/dots-cloud/control.mjs apply repo candidate/changes.patch "$PATCH_HASH"
+      - name: Install dependencies (no lifecycle hooks)
+        run: |
+          npm ci --ignore-scripts --prefix repo
+          python -m pip install numpy -r repo/requirements.txt
+          command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+      - run: mkdir -p "$RUNNER_TEMP/dots-validation"
+      - name: Typecheck
+        id: types
+        continue-on-error: true
+        working-directory: repo
+        run: npm run typecheck 2>&1 | tee "$RUNNER_TEMP/dots-validation/typecheck.log"
+      - name: Application and edge tests
+        id: tests
+        continue-on-error: true
+        working-directory: repo
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/dots-validation/tests.log"
+      - name: Production build
+        id: build
+        continue-on-error: true
+        working-directory: repo
+        run: npm run build 2>&1 | tee "$RUNNER_TEMP/dots-validation/build.log"
+      - name: Dependency security audit
+        id: audit
+        continue-on-error: true
+        working-directory: repo
+        run: npm audit --audit-level=high 2>&1 | tee "$RUNNER_TEMP/dots-validation/audit.log"
+      - name: Record check outcomes
+        id: outcome
+        if: always()
+        env:
+          TYPES: ${{ steps.types.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          AUDIT: ${{ steps.audit.outcome }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/dots-validation"
+          printf 'Typecheck: %s\nTests: %s\nBuild: %s\nDependency audit: %s\n' "$TYPES" "$TESTS" "$BUILD" "$AUDIT" | tee "$RUNNER_TEMP/dots-validation/status.txt" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$TYPES/$TESTS/$BUILD/$AUDIT" = 'success/success/success/success' ]; then
+            echo 'passed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'passed=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ${{ inputs.artifact }}-validation
+          path: ${{ runner.temp }}/dots-validation/
+          retention-days: 7
+          if-no-files-found: warn
